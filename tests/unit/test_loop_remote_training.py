@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from learning_loop import coordinator as co
-from learning_loop.config import REPO_ROOT
-from learning_loop.storage import read_json
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.storage import read_json
+from learning_loop.orchestration import coordinator as co
 
 EXP = REPO_ROOT / "experiments" / "fixture-two-cycles.yaml"
 

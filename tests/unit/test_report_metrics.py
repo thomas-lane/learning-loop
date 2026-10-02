@@ -8,7 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop.metrics import (
+from learning_loop.core.records import (
+    EditProposal,
+    EpisodeRole,
+    EpisodeSummary,
+    StopCategory,
+    Timing,
+    Usage,
+    VerificationRecord,
+)
+from learning_loop.core.storage import StageManifest, WorkItem, atomic_write_json
+from learning_loop.reporting.metrics import (
     SMALL_N_NOTE,
     CostRate,
     EpisodeRow,
@@ -21,17 +31,7 @@ from learning_loop.metrics import (
     stage_effort_table,
     summarize,
 )
-from learning_loop.records import (
-    EditProposal,
-    EpisodeRole,
-    EpisodeSummary,
-    StopCategory,
-    Timing,
-    Usage,
-    VerificationRecord,
-)
-from learning_loop.report import collect_run, compare, compare_runs, write_report, write_run_report
-from learning_loop.storage import StageManifest, WorkItem, atomic_write_json
+from learning_loop.reporting.report import collect_run, compare, compare_runs, write_report, write_run_report
 
 
 def ep(iid="i0", attempt=0, success=True, total=(100, 10), ckpt="base", role=EpisodeRole.EVAL, stop=StopCategory.MODEL, seed=None, **kw) -> EpisodeSummary:

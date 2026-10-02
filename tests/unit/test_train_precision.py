@@ -193,7 +193,7 @@ def test_dpo_config_as_built_has_no_mixed_precision(monkeypatch, tmp_path):
 
 
 def test_reference_cache_key_carries_logp_path():
-    from learning_loop.records import CheckpointRef
+    from learning_loop.core.records import CheckpointRef
     from learning_loop.training.dpo import LOGP_PATH, reference_cache_key
 
     ref = CheckpointRef(checkpoint_id="c", model_profile="qwen3-0.6b", base_model="Qwen/Qwen3-0.6B",

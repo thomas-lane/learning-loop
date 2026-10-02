@@ -12,11 +12,11 @@ import pytest
 from _env_helpers import count_errors_instance
 
 from evaluation.agents.tools import ToolConfig
-from learning_loop import fingerprint as fp
-from learning_loop.envs.harbor_session import _FINGERPRINT_B64, HarborSession
-from learning_loop.envs.local_session import LocalSession
-from learning_loop.interfaces import StateSpec
-from learning_loop.records import RestoreCapability
+from learning_loop.core.interfaces import StateSpec
+from learning_loop.core.records import RestoreCapability
+from learning_loop.episodes import fingerprint as fp
+from learning_loop.episodes.envs.harbor_session import _FINGERPRINT_B64, HarborSession
+from learning_loop.episodes.envs.local_session import LocalSession
 
 SPEC = StateSpec(restore=RestoreCapability.DETERMINISTIC_REPLAY, fingerprint_paths=["/app"], fingerprint_exclude=["*/__pycache__"])
 
@@ -91,7 +91,7 @@ class _HostEnv:
         self.commands: list[str] = []
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
-        from learning_loop.envs.local_session import LocalExecResult
+        from learning_loop.episodes.envs.local_session import LocalExecResult
 
         self.commands.append(command)
         p = subprocess.run(["bash", "-c", command], cwd=cwd, capture_output=True, text=True, timeout=timeout_sec)

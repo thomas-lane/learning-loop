@@ -18,15 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verif
 import verify_builders as vb  # noqa: E402
 
 from evaluation.agents.tools import ToolConfig  # noqa: E402
-from learning_loop.editor import ScriptedEditor, SourceContext  # noqa: E402
-from learning_loop.envs.local_session import LocalSession  # noqa: E402
-from learning_loop.episode import run_episode  # noqa: E402
-from learning_loop.events import EventLog  # noqa: E402
-from learning_loop.interfaces import EpisodePlan, EpisodeResult  # noqa: E402
-from learning_loop.policy import ScriptedPolicy  # noqa: E402
-from learning_loop.preferences import build_preference, export_dataset, load_dataset  # noqa: E402
-from learning_loop.records import EpisodeRole, PolicySpec, RestoreCapability, Split, TaskInstance  # noqa: E402
-from learning_loop.verify import ContinuationVerifier  # noqa: E402
+from learning_loop.core.interfaces import EpisodePlan, EpisodeResult  # noqa: E402
+from learning_loop.core.records import EpisodeRole, PolicySpec, RestoreCapability, Split, TaskInstance  # noqa: E402
+from learning_loop.editing.editor import ScriptedEditor, SourceContext  # noqa: E402
+from learning_loop.editing.preferences import build_preference, export_dataset, load_dataset  # noqa: E402
+from learning_loop.editing.verify import ContinuationVerifier  # noqa: E402
+from learning_loop.episodes.envs.local_session import LocalSession  # noqa: E402
+from learning_loop.episodes.episode import run_episode  # noqa: E402
+from learning_loop.episodes.events import EventLog  # noqa: E402
+from learning_loop.episodes.policy import ScriptedPolicy  # noqa: E402
 
 LOG = "\n".join(
     [

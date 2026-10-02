@@ -10,10 +10,10 @@ from __future__ import annotations
 import pytest
 from _env_helpers import count_errors_instance, make_plan, scripted_spec
 
-from learning_loop.backends import LocalFixtureBackend
-from learning_loop.events import read_events
-from learning_loop.policy import load_script
-from learning_loop.records import EventKind
+from learning_loop.core.records import EventKind
+from learning_loop.episodes.backends import LocalFixtureBackend
+from learning_loop.episodes.events import read_events
+from learning_loop.episodes.policy import load_script
 
 
 def _trace(events_path):

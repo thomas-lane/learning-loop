@@ -17,16 +17,16 @@ from openai import AsyncOpenAI
 from evaluation.agents.tool_agent import ToolAgent, copy_into_untrusted_dir
 from evaluation.agents.tools import ToolConfig, effective_timeout
 from harbor.models.agent.context import AgentContext
-from learning_loop.backends import LocalFixtureBackend, _stub_core
-from learning_loop.envs.harbor_session import HarborSession
-from learning_loop.envs.local_session import LocalSession, _LocalExec
-from learning_loop.episode import build_replay_spec, run_episode
-from learning_loop.events import EventLog, load_turns, read_events
-from learning_loop.interfaces import PolicyDecision
-from learning_loop.policy import OpenAIChatPolicy
-from learning_loop.records import EventKind, PolicySpec, StopCategory, Usage
-from learning_loop.storage import atomic_write_json
-from learning_loop.tasks import NETWORK_CAVEAT, load_state_spec
+from learning_loop.core.interfaces import PolicyDecision
+from learning_loop.core.records import EventKind, PolicySpec, StopCategory, Usage
+from learning_loop.core.storage import atomic_write_json
+from learning_loop.episodes.backends import LocalFixtureBackend, _stub_core
+from learning_loop.episodes.envs.harbor_session import HarborSession
+from learning_loop.episodes.envs.local_session import LocalSession, _LocalExec
+from learning_loop.episodes.episode import build_replay_spec, run_episode
+from learning_loop.episodes.events import EventLog, load_turns, read_events
+from learning_loop.episodes.policy import OpenAIChatPolicy
+from learning_loop.tasks.instances import NETWORK_CAVEAT, load_state_spec
 
 
 @pytest.fixture()
@@ -273,8 +273,8 @@ async def test_image_identity_recorded_and_carried_into_replay_spec(tmp_path, in
 
 def test_task_dockerfiles_pin_base_images_by_digest(tmp_path):
     from evaluation.generators import GENERATORS, generate
-    from learning_loop.config import REPO_ROOT
-    from learning_loop.envs.base import build_inputs_identity
+    from learning_loop.core.config import REPO_ROOT
+    from learning_loop.episodes.envs.base import build_inputs_identity
 
     dirs = [REPO_ROOT / "evaluation/tasks/fix-stats", REPO_ROOT / "evaluation/tasks/log-triage"]
     for fam in GENERATORS:

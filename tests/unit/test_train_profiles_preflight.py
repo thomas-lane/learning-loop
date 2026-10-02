@@ -6,9 +6,9 @@ import re
 
 import pytest
 
-from learning_loop import preflight
-from learning_loop.config import load_model_profile
-from learning_loop.records import CheckpointRef
+from learning_loop.core.config import load_model_profile
+from learning_loop.core.records import CheckpointRef
+from learning_loop.hosts import preflight
 from learning_loop.training.dpo import reference_cache_key
 from learning_loop.training.render import RenderedPair
 
@@ -159,8 +159,8 @@ def test_dpo_trainer_refuses_unsupported_device_before_loading(monkeypatch, tmp_
     pytest.importorskip("trl")
     from pathlib import Path
 
-    from learning_loop.config import TrainingConfig
-    from learning_loop.interfaces import TrainRequest
+    from learning_loop.core.config import TrainingConfig
+    from learning_loop.core.interfaces import TrainRequest
     from learning_loop.training import TrainingRequestError, base_checkpoint_ref
     from learning_loop.training import dpo
 

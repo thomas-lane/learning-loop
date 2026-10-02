@@ -11,7 +11,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verify"))
 import verify_builders as vb  # noqa: E402
 
-from learning_loop.editor import (  # noqa: E402
+from learning_loop.core.interfaces import PolicyDecision  # noqa: E402
+from learning_loop.core.records import EditProposal, PolicySpec, ProposedCall, SamplingConfig, Usage  # noqa: E402
+from learning_loop.editing.editor import (  # noqa: E402
     LLMEditor,
     ScriptedEditor,
     build_trajectory_view,
@@ -23,9 +25,7 @@ from learning_loop.editor import (  # noqa: E402
     select_sources,
     validate_proposal,
 )
-from learning_loop.events import load_turns  # noqa: E402
-from learning_loop.interfaces import PolicyDecision  # noqa: E402
-from learning_loop.records import EditProposal, PolicySpec, ProposedCall, SamplingConfig, Usage  # noqa: E402
+from learning_loop.episodes.events import load_turns  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 PROMPT = REPO / "prompts" / "editor" / "v1.md"
@@ -287,9 +287,9 @@ def test_repo_scripted_fixture_loads():
 
 
 async def test_make_editor_and_propose_for(tmp_path):
-    from learning_loop.config import EditorConfig
-    from learning_loop.editor import make_editor
-    from learning_loop.records import CheckpointRef
+    from learning_loop.core.config import EditorConfig
+    from learning_loop.core.records import CheckpointRef
+    from learning_loop.editing.editor import make_editor
 
     summary, _ = vb.write_source_episode(tmp_path / "item")
     (tmp_path / "item" / "summary.json").write_text(summary.model_copy(update={"events_path": None}).model_dump_json())

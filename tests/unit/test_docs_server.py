@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop import docserver
-from learning_loop.config import REPO_ROOT
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.docs_tools import docserver
 
 
 def test_render_headings_tables_mermaid_and_escaping():
@@ -43,7 +43,7 @@ def test_every_document_is_in_the_index_and_navigation():
     docs = {p.relative_to(REPO_ROOT).as_posix() for p in (REPO_ROOT / "docs").glob("*.md")}
     maintained = docs | {"README.md", "AGENTS.md", "evaluation/README.md"}
     nav = {rel for rel, _ in docserver.NAV}
-    assert maintained == nav, f"update NAV in docserver.py: {maintained ^ nav}"
+    assert maintained == nav, f"update NAV in docs_tools/docserver.py: {maintained ^ nav}"
     index = (REPO_ROOT / "docs" / "index.md").read_text()
     for rel in maintained - {"docs/index.md"}:
         link = Path(rel).name if rel.startswith("docs/") else f"../{rel}"

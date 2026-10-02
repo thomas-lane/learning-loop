@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import REPO_ROOT, load_machine, repo_path
+from .core.config import REPO_ROOT, load_machine, repo_path
 
 
 def _print(obj) -> None:
@@ -21,7 +21,7 @@ def _print(obj) -> None:
 
 
 def cmd_validate(a: argparse.Namespace) -> int:
-    from .coordinator import RunContext, check_compatibility, load_all, plan_workload, resolve_tasks
+    from .orchestration.coordinator import RunContext, check_compatibility, load_all, plan_workload, resolve_tasks
     import tempfile
 
     exp, raw, machine, learner, editor = load_all(a.experiment, a.machines, a.set)
@@ -41,7 +41,7 @@ def cmd_validate(a: argparse.Namespace) -> int:
 
 
 def cmd_run(a: argparse.Namespace) -> int:
-    from .coordinator import create_run, run_all
+    from .orchestration.coordinator import create_run, run_all
 
     ctx = create_run(a.experiment, a.machines, run_id=a.run_id, overrides=a.set)
     print(f"run dir: {ctx.run_dir}")
@@ -51,28 +51,28 @@ def cmd_run(a: argparse.Namespace) -> int:
 
 
 def cmd_resume(a: argparse.Namespace) -> int:
-    from .coordinator import resume_run
+    from .orchestration.coordinator import resume_run
 
     resume_run(Path(a.run_dir), a.machines)
     return 0
 
 
 def cmd_status(a: argparse.Namespace) -> int:
-    from .coordinator import run_status
+    from .orchestration.coordinator import run_status
 
     _print(run_status(Path(a.run_dir)))
     return 0
 
 
 def cmd_report(a: argparse.Namespace) -> int:
-    from .report import write_run_report
+    from .reporting.report import write_run_report
 
     print(write_run_report(Path(a.run_dir)))
     return 0
 
 
 def cmd_dashboard(a: argparse.Namespace) -> int:
-    from .dashboard import Dashboard, serve
+    from .reporting.dashboard import Dashboard, serve
 
     if a.log and not a.run_dir:
         print("error: --log needs RUN_DIR (it replaces that run's coordinator log)", file=sys.stderr)
@@ -90,7 +90,7 @@ def cmd_dashboard(a: argparse.Namespace) -> int:
 
 
 def cmd_compare(a: argparse.Namespace) -> int:
-    from .report import compare_conditions, compare_runs
+    from .reporting.report import compare_conditions, compare_runs
 
     out_dir = Path(a.out) if a.out else None
     if a.run_b is None:  # `loop compare RUN_A RUN_B`
@@ -107,12 +107,12 @@ def cmd_compare(a: argparse.Namespace) -> int:
 
 
 def cmd_stage(a: argparse.Namespace) -> int:
-    from . import coordinator as co
+    from .orchestration import coordinator as co
 
     ctx = co.open_run(Path(a.run_dir), a.machines)
 
     async def go() -> None:
-        from .storage import run_lock
+        from .core.storage import run_lock
 
         with run_lock(ctx.run_dir), ctx.pods():
             try:
@@ -125,7 +125,7 @@ def cmd_stage(a: argparse.Namespace) -> int:
 
 
 def cmd_evaluate(a: argparse.Namespace) -> int:
-    from . import coordinator as co
+    from .orchestration import coordinator as co
 
     run_dir = co.evaluate_checkpoint(a.experiment, a.machines, a.checkpoint, a.panels, final=a.final, run_id=a.run_id, overrides=a.set)
     print(f"evaluation run: {run_dir}")
@@ -133,7 +133,7 @@ def cmd_evaluate(a: argparse.Namespace) -> int:
 
 
 def cmd_edit_replay(a: argparse.Namespace) -> int:
-    from . import coordinator as co
+    from .orchestration import coordinator as co
 
     run_dir = co.edit_replay(Path(a.source_run), a.cycle, a.experiment, a.machines, run_id=a.run_id, overrides=a.set)
     print(f"editor-comparison run: {run_dir}")
@@ -141,7 +141,7 @@ def cmd_edit_replay(a: argparse.Namespace) -> int:
 
 
 def cmd_external_eval(a: argparse.Namespace) -> int:
-    from .external_eval import build_external_job
+    from .orchestration.external_eval import build_external_job
 
     cfg_path, argv = build_external_job(a.dataset, a.checkpoint, a.machines, a.out, n_tasks=a.n_tasks, task_names=a.task, model_profile=a.model_profile)
     print(f"wrote Harbor job config: {cfg_path}")
@@ -153,26 +153,26 @@ def cmd_external_eval(a: argparse.Namespace) -> int:
 
 
 def cmd_smoke(a: argparse.Namespace) -> int:
-    from .smoke import run_smoke
+    from .orchestration.smoke import run_smoke
 
     return run_smoke(a.level, machines=a.machines, keep=a.keep)
 
 
 def cmd_preflight(a: argparse.Namespace) -> int:
-    from .preflight import main as preflight_main
+    from .hosts.preflight import main as preflight_main
 
     return preflight_main(["--profile", a.model_profile, *([] if a.trainable else ["--no-train"])])
 
 
 def cmd_submit(a: argparse.Namespace) -> int:
-    from .remote_jobs import submit
+    from .hosts.remote_jobs import submit
 
     print(submit(a.experiment, a.machines, run_id=a.run_id))
     return 0
 
 
 def cmd_sync_hosts(a: argparse.Namespace) -> int:
-    from .remote_jobs import sync_hosts
+    from .hosts.remote_jobs import sync_hosts
 
     for line in sync_hosts(a.machines, dry_run=a.dry_run):
         print(line)
@@ -180,7 +180,7 @@ def cmd_sync_hosts(a: argparse.Namespace) -> int:
 
 
 def cmd_pod(a: argparse.Namespace) -> int:
-    from .pods import cleanup, client_for, pod_status
+    from .hosts.pods import cleanup, client_for, pod_status
 
     m = load_machine(a.machines)
     if not m.pod_ids():
@@ -204,14 +204,14 @@ def cmd_pod(a: argparse.Namespace) -> int:
 
 
 def cmd_fetch(a: argparse.Namespace) -> int:
-    from .remote_jobs import fetch
+    from .hosts.remote_jobs import fetch
 
     print(fetch(a.run_id, a.machines))
     return 0
 
 
 def cmd_remote_status(a: argparse.Namespace) -> int:
-    from .remote_jobs import remote_status
+    from .hosts.remote_jobs import remote_status
 
     _print(remote_status(a.run_id, a.machines))
     return 0
@@ -434,7 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_docs_gen(a: argparse.Namespace) -> int:
-    from .docgen import check_docs, write_docs
+    from .docs_tools.docgen import check_docs, write_docs
 
     if a.check:
         stale = check_docs()
@@ -447,7 +447,7 @@ def cmd_docs_gen(a: argparse.Namespace) -> int:
 
 
 def cmd_docs(a: argparse.Namespace) -> int:
-    from .docserver import serve
+    from .docs_tools.docserver import serve
 
     try:
         return serve(a.host, a.port, open_browser=a.open)
@@ -459,10 +459,10 @@ def cmd_docs(a: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     from pydantic import ValidationError
 
-    from .coordinator import PlanError
-    from .pods import RunpodError
+    from .hosts.pods import RunpodError
+    from .orchestration.coordinator import PlanError
 
-    from .envfile import load_env
+    from .core.envfile import load_env
 
     load_env()  # repo-root .env (git-ignored); existing environment variables win
     args = build_parser().parse_args(argv)

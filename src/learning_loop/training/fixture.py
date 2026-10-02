@@ -16,9 +16,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..interfaces import TrainRequest
-from ..records import CheckpointRecord, CheckpointRef
-from ..storage import atomic_write_json, now_iso, read_json
+from ..core.interfaces import TrainRequest
+from ..core.records import CheckpointRecord, CheckpointRef
+from ..core.storage import atomic_write_json, now_iso, read_json
 from .common import (
     NoTrainableExamples,
     TrainingRequestError,
@@ -167,7 +167,7 @@ class FixtureTrainer:
 
 def base_checkpoint_ref(profile_name: str, checkpoint_id: str = "base") -> CheckpointRef:
     """The incoming reference for cycle 0: the profile's base model, no adapter."""
-    from ..config import load_model_profile
+    from ..core.config import load_model_profile
 
     prof = load_model_profile(profile_name)
     return CheckpointRef(

@@ -8,8 +8,8 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from learning_loop.policy import OpenAIChatPolicy, ScriptedPolicy, fixture_token_estimate, load_script
-from learning_loop.records import PolicySpec, SamplingConfig
+from learning_loop.core.records import PolicySpec, SamplingConfig
+from learning_loop.episodes.policy import OpenAIChatPolicy, ScriptedPolicy, fixture_token_estimate, load_script
 
 TOOLS = [{"type": "function", "function": {"name": "bash", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}}}]
 MSGS = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]

@@ -28,8 +28,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..interfaces import TrainRequest
-from ..storage import atomic_write_json, now_iso, read_json
+from ..core.interfaces import TrainRequest
+from ..core.storage import atomic_write_json, now_iso, read_json
 from .common import NoTrainableExamples, TrainingRequestError
 from .render import RenderError
 

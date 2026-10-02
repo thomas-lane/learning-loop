@@ -97,7 +97,7 @@ environment; prior attempts are preserved and failures remain in denominators.
 
 ## Editing
 
-The editor is a repository component (`src/learning_loop/editor.py`, prompt
+The editor is a repository component (`src/learning_loop/editing/editor.py`, prompt
 `prompts/editor/v1.md`) with a pinned prompt hash, decoding settings and a proposal budget. It
 sees only: the instruction, the learner's system prompt and tool schemas, the learner's turns as
 the learner saw them (including later observations), and optional scalar outcome metrics. It
@@ -157,7 +157,7 @@ positive, at least `min_token_saving`, and at least `min_relative_saving`. Ties 
 the evidence label is "one observed successful preference", not proof of reliable improvement.
 Every rejection reason is recorded.
 
-`local` verification is implemented as a component (`verify.LocalVerifier`) for tasks declaring a
+`local` verification is implemented as a component (`editing.verify.LocalVerifier`) for tasks declaring a
 supported equivalence contract (`same_state_after_action`: identical declared-state fingerprint
 after the edited and the original action from the same restored state, with a shorter rendered
 turn), and local-only pairs are labeled and never mixed with continuation-verified pairs. No

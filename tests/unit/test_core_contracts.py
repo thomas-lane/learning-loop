@@ -9,10 +9,10 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from learning_loop import seeds
-from learning_loop.config import ExperimentConfig, assert_no_secrets, load_experiment, load_machine
-from learning_loop.records import Usage
-from learning_loop.storage import (
+from learning_loop.core import seeds
+from learning_loop.core.config import ExperimentConfig, assert_no_secrets, load_experiment, load_machine
+from learning_loop.core.records import Usage
+from learning_loop.core.storage import (
     JsonlAppender,
     StageManifest,
     atomic_write_json,
@@ -29,7 +29,7 @@ from learning_loop.storage import (
 
 
 def test_seeds_are_stable_across_processes():
-    code = "from learning_loop import seeds; print(seeds.derive_seed(7, 'learner_attempt', 'log-triage/easy/s1', 3))"
+    code = "from learning_loop.core import seeds; print(seeds.derive_seed(7, 'learner_attempt', 'log-triage/easy/s1', 3))"
     outs = {
         subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={"PYTHONHASHSEED": str(h), "PATH": ""}).stdout
         for h in (0, 1, 12345)
@@ -169,7 +169,7 @@ def test_run_lock_is_exclusive(tmp_path):
     with run_lock(tmp_path):
         code = textwrap.dedent(f"""
             from pathlib import Path
-            from learning_loop.storage import run_lock, RunLockedError
+            from learning_loop.core.storage import run_lock, RunLockedError
             try:
                 with run_lock(Path({str(tmp_path)!r})):
                     print("acquired")

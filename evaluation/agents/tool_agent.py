@@ -10,10 +10,10 @@ Where it runs: this class runs in the Harbor process on the *host*. Only tool
 executions happen in the task container (via `environment.exec` /
 `upload_file`), so `localhost` in `api_base` means your machine.
 
-The loop itself lives in `learning_loop.episode.run_episode` (policy <->
+The loop itself lives in `learning_loop.episodes.episode.run_episode` (policy <->
 environment, stop reasons, replay/branching); the tools are
 `evaluation/agents/tools.py`; the endpoint client is
-`learning_loop.policy.OpenAIChatPolicy`.
+`learning_loop.episodes.policy.OpenAIChatPolicy`.
 
 Two modes:
   * CLI mode (no `episode_plan_path`): options below, exactly as before. The
@@ -69,13 +69,13 @@ from harbor.models.trajectories import (
     ToolCall,
     Trajectory,
 )
-from learning_loop.envs.harbor_session import HarborSession
-from learning_loop.episode import EpisodeRun, run_episode, write_episode_files
-from learning_loop.events import EventLog, load_turns
-from learning_loop.interfaces import EpisodePlan, StateSpec
-from learning_loop.policy import OpenAIChatPolicy, make_policy
-from learning_loop.records import EpisodeBudgets, EpisodeRole, PolicySpec, SamplingConfig
-from learning_loop.storage import atomic_write_json
+from learning_loop.core.interfaces import EpisodePlan, StateSpec
+from learning_loop.core.records import EpisodeBudgets, EpisodeRole, PolicySpec, SamplingConfig
+from learning_loop.core.storage import atomic_write_json
+from learning_loop.episodes.envs.harbor_session import HarborSession
+from learning_loop.episodes.episode import EpisodeRun, run_episode, write_episode_files
+from learning_loop.episodes.events import EventLog, load_turns
+from learning_loop.episodes.policy import OpenAIChatPolicy, make_policy
 
 from .tools import ToolConfig, tool_schemas
 

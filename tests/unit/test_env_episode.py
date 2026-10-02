@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from _env_helpers import COUNT_POLICY, FIXTURES, count_errors_instance, make_plan, scripted_spec
 
-from learning_loop.backends import LocalFixtureBackend
-from learning_loop.events import load_turns, read_events
-from learning_loop.records import EventKind, PolicySpec, StopCategory
+from learning_loop.core.records import EventKind, PolicySpec, StopCategory
+from learning_loop.episodes.backends import LocalFixtureBackend
+from learning_loop.episodes.events import load_turns, read_events
 
 
 @pytest.fixture()
@@ -159,11 +159,11 @@ def test_count_policy_fixture_exists():
 async def test_unparsed_tool_call_stops_as_model_error(tmp_path, instance):
     """A tool-call block the server could not parse is an explicit malformed turn, not a finish."""
     from evaluation.agents.tools import ToolConfig
-    from learning_loop.envs.local_session import LocalSession
-    from learning_loop.episode import run_episode
-    from learning_loop.events import EventLog
-    from learning_loop.interfaces import PolicyDecision
-    from learning_loop.records import Usage
+    from learning_loop.core.interfaces import PolicyDecision
+    from learning_loop.core.records import Usage
+    from learning_loop.episodes.envs.local_session import LocalSession
+    from learning_loop.episodes.episode import run_episode
+    from learning_loop.episodes.events import EventLog
 
     class Unparsed:
         spec = scripted_spec()

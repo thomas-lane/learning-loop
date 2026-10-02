@@ -11,10 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verify"))
 import verify_builders as vb  # noqa: E402
 
-from learning_loop.config import VerificationConfig  # noqa: E402
-from learning_loop.editor import SourceContext  # noqa: E402
-from learning_loop.events import read_events  # noqa: E402
-from learning_loop.records import (  # noqa: E402
+from learning_loop.core.config import VerificationConfig  # noqa: E402
+from learning_loop.core.records import (  # noqa: E402
     BranchCost,
     EditProposal,
     EpisodeRole,
@@ -22,8 +20,9 @@ from learning_loop.records import (  # noqa: E402
     RestoreCapability,
     Usage,
 )
-from learning_loop.seeds import continuation_seed  # noqa: E402
-from learning_loop.verify import (  # noqa: E402
+from learning_loop.core.seeds import continuation_seed  # noqa: E402
+from learning_loop.editing.editor import SourceContext  # noqa: E402
+from learning_loop.editing.verify import (  # noqa: E402
     ContinuationVerifier,
     LocalVerifier,
     UnsupportedLocalContract,
@@ -32,6 +31,7 @@ from learning_loop.verify import (  # noqa: E402
     check_local_contract,
     make_verifier,
 )
+from learning_loop.episodes.events import read_events  # noqa: E402
 
 EDIT_CMD = vb.PIPELINE + " | awk '{print $2}' > /app/answer.txt"
 ROOT = 99

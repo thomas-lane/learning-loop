@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from learning_loop.metrics import (
+from learning_loop.core.records import BranchCost, BranchResult, EditProposal, EpisodeRole, EpisodeSummary, StopCategory, Timing, Usage, VerificationRecord
+from learning_loop.core.storage import StageManifest, WorkItem, atomic_write_json
+from learning_loop.reporting.metrics import (
     FEW_SEEDS_NOTE,
     INCOMPARABLE_TOKENS_NOTE,
     CostRate,
@@ -18,9 +20,7 @@ from learning_loop.metrics import (
     stage_effort_table,
     verification_effort_split,
 )
-from learning_loop.records import BranchCost, BranchResult, EditProposal, EpisodeRole, EpisodeSummary, StopCategory, Timing, Usage, VerificationRecord
-from learning_loop.report import collect_run, compare_conditions, load_run_rows, write_run_report
-from learning_loop.storage import StageManifest, WorkItem, atomic_write_json
+from learning_loop.reporting.report import collect_run, compare_conditions, load_run_rows, write_run_report
 from test_report_metrics import ep, row
 
 

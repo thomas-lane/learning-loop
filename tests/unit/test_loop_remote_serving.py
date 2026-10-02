@@ -3,9 +3,9 @@ server host and pushed there only when missing; the base model needs no push."""
 
 from pathlib import Path
 
-from learning_loop import inference
-from learning_loop.config import HostRef, InferenceProfile, load_model_profile
-from learning_loop.records import CheckpointRef
+from learning_loop.core.config import HostRef, InferenceProfile, load_model_profile
+from learning_loop.core.records import CheckpointRef
+from learning_loop.serving import lifecycle
 
 
 class FakeRemote:
@@ -26,12 +26,12 @@ class FakeRemote:
 
 
 def _manager(tmp_path, monkeypatch):
-    monkeypatch.setattr(inference, "Remote", FakeRemote)
-    monkeypatch.setattr(inference, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(lifecycle, "Remote", FakeRemote)
+    monkeypatch.setattr(lifecycle, "REPO_ROOT", tmp_path)
     FakeRemote.calls, FakeRemote.existing = [], set()
     prof = InferenceProfile(mode="managed", backend="hf_transformers", port=8765, device="cuda",
                             host=HostRef(kind="ssh", ssh_alias="runpod", workdir="/workspace/lfe"))
-    return inference.InferenceManager(prof, load_model_profile("qwen3-0.6b"), tmp_path / "logs")
+    return lifecycle.InferenceManager(prof, load_model_profile("qwen3-0.6b"), tmp_path / "logs")
 
 
 def _ckpt(tmp_path, adapter: Path | None):

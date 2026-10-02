@@ -22,12 +22,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "unit"))
 from _env_helpers import FIXTURES, count_errors_instance, make_plan, scripted_spec, tool_call_message  # noqa: E402
 
-from learning_loop.backends import HarborDockerBackend  # noqa: E402
-from learning_loop.config import REPO_ROOT  # noqa: E402
-from learning_loop.episode import build_replay_spec  # noqa: E402
-from learning_loop.events import load_turns, read_events  # noqa: E402
-from learning_loop.records import EventKind, StopCategory  # noqa: E402
-from learning_loop.tasks import load_splits, materialize  # noqa: E402
+from learning_loop.core.config import REPO_ROOT  # noqa: E402
+from learning_loop.core.records import EventKind, StopCategory  # noqa: E402
+from learning_loop.episodes.backends import HarborDockerBackend  # noqa: E402
+from learning_loop.episodes.episode import build_replay_spec  # noqa: E402
+from learning_loop.episodes.events import load_turns, read_events  # noqa: E402
+from learning_loop.tasks.instances import load_splits, materialize  # noqa: E402
 
 pytestmark = pytest.mark.docker
 
@@ -140,8 +140,8 @@ async def test_malicious_outputs_get_no_reward_on_docker(tmp_path):
 
 
 async def test_planted_reward_file_is_ignored_on_log_triage(tmp_path):
-    from learning_loop.records import TaskInstance
-    from learning_loop.storage import sha256_tree
+    from learning_loop.core.records import TaskInstance
+    from learning_loop.core.storage import sha256_tree
 
     d = REPO_ROOT / "evaluation" / "tasks" / "log-triage"
     inst = TaskInstance(instance_id="log-triage/static", family="log-triage", task_dir=str(d), content_hash=sha256_tree(d))
@@ -151,8 +151,8 @@ async def test_planted_reward_file_is_ignored_on_log_triage(tmp_path):
 
 
 async def test_forged_fix_stats_artifact_does_not_score(tmp_path):
-    from learning_loop.records import TaskInstance
-    from learning_loop.storage import sha256_tree
+    from learning_loop.core.records import TaskInstance
+    from learning_loop.core.storage import sha256_tree
 
     d = REPO_ROOT / "evaluation" / "tasks" / "fix-stats"
     inst = TaskInstance(instance_id="fix-stats/static", family="fix-stats", task_dir=str(d), content_hash=sha256_tree(d))

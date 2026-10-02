@@ -1,6 +1,6 @@
 """Pod-side idle watchdog: stop (or terminate) this Runpod pod when the coordinator's heartbeat goes stale.
 
-Started on the pod by the coordinator (learning_loop.pods), one instance per pod:
+Started on the pod by the coordinator (learning_loop.hosts.pods), one instance per pod:
 
     python3 scripts/pod_watchdog.py HEARTBEAT_FILE IDLE_SEC INTERVAL_SEC LOG_FILE [stop|terminate]
 

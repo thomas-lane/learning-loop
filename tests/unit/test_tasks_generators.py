@@ -17,10 +17,10 @@ import pytest
 from evaluation.generators import GENERATORS, generate
 from evaluation.generators import csv_revenue, fix_stats, log_triage
 from harbor.models.task.config import TaskConfig
-from learning_loop.config import REPO_ROOT
-from learning_loop.records import RestoreCapability
-from learning_loop.storage import sha256_tree
-from learning_loop.tasks import load_state_spec
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.records import RestoreCapability
+from learning_loop.core.storage import sha256_tree
+from learning_loop.tasks.instances import load_state_spec
 
 CASES = [(fam, d) for fam, m in GENERATORS.items() for d in m.DIFFICULTIES]
 

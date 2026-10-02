@@ -17,13 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop import coordinator as co
-from learning_loop import dashboard as dash
 from learning_loop.cli import main
-from learning_loop.config import REPO_ROOT
-from learning_loop.metrics import eval_rows, group_summaries, summarize
-from learning_loop.report import collect_run
-from learning_loop.storage import read_json
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.storage import read_json
+from learning_loop.orchestration import coordinator as co
+from learning_loop.reporting import dashboard as dash
+from learning_loop.reporting.metrics import eval_rows, group_summaries, summarize
+from learning_loop.reporting.report import collect_run
 
 EXP = REPO_ROOT / "experiments" / "fixture-two-cycles.yaml"
 MACHINE = REPO_ROOT / "configs" / "machines" / "examples" / "fixture.yaml"

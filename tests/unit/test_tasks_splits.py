@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop.config import REPO_ROOT
-from learning_loop.records import Split
-from learning_loop.tasks import (
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.records import Split
+from learning_loop.tasks.instances import (
     SplitValidationError,
     assert_exportable,
     load_splits,

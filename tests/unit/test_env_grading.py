@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from _env_helpers import FIXTURES, count_errors_instance, make_plan, scripted_spec
 
-from learning_loop.backends import LocalFixtureBackend
-from learning_loop.events import load_turns
-from learning_loop.storage import read_json
+from learning_loop.core.storage import read_json
+from learning_loop.episodes.backends import LocalFixtureBackend
+from learning_loop.episodes.events import load_turns
 
 
 async def test_nop_scores_zero(tmp_path):

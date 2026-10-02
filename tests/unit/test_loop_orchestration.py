@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from learning_loop import coordinator as co
-from learning_loop.config import REPO_ROOT
-from learning_loop.records import EpisodeSummary, StopCategory
-from learning_loop.storage import RunLockedError, StageManifest, read_json, read_jsonl, run_lock
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.records import EpisodeSummary, StopCategory
+from learning_loop.core.storage import RunLockedError, StageManifest, read_json, read_jsonl, run_lock
+from learning_loop.orchestration import coordinator as co
 
 EXP = REPO_ROOT / "experiments" / "fixture-two-cycles.yaml"
 MACHINE = REPO_ROOT / "configs" / "machines" / "examples" / "fixture.yaml"
@@ -128,7 +128,7 @@ def test_no_update_cycle_when_editor_abstains(tmp_path):
 def test_frozen_baseline_and_compare(two_cycles, tmp_path):
     ctx = run(co.create_run(EXP, MACHINE, run_id="frozen", runs_dir=tmp_path, overrides=["condition=frozen_baseline", "cycles=0"]))
     assert sorted(p.name for p in ctx.cycle_dir(0).iterdir() if p.is_dir()) == ["eval"]
-    from learning_loop.report import compare
+    from learning_loop.reporting.report import compare
 
     res = compare(ctx.run_dir, two_cycles.run_dir)
     assert res is not None

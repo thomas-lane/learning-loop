@@ -1,7 +1,7 @@
 """Render preference examples and conversations with the learner's own chat template.
 
 One rendering path is shared by training (DPO rows), intervention-token
-accounting (`token_count.py`) and the reference HF server, so the tokens the
+accounting (`editing/token_count.py`) and the reference HF server, so the tokens the
 learner is trained on are the tokens it is served with.
 
 Conventions (tested in tests/unit/test_train_render.py):
@@ -29,8 +29,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config import ModelProfile, load_model_profile
-from ..records import Message, PreferenceExample, ToolSchema
+from ..core.config import ModelProfile, load_model_profile
+from ..core.records import Message, PreferenceExample, ToolSchema
 
 
 class RenderError(ValueError):

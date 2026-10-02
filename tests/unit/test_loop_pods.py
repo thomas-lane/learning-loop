@@ -12,8 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import yaml
 
-from learning_loop import pods, remote
-from learning_loop.config import REPO_ROOT, MachineProfile
+from learning_loop.core.config import REPO_ROOT, MachineProfile
+from learning_loop.hosts import pods, remote
 
 KEY = "rp_test_secret_key"
 

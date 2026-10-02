@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from learning_loop.cli import main
-from learning_loop.config import REPO_ROOT
+from learning_loop.core.config import REPO_ROOT
 
 M = REPO_ROOT / "configs" / "machines" / "examples"
 E = REPO_ROOT / "experiments"

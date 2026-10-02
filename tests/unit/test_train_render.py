@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop.config import load_model_profile
-from learning_loop.records import PreferenceExample
+from learning_loop.core.config import load_model_profile
+from learning_loop.core.records import PreferenceExample
 from learning_loop.training.common import load_preference_dataset
 from learning_loop.training.render import (
     RenderError,
@@ -184,7 +184,7 @@ def test_trainer_records_render_summary_when_everything_is_dropped(tmp_path, mon
             raise NoTrainableExamples("all 1 examples dropped", render=summary)
 
     monkeypatch.setattr(train_run, "get_trainer", lambda name, **kw: AllDropped())
-    from learning_loop.interfaces import TrainRequest
+    from learning_loop.core.interfaces import TrainRequest
     from learning_loop.training.fixture import base_checkpoint_ref
 
     req = TrainRequest(run_id="r", cycle=0, dataset_dir=str(tmp_path), incoming=base_checkpoint_ref("qwen3-0.6b"),
@@ -296,7 +296,7 @@ def test_template_pin_is_enforced(qwen):
 
 
 def test_intervention_tokens_match_training_render(qwen):
-    from learning_loop.token_count import fixture_intervention_tokens, get_counter, intervention_tokens
+    from learning_loop.editing.token_count import fixture_intervention_tokens, get_counter, intervention_tokens
 
     prof, tok = qwen
     ex = pair('{"command": "grep -c ERROR app.log"}', '{"command": "cat app.log"}')

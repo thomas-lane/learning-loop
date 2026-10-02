@@ -4,8 +4,8 @@ If this fails after changing a command, an argument or a config field: run `uv r
 and commit the regenerated docs/cli.md and docs/configuration.md.
 """
 
-from learning_loop import docgen
 from learning_loop.cli import main
+from learning_loop.docs_tools import docgen
 
 
 def test_generated_docs_are_current():

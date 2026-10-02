@@ -3,9 +3,9 @@ of synced files."""
 
 import os
 
-from learning_loop.config import REPO_ROOT
-from learning_loop.envfile import load_env
-from learning_loop.remote import RSYNC_EXCLUDES
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.envfile import load_env
+from learning_loop.hosts.remote import RSYNC_EXCLUDES
 
 
 def test_load_env_precedence_and_empty_values(tmp_path, monkeypatch):

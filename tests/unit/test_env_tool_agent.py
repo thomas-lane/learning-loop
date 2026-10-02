@@ -12,11 +12,11 @@ from _env_helpers import count_errors_instance, make_plan
 from evaluation.agents.tool_agent import ToolAgent
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Trajectory
-from learning_loop.config import REPO_ROOT
-from learning_loop.envs.local_session import LocalSession, _LocalExec
-from learning_loop.episode import load_core
-from learning_loop.events import load_turns
-from learning_loop.storage import atomic_write_json
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.storage import atomic_write_json
+from learning_loop.episodes.envs.local_session import LocalSession, _LocalExec
+from learning_loop.episodes.episode import load_core
+from learning_loop.episodes.events import load_turns
 from evaluation.agents.tools import ToolConfig
 
 

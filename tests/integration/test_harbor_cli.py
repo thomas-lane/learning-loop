@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "unit"))
 from _env_helpers import count_errors_instance  # noqa: E402
 
-from learning_loop.config import REPO_ROOT  # noqa: E402
+from learning_loop.core.config import REPO_ROOT  # noqa: E402
 
 pytestmark = pytest.mark.docker
 

@@ -12,9 +12,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verify"))
 import verify_builders as vb  # noqa: E402
 
-from learning_loop.config import DataSelectionConfig  # noqa: E402
-from learning_loop.editor import SourceContext  # noqa: E402
-from learning_loop.preferences import (  # noqa: E402
+from learning_loop.core.config import DataSelectionConfig  # noqa: E402
+from learning_loop.core.records import (  # noqa: E402
+    EditProposal,
+    PreferenceExample,
+    PreferenceProvenance,
+    ProposedCall,
+    Split,
+    VerificationRecord,
+)
+from learning_loop.editing.editor import SourceContext  # noqa: E402
+from learning_loop.editing.preferences import (  # noqa: E402
     PreferenceError,
     PreferencePair,
     bound_history,
@@ -26,14 +34,6 @@ from learning_loop.preferences import (  # noqa: E402
     load_dataset,
     select_pairs,
     select_training_pairs,
-)
-from learning_loop.records import (  # noqa: E402
-    EditProposal,
-    PreferenceExample,
-    PreferenceProvenance,
-    ProposedCall,
-    Split,
-    VerificationRecord,
 )
 
 REPO = Path(__file__).resolve().parents[2]

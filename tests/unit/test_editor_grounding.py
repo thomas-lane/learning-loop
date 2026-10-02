@@ -10,9 +10,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verify"))
 import verify_builders as vb  # noqa: E402
 
-from learning_loop.editor import budget_violations, contains_token, grounding_violations, validate_proposal  # noqa: E402
-from learning_loop.events import load_turns  # noqa: E402
-from learning_loop.records import EditProposal, ProposedCall  # noqa: E402
+from learning_loop.core.records import EditProposal, ProposedCall  # noqa: E402
+from learning_loop.editing.editor import budget_violations, contains_token, grounding_violations, validate_proposal  # noqa: E402
+from learning_loop.episodes.events import load_turns  # noqa: E402
 
 COUNT_INSTRUCTION = "Count the lines containing ERROR across all files in /app/logs/. Write the total to /app/answer.txt."
 
@@ -167,7 +167,7 @@ def test_budget_violations_helper():
 
 
 def test_output_contexts():
-    from learning_loop.editor import extract_constants
+    from learning_loop.editing.editor import extract_constants
 
     assert "17" in extract_constants({"command": "cd /app && echo 17 > answer.txt"})
     assert "17" in extract_constants({"command": "python3 -c 'print(17)' > /app/answer.txt"})

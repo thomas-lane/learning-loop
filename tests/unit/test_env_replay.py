@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 from _env_helpers import count_errors_instance, make_plan, scripted_spec, tool_call_message
 
-from learning_loop.backends import LocalFixtureBackend
-from learning_loop.episode import apply_normalizers, build_replay_spec
-from learning_loop.events import load_turns, read_events
-from learning_loop.records import EventKind, RestoreCapability, StopCategory
-from learning_loop.tasks import load_state_spec
+from learning_loop.core.records import EventKind, RestoreCapability, StopCategory
+from learning_loop.episodes.backends import LocalFixtureBackend
+from learning_loop.episodes.episode import apply_normalizers, build_replay_spec
+from learning_loop.episodes.events import load_turns, read_events
+from learning_loop.tasks.instances import load_state_spec
 
 EDIT = '{"command": "grep -h ERROR data/*.log | wc -l"}'
 

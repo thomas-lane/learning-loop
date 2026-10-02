@@ -10,8 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fixtures" / "verify"))
 import verify_builders as vb  # noqa: E402
 
-from learning_loop.records import BranchCost, BranchResult, EpisodeRole, EpisodeSummary, StopCategory, Usage  # noqa: E402
-from learning_loop.verify import evaluate_strict_all_success, intervention_tool_reasons  # noqa: E402
+from learning_loop.core.records import BranchCost, BranchResult, EpisodeRole, EpisodeSummary, StopCategory, Usage  # noqa: E402
+from learning_loop.editing.verify import evaluate_strict_all_success, intervention_tool_reasons  # noqa: E402
 from test_verify_branches import outcomes, setup, verifier  # noqa: E402
 
 OK = {"success": True, "requests": [(900, 10)]}

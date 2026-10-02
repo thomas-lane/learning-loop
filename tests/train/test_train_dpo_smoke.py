@@ -57,8 +57,8 @@ def _deterministic_cuda() -> None:
 
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory):
-    from learning_loop.config import TrainingConfig
-    from learning_loop.interfaces import TrainRequest
+    from learning_loop.core.config import TrainingConfig
+    from learning_loop.core.interfaces import TrainRequest
     from learning_loop.training.dpo import TrlDpoTrainer
     from learning_loop.training.fixture import SimulatedInterruption, base_checkpoint_ref
 
@@ -142,7 +142,7 @@ def test_cycle2_continues_adapter_with_incoming_reference(runs):
 
 def test_reference_fixed_while_policy_moves(runs):
     """Reload the incoming checkpoint after cycle 2 trained: its log-probs still equal the cached reference."""
-    from learning_loop.config import load_model_profile
+    from learning_loop.core.config import load_model_profile
     from learning_loop.training.modeling import free_memory, load_adapter, load_base_model, sequence_logps
     from learning_loop.training.render import end_of_turn_ids, load_tokenizer, render_pairs
     from learning_loop.training.common import load_preference_dataset
@@ -203,7 +203,7 @@ def test_publication_is_idempotent_and_cli_reports_path(runs):
 
 
 def test_serve_trained_adapter_tool_calling(runs):
-    from learning_loop.config import load_model_profile
+    from learning_loop.core.config import load_model_profile
     from learning_loop.serving.managed import ManagedHFServer, free_port, http_json
     from learning_loop.training.common import load_preference_dataset
     from learning_loop.training.render import encode, load_tokenizer, render_text

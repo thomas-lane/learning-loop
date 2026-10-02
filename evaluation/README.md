@@ -8,7 +8,7 @@ evaluation/
 ├── run.sh                      # wrapper: PYTHONPATH + `harbor run -c configs/local-llama.yaml`
 ├── configs/local-llama.yaml    # Harbor job config: agent, model, URL, tasks, attempts
 ├── agents/
-│   ├── tool_agent.py           # ToolAgent(BaseAgent): Harbor adapter around learning_loop.episode
+│   ├── tool_agent.py           # ToolAgent(BaseAgent): Harbor adapter around learning_loop.episodes.episode
 │   ├── tools.py                # tool schemas + handlers (bash, read_file, write_file)
 │   └── system_prompt.md        # the system prompt, verbatim ({workdir} is filled in)
 ├── tasks/                      # hand-written tasks: log-triage, fix-stats
@@ -34,7 +34,7 @@ uv run harbor view evaluation/jobs                         # browse trajectories
 ```
 
 Docker must be running. CLI flags override the config file. The learning loop does not use
-`run.sh`: it runs single trials programmatically (`learning_loop.backends.HarborDockerBackend`).
+`run.sh`: it runs single trials programmatically (`learning_loop.episodes.backends.HarborDockerBackend`).
 
 ## How a trial runs
 
@@ -87,7 +87,7 @@ out are recorded in the tool result (`timeout_sec`, `timed_out`). Command-level 
 (a Harbor exec/upload exception, Harbor's backstop exec timeout) raise `EnvInfraError` and stop
 the episode as `infra:...`, also during replay, without showing the learner anything.
 
-**Loop and stop reasons** (implemented in `learning_loop/episode.py`): request -> response ->
+**Loop and stop reasons** (implemented in `learning_loop/episodes/episode.py`): request -> response ->
 execute each tool call in order -> append observations -> repeat.
 
 | stop reason | category | meaning |
@@ -190,7 +190,7 @@ assistant turn *k*:
 5. Any mismatch stops the episode as `replay:<mismatch>` before the intervention is executed or
    the model is called (fail closed).
 
-The fingerprint (`src/learning_loop/fingerprint.py`, shipped into the container and run with
+The fingerprint (`src/learning_loop/episodes/fingerprint.py`, shipped into the container and run with
 `python3 -I -B` from `/`) covers, for each declared path recursively: file content hashes, file
 type, permissions, owner, symlink targets (not followed), missing paths, and the tool working
 directory. It does **not** cover modification times, processes, network or clock state. Tasks
@@ -223,7 +223,7 @@ directory, `tests/grade.py` grades a copy of the artifacts). That backend runs h
 subprocesses: it is not a sandbox and accepts scripted policies only.
 
 Split files list every instance once (family, difficulty, generator seed or static task dir,
-split) and group them into panels of one split (`train`, `dev`, `final`). `learning_loop.tasks`
+split) and group them into panels of one split (`train`, `dev`, `final`). `learning_loop.tasks.instances`
 materializes instances (content-hashed `TaskInstance` records, plus a hash of learner-visible
 content) and rejects: duplicate ids, panels mixing splits, held-out families in train panels,
 the same generator coordinates under two ids, and identical learner-visible content in different

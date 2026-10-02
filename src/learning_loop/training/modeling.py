@@ -10,8 +10,8 @@ import gc
 from pathlib import Path
 from typing import Any
 
-from ..config import ModelProfile
-from ..records import CheckpointRef
+from ..core.config import ModelProfile
+from ..core.records import CheckpointRef
 from .common import TrainingRequestError, adapter_sha256
 from .render import RenderedPair
 

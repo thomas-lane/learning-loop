@@ -1,7 +1,7 @@
 """Synthetic source episodes and a fake EpisodeBackend for Workstream C unit tests.
 
 Nothing here touches Docker or a model. The source episode mimics the event
-contract in `learning_loop.events` (episode_start plan, request/response per
+contract in `learning_loop.episodes.events` (episode_start plan, request/response per
 model turn, tool_call/tool_result, fingerprints before each model turn).
 """
 
@@ -12,9 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from learning_loop.events import EventLog
-from learning_loop.interfaces import EnvCapabilities, EpisodePlan, EpisodeResult, StateSpec
-from learning_loop.records import (
+from learning_loop.core.interfaces import EnvCapabilities, EpisodePlan, EpisodeResult, StateSpec
+from learning_loop.core.records import (
     EpisodeBudgets,
     EpisodeRole,
     EpisodeSummary,
@@ -26,6 +25,7 @@ from learning_loop.records import (
     ToolExecution,
     Usage,
 )
+from learning_loop.episodes.events import EventLog
 
 SYSTEM = "You are an autonomous agent. The working directory is `/app`."
 INSTRUCTION = (

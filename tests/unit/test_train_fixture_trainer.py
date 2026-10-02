@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from learning_loop.config import TrainingConfig
-from learning_loop.interfaces import TrainRequest
-from learning_loop.records import CheckpointRecord
-from learning_loop.storage import read_json
+from learning_loop.core.config import TrainingConfig
+from learning_loop.core.interfaces import TrainRequest
+from learning_loop.core.records import CheckpointRecord
+from learning_loop.core.storage import read_json
 from learning_loop.training import FixtureTrainer, NoTrainableExamples, TrainingRequestError, base_checkpoint_ref
 from learning_loop.training.fixture import FIXTURE_ADAPTER, SimulatedInterruption, _weights_sha, load_fixture_weights
 

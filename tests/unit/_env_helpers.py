@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.agents.tools import tool_schemas
-from learning_loop import tasks
-from learning_loop.config import REPO_ROOT
-from learning_loop.interfaces import EpisodePlan, ReplaySpec
-from learning_loop.records import EpisodeBudgets, EpisodeRole, PolicySpec, SamplingConfig, TaskInstance
+from learning_loop.core.config import REPO_ROOT
+from learning_loop.core.interfaces import EpisodePlan, ReplaySpec
+from learning_loop.core.records import EpisodeBudgets, EpisodeRole, PolicySpec, SamplingConfig, TaskInstance
+from learning_loop.tasks import instances
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "env"
 COUNT_POLICY = FIXTURES / "count_errors_policy.yaml"
@@ -17,8 +17,8 @@ SYSTEM_PROMPT = (REPO_ROOT / "evaluation" / "agents" / "system_prompt.md").read_
 
 
 def count_errors_instance(dest: Path, instance_id: str = "count-errors/easy/s1") -> TaskInstance:
-    splits = tasks.load_splits(REPO_ROOT / "evaluation" / "splits" / "fixture.yaml")
-    return tasks.materialize(splits, dest, ids=[instance_id])[instance_id]
+    splits = instances.load_splits(REPO_ROOT / "evaluation" / "splits" / "fixture.yaml")
+    return instances.materialize(splits, dest, ids=[instance_id])[instance_id]
 
 
 def scripted_spec(path: Path | str = COUNT_POLICY, **kw: Any) -> PolicySpec:
@@ -46,9 +46,9 @@ def make_plan(
         policy=policy or scripted_spec(),
         budgets=EpisodeBudgets(**budgets),
         system_prompt=SYSTEM_PROMPT,
-        instruction=tasks.read_instruction(Path(instance.task_dir)),
+        instruction=instances.read_instruction(Path(instance.task_dir)),
         tools=tool_schemas(),
-        state_spec=tasks.load_state_spec(Path(instance.task_dir)),
+        state_spec=instances.load_state_spec(Path(instance.task_dir)),
         replay=replay,
     )
 

@@ -17,7 +17,7 @@ Run the Docker/train markers after touching tasks, the agent, replay, rendering 
 Never leave long training or load tests running unattended on the laptop, never stop services
 this repo did not start (e.g. a llama.cpp server on :9931), and never publish models/data or
 push from automation. Paid compute is limited to Runpod pods declared in a machine profile
-(`pods.py`): existing pods (`pod_id`) may only be started and stopped; pods from a
+(`hosts/pods.py`): existing pods (`pod_id`) may only be started and stopped; pods from a
 `runpod.create` spec may be created, within the spec's GPU types and `max_cost_per_hr`, and must
 be terminated by the same command. Every command that starts or creates a pod must stop or
 terminate it (or leave its idle watchdog running) however the command ends, and code only ever
@@ -29,23 +29,26 @@ Credentials live in the git-ignored `.env` (template: `.env.example`), loaded au
 ## Where things live
 
 Architecture, the module map and data flow are in `docs/architecture.md`; the contents of a run
-directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. Quick index:
+directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. Quick index
+(paths under `src/learning_loop/`):
 
 | Concern | Module |
 |---|---|
-| Records / interfaces / config schemas | `records.py`, `interfaces.py`, `config.py` |
-| Seeds and stable IDs | `seeds.py` |
-| Atomic files, run lock, stage manifests | `storage.py` |
-| Episode loop, replay, stop reasons | `episode.py`, `events.py` |
-| Policies (OpenAI-compatible, scripted fixture) | `policy.py` |
-| Environments, fingerprints, backends | `envs/`, `fingerprint.py`, `backends.py` |
-| Tasks, generators, splits | `tasks.py`, `evaluation/generators/`, `evaluation/splits/` |
-| Editor, verification, preferences | `editor.py`, `verify.py`, `preferences.py` |
-| Training, rendering, token counts | `training/`, `token_count.py` |
-| Serving and lifecycle | `serving/`, `inference.py` |
-| Orchestration, CLI, remote | `coordinator.py`, `cli.py`, `remote.py`, `remote_jobs.py` |
-| Metrics and reports | `metrics.py`, `report.py` |
-| Live run dashboard (`loop dashboard`), docs viewer (`loop docs`) | `dashboard.py`, `docserver.py` |
+| Records / interfaces / config schemas | `core/records.py`, `core/interfaces.py`, `core/config.py` |
+| Seeds and stable IDs | `core/seeds.py` |
+| Atomic files, run lock, stage manifests | `core/storage.py` |
+| Provenance, `.env` loading | `core/provenance.py`, `core/envfile.py` |
+| Episode loop, replay, stop reasons | `episodes/episode.py`, `episodes/events.py` |
+| Policies (OpenAI-compatible, scripted fixture) | `episodes/policy.py` |
+| Environments, fingerprints, backends | `episodes/envs/`, `episodes/fingerprint.py`, `episodes/backends.py` |
+| Tasks, generators, splits | `tasks/instances.py`, `evaluation/generators/`, `evaluation/splits/` |
+| Editor, verification, preferences | `editing/editor.py`, `editing/verify.py`, `editing/preferences.py` |
+| Training, rendering, token counts | `training/`, `editing/token_count.py` |
+| Serving and lifecycle | `serving/` (`hf_server.py`, `tool_parse.py`, `managed.py`, `lifecycle.py`) |
+| Orchestration, CLI | `orchestration/coordinator.py`, `orchestration/smoke.py`, `orchestration/external_eval.py`, `cli.py` |
+| Remote hosts, pods, preflight | `hosts/remote.py`, `hosts/remote_jobs.py`, `hosts/pods.py`, `hosts/preflight.py` |
+| Metrics, reports, live run dashboard (`loop dashboard`) | `reporting/metrics.py`, `reporting/report.py`, `reporting/dashboard.py` |
+| Docs generation, docs viewer (`loop docs`) | `docs_tools/docgen.py`, `docs_tools/docserver.py` |
 
 ## Tests
 
@@ -77,7 +80,7 @@ have failed before it.
 
 ## Integrity invariants (keep tests for each)
 
-- **Seeds/IDs** come from `seeds.py` (SHA-256 over explicit parts). Evaluation seeds depend only on
+- **Seeds/IDs** come from `core/seeds.py` (SHA-256 over explicit parts). Evaluation seeds depend only on
   `seeds.root`, instance and attempt, so checkpoints and loop seeds are compared on the same schedule.
   Original/edited continuations share a seed; the branch label is never a seed input.
 - **Configs are strict**: unknown keys fail; credentials are env-var names; `run.json` is write-once.
@@ -135,10 +138,10 @@ update that file instead of repeating the information elsewhere:
 |---|---|
 | setup, smoke levels, component status (working / untested) | `README.md` |
 | a `loop` command or argument | its `help`/`description` in `cli.py`, then `uv run loop docs-gen` (regenerates `docs/cli.md`); conventions and workflows are hand-written in the same file |
-| a config field or schema | its `Field(description=...)` in `config.py`, then `uv run loop docs-gen` (regenerates `docs/configuration.md`); cross-field rules are hand-written there |
+| a config field or schema | its `Field(description=...)` in `core/config.py`, then `uv run loop docs-gen` (regenerates `docs/configuration.md`); cross-field rules are hand-written there |
 | operating procedures, error messages, recovery steps | `docs/operations.md` |
 | the meaning of a term, or a new term | `docs/glossary.md` |
-| a new document, or what a document covers | `docs/index.md` and the viewer's `NAV` in `src/learning_loop/docserver.py` |
+| a new document, or what a document covers | `docs/index.md` and the viewer's `NAV` in `src/learning_loop/docs_tools/docserver.py` |
 | components, module responsibilities, process/machine roles, data flow, isolation boundaries, identities, extension points, repository folders | `docs/architecture.md` |
 | files or directories a run writes, their names, formats or mutability, run kinds | `docs/run-layout.md` |
 | the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
