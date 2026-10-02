@@ -1,0 +1,6 @@
+# Deterministic fixtures: no model server, no Docker. Engineering checks only.
+name: fixture
+environment_backend: local_fixture
+inference: {mode: scripted, backend: scripted}
+training: {device: cpu, allow_cpu_fallback: true}
+runs_dir: runs

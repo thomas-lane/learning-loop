@@ -1,0 +1,16 @@
+# Local fixture family for the local_fixture backend (scripted policies only; no Docker).
+schema_version: 1
+name: fixture
+description: count-errors instances for deterministic orchestration tests.
+held_out_families: []
+families:
+  count-errors: {skills: [shell, grep, counting]}
+instances:
+  - {id: count-errors/easy/s1, family: count-errors, difficulty: easy, seed: 1, split: train}
+  - {id: count-errors/easy/s2, family: count-errors, difficulty: easy, seed: 2, split: train}
+  - {id: count-errors/easy/s101, family: count-errors, difficulty: easy, seed: 101, split: dev}
+  - {id: count-errors/medium/s201, family: count-errors, difficulty: medium, seed: 201, split: final}
+panels:
+  train: {split: train, instances: [count-errors/easy/s1, count-errors/easy/s2]}
+  dev: {split: dev, instances: [count-errors/easy/s101]}
+  final: {split: final, instances: [count-errors/medium/s201]}

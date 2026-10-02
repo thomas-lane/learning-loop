@@ -1,0 +1,13 @@
+# Smallest Harbor/Docker layout: one short training instance and one dev instance.
+schema_version: 1
+name: smoke
+description: One short count-errors instance per split, for the bounded laptop smoke test.
+held_out_families: []
+families:
+  count-errors: {skills: [shell, grep, counting]}
+instances:
+  - {id: count-errors/easy/s1, family: count-errors, difficulty: easy, seed: 1, split: train}
+  - {id: count-errors/easy/s101, family: count-errors, difficulty: easy, seed: 101, split: dev}
+panels:
+  train: {split: train, instances: [count-errors/easy/s1]}
+  dev: {split: dev, instances: [count-errors/easy/s101]}

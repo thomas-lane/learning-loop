@@ -1,0 +1,6 @@
+# Frozen-policy baseline: evaluate the initial checkpoint on the pilot's dev panel with the same
+# declared instance/attempt seed schedule (paired with the learning run via `loop compare`).
+base: pilot.yaml
+name: pilot-frozen-baseline
+condition: frozen_baseline
+cycles: 0

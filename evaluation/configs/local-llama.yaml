@@ -1,0 +1,22 @@
+# Harbor job config: `harbor run -c evaluation/configs/local-llama.yaml`
+# CLI flags given alongside -c override these values (e.g. `-k 5`, `-m other-model`).
+# Full schema: `harbor job schema`.
+jobs_dir: evaluation/jobs
+n_attempts: 1            # rollouts per task (-k). Raise for pass@k / more training data.
+n_concurrent_trials: 1   # llama.cpp serves requests one slot at a time by default
+
+agents:
+  - name: evaluation.agents.tool_agent:ToolAgent   # needs PYTHONPATH=. (repo root)
+    # Must match an id from GET {api_base}/models. With a single-model
+    # llama-server any string works; the llama.cpp router uses it to pick a model.
+    model_name: ggml-org/gemma-4-E4B-it-GGUF:Q8_0
+    kwargs:
+      api_base: http://localhost:9931/v1   # or unset this and export LLM_API_BASE
+      max_turns: 30
+      max_tokens: 8192     # per call, reasoning included
+      max_output_chars: 8000
+      # temperature: 0.7
+      # extra_body: {top_k: 40, min_p: 0.05}   # passed straight through to the server
+
+datasets:
+  - path: evaluation/tasks   # every subdirectory with a task.toml is a task

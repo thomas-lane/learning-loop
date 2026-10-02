@@ -1,0 +1,21 @@
+# Python / tooling
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Generated outputs (never commit)
+runs/
+artifacts/
+evaluation/jobs/
+*.safetensors
+*.gguf
+
+# Private machine profiles and credentials
+configs/machines/local/*
+!configs/machines/local/README.md
+.env
+*.env
+!.env.example

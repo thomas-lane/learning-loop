@@ -1,0 +1,52 @@
+[project]
+name = "learning-loop"
+version = "0.1.0"
+description = "Collect -> verified efficiency edits -> LoRA DPO research loop on Harbor tasks"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "harbor==0.23.0",
+    "openai>=2.0",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+    "jsonschema>=4.20",
+    "markdown-it-py>=4.0",  # `loop docs` local documentation viewer
+    "python-dotenv>=1.0",   # repo-root .env loading (credentials by variable name only)
+    # Tokenizer/chat-template rendering for intervention-length accounting.
+    # Imports without torch on macOS; no CUDA packages here.
+    "transformers==5.17.0",
+]
+
+[project.optional-dependencies]
+# Training + reference HF serving. On macOS this resolves to CPU/MPS torch wheels;
+# CUDA wheels only appear when installed on Linux.
+train = [
+    "torch==2.14.0",
+    "peft==0.21.1",
+    "trl==1.14.1",
+    "accelerate==1.15.0",
+    "datasets==5.0.1",
+]
+
+[project.scripts]
+loop = "learning_loop.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/learning_loop", "evaluation"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "docker: needs a running Docker daemon (Harbor task containers)",
+    "train: needs the `train` extra (torch/peft/trl) and downloads a small model",
+    "live: needs a served model endpoint",
+]
+addopts = "-m 'not docker and not train and not live'"

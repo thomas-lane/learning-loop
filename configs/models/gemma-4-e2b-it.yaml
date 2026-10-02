@@ -1,0 +1,38 @@
+# Smaller Gemma 4 learner (2B effective parameters), a fallback when E4B does not fit the GPU.
+# Identity from huggingface_hub model_info (sha) and the snapshot's config.json
+# (Gemma4ForConditionalGeneration, hidden 1536, 35 layers, vocab 262144).
+schema_version: 1
+name: gemma-4-e2b-it
+base_model: google/gemma-4-E2B-it            # trainable source checkpoint (safetensors, bf16, ~10 GB)
+base_revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+# The revision ships Google's newer "canonical" Gemma 4 template (renders null, fixed tool-call turn
+# closures), not the E4B revision's template.
+chat_template_sha256: 0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5
+chat_template_kwargs:
+  enable_thinking: false
+tool_call_format: gemma4           # <|tool_call>call:name{key:<|"|>value<|"|>}<tool_call|><|tool_response>
+training_dtype: bfloat16
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+# The checkpoint is multimodal: its audio/vision towers also have q_proj/... modules (clipped
+# wrappers PEFT cannot adapt). Only the language model is trained.
+lora_exclude_modules: '.*\.(audio_tower|vision_tower|embed_audio|embed_vision)\..*'
+supported_train_devices: [cuda]
+seed_supported: true               # hf_server seeds torch before sampling; not bitwise-portable
+serving:
+  hf_transformers:
+    backend: hf_transformers
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: >-
+      learning_loop.serving.hf_server with the gemma4 tool-call parser (round-trip tested against
+      the pinned template, tokenizer only); bf16 weights (~10 GB) need a CUDA host.
+  vllm:
+    backend: vllm
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: Serve base_model@base_revision with --enable-lora; needs a CUDA host (not available).
+notes: >-
+  Multimodal checkpoint (Gemma4ForConditionalGeneration); text-only LoRA DPO through the same
+  TRL/PEFT path is expected to need the text submodule's module names verified on a GPU host.
+  Chat template renders a tool-calling turn ending at <|tool_response>, which is in the
+  generation-config EOS ids [1, 106, 50]; the render boundary is unit-tested with the tokenizer only.

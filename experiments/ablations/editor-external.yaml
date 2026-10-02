@@ -1,0 +1,4 @@
+# Editor ablation: a fixed, separately served editor model. Set the profile/checkpoint explicitly.
+base: ../pilot.yaml
+name: pilot-editor-external
+editor: {mode: external, model_profile: qwen3-0.6b, checkpoint: base}

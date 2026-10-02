@@ -1,0 +1,36 @@
+# Deterministic FIXTURE loop: scripted learner + scripted editor + fixture trainer on the
+# local fixture backend. Exercises orchestration, replay, branching, acceptance, dataset
+# export, lineage and reference transitions in seconds. Not a research result.
+name: fixture-two-cycles
+description: Two cheap cycles with scripted components (engineering check).
+condition: learning
+learner:
+  model_profile: qwen3-0.6b          # identity only; nothing is loaded with the fixture trainer
+  scripted_policy: tests/fixtures/env/count_errors_policy.yaml
+cycles: 2
+seeds: {root: 1234, loop_seed: 0}
+tasks:
+  splits: evaluation/splits/fixture.yaml
+  collection_panel: train
+  attempts_per_instance: 1
+evaluation:
+  dev_panels: [dev]
+  attempts_per_instance: 1
+episode:
+  sampling: {temperature: 0.7, max_output_tokens: 512}
+  max_turns: 8
+  max_episode_tokens: 20000
+  tool_timeout_sec: 20
+  agent_timeout_sec: 120
+  max_output_chars: 4000
+editor:
+  mode: scripted
+  scripted_path: tests/fixtures/loop/count_errors_edits.yaml
+verification:
+  mode: continuation
+  continuations_per_branch: 1
+  min_token_saving: 1
+training:
+  trainer: fixture
+  optimizer_steps: 2
+  data: {selection: current_and_history, buffer_capacity: 16, history_fraction: 0.5}

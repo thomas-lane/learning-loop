@@ -1,0 +1,33 @@
+# Scripted FIXTURE policy for the count-errors family (not a model; labeled fixture usage).
+# Rules are matched against the conversation, first match wins, so a continuation after a
+# different intervention (e.g. an edited turn 1) still acts sensibly.
+# Source behavior: ls -> cat everything (wasteful) -> grep|wc -> write answer -> finish.
+schema: scripted_policy/v1
+label: fixture
+description: count-errors source trajectory with one wasteful action at turn 1.
+rules:
+  - name: finish-after-write
+    when: {last_observation_regex: '^Wrote \d+ characters'}
+    respond: {content: "The answer is written to /app/answer.txt."}
+  - name: write-count
+    when: {last_observation_regex: '^\[exit code 0\]\n\s*(\d+)\s*$'}
+    respond:
+      tool_calls:
+        - {name: write_file, arguments: {path: /app/answer.txt, content: "${1}\n"}}
+  - name: count-after-reading
+    when: {last_observation_regex: 'ERROR'}
+    respond:
+      tool_calls:
+        - {name: bash, arguments: {command: "grep -h ERROR data/*.log | wc -l"}}
+  - name: read-everything
+    when: {last_observation_regex: '\.log'}
+    respond:
+      tool_calls:
+        - {name: bash, arguments: {command: "cat data/*.log"}}
+  - name: list
+    when: {turn: 0}
+    respond:
+      tool_calls:
+        - {name: bash, arguments: {command: "ls data"}}
+  - name: give-up
+    respond: {content: "I could not complete the task."}

@@ -1,0 +1,51 @@
+# Target learner (owner's deployment). NOT trained or loaded on the laptop (bf16 weights ~16 GB).
+# Verified from ~/.cache/huggingface: refs/main of google/gemma-4-E4B-it and the snapshot's
+# config.json (architectures: Gemma4ForConditionalGeneration, model_type gemma4, dtype bfloat16).
+schema_version: 1
+name: gemma-4-e4b-it
+base_model: google/gemma-4-E4B-it            # trainable source checkpoint (safetensors, bf16)
+base_revision: fee6332c1abaafb77f6f9624236c63aa2f1d0187
+chat_template_sha256: 2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082
+chat_template_kwargs:
+  enable_thinking: false
+tool_call_format: gemma4           # <|tool_call>call:name{key:<|"|>value<|"|>}<tool_call|><|tool_response>
+training_dtype: bfloat16
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+# The checkpoint is multimodal: its audio/vision towers also have q_proj/... modules (clipped
+# wrappers PEFT cannot adapt). Only the language model is trained.
+lora_exclude_modules: '.*\.(audio_tower|vision_tower|embed_audio|embed_vision)\..*'
+supported_train_devices: [cuda]
+seed_supported: true               # llama.cpp accepts `seed`; not reproducible across batching/hardware
+serving:
+  hf_transformers:
+    backend: hf_transformers
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: >-
+      learning_loop.serving.hf_server with the gemma4 tool-call parser (round-trip tested against
+      the pinned template). The base model served a three-turn tool-calling exchange on an A100
+      (15 GB, ~15.6 tokens/s single sequence); serving a trained adapter is untested.
+  llama_cpp:
+    backend: llama_cpp
+    # Quantized serving artifact: NOT a trainable source and not identical to base_model weights.
+    artifact: ggml-org/gemma-4-E4B-it-GGUF:Q8_0
+    artifact_revision: b8093469224f83f5c38f691eb906c380e9e63114
+    quantization: Q8_0
+    adapter_formats: [gguf_lora]
+    status: untested
+    notes: >-
+      Base model served today by the owner's llama.cpp (existing evaluation/configs/local-llama.yaml).
+      Serving a trained adapter needs converting the PEFT LoRA to GGUF (llama.cpp
+      convert_lora_to_gguf.py) and loading it with --lora; that conversion is not implemented or
+      tested here. The server's reasoning setting must match chat_template_kwargs.
+  vllm:
+    backend: vllm
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: Serve base_model@base_revision with --enable-lora; needs a CUDA host (not available).
+notes: >-
+  Multimodal checkpoint (Gemma4ForConditionalGeneration); LoRA DPO trains the language model only
+  (lora_exclude_modules), verified on an A100 with 7.3k- and 28.9k-token fixture pairs (peaks 24 GB
+  and 54 GB with gradient checkpointing).
+  Chat template renders a tool-calling turn ending at <|tool_response>, which is in the
+  generation-config EOS ids [1, 106, 50]; the render boundary is unit-tested with the tokenizer only.

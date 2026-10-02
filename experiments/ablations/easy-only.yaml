@@ -1,0 +1,6 @@
+# Difficulty transfer: collect/train on easy instances only; monitor medium/hard dev instances.
+# Mixed-difficulty gains are NOT evidence of easy-to-hard transfer; this condition isolates it.
+base: ../pilot.yaml
+name: pilot-easy-only
+tasks: {collection_panel: train-easy-only}
+evaluation: {dev_panels: [dev-medium-hard]}

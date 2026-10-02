@@ -1,0 +1,4 @@
+# Verification ablation: three matched continuations per branch; all must succeed.
+base: ../pilot.yaml
+name: pilot-verify-3
+verification: {continuations_per_branch: 3}

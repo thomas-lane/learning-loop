@@ -1,0 +1,84 @@
+# Pilot panels: a small, explicit, hand-authored layout (initial choices, not tuned).
+# Every instance is declared once with exactly one split; panels group instances of one split.
+#   train       -> editor/training data (collection panel)
+#   dev         -> per-cycle monitoring and declared tuning
+#   final       -> evaluated only explicitly, after method/selection decisions are frozen
+# csv-revenue is an entirely held-out family: it may never appear in a train panel.
+schema_version: 1
+name: pilot
+description: Small pilot layout over log-triage and fix-stats, with csv-revenue held out.
+held_out_families: [csv-revenue]
+families:
+  log-triage: {skills: [shell, logs, gzip, aggregation]}
+  fix-stats: {skills: [python, debugging, reading-docs]}
+  csv-revenue: {skills: [csv, quoting, aggregation, python]}
+
+instances:
+  # --- train (generator seeds 1-9) ---
+  - {id: log-triage/easy/s1, family: log-triage, difficulty: easy, seed: 1, split: train}
+  - {id: log-triage/easy/s2, family: log-triage, difficulty: easy, seed: 2, split: train}
+  - {id: log-triage/easy/s3, family: log-triage, difficulty: easy, seed: 3, split: train}
+  - {id: log-triage/medium/s1, family: log-triage, difficulty: medium, seed: 1, split: train}
+  - {id: log-triage/hard/s1, family: log-triage, difficulty: hard, seed: 1, split: train}
+  - {id: fix-stats/easy/s1, family: fix-stats, difficulty: easy, seed: 1, split: train}
+  - {id: fix-stats/easy/s2, family: fix-stats, difficulty: easy, seed: 2, split: train}
+  - {id: fix-stats/easy/s3, family: fix-stats, difficulty: easy, seed: 3, split: train}
+  - {id: fix-stats/medium/s1, family: fix-stats, difficulty: medium, seed: 1, split: train}
+  - {id: fix-stats/hard/s1, family: fix-stats, difficulty: hard, seed: 1, split: train}
+  # --- dev (seeds 101-109, plus the two original hand-written tasks) ---
+  - {id: log-triage/static, family: log-triage, static: evaluation/tasks/log-triage, difficulty: easy, split: dev}
+  - {id: fix-stats/static, family: fix-stats, static: evaluation/tasks/fix-stats, difficulty: easy, split: dev}
+  - {id: log-triage/easy/s101, family: log-triage, difficulty: easy, seed: 101, split: dev}
+  - {id: log-triage/medium/s101, family: log-triage, difficulty: medium, seed: 101, split: dev}
+  - {id: log-triage/hard/s101, family: log-triage, difficulty: hard, seed: 101, split: dev}
+  - {id: fix-stats/easy/s101, family: fix-stats, difficulty: easy, seed: 101, split: dev}
+  - {id: fix-stats/medium/s101, family: fix-stats, difficulty: medium, seed: 101, split: dev}
+  - {id: fix-stats/hard/s101, family: fix-stats, difficulty: hard, seed: 101, split: dev}
+  # --- final, same families (seeds 201-209) ---
+  - {id: log-triage/easy/s201, family: log-triage, difficulty: easy, seed: 201, split: final}
+  - {id: log-triage/medium/s201, family: log-triage, difficulty: medium, seed: 201, split: final}
+  - {id: log-triage/hard/s201, family: log-triage, difficulty: hard, seed: 201, split: final}
+  - {id: fix-stats/easy/s201, family: fix-stats, difficulty: easy, seed: 201, split: final}
+  - {id: fix-stats/medium/s201, family: fix-stats, difficulty: medium, seed: 201, split: final}
+  - {id: fix-stats/hard/s201, family: fix-stats, difficulty: hard, seed: 201, split: final}
+  # --- final, held-out family (seeds 301-309) ---
+  - {id: csv-revenue/easy/s301, family: csv-revenue, difficulty: easy, seed: 301, split: final}
+  - {id: csv-revenue/medium/s301, family: csv-revenue, difficulty: medium, seed: 301, split: final}
+  - {id: csv-revenue/hard/s301, family: csv-revenue, difficulty: hard, seed: 301, split: final}
+
+panels:
+  train:
+    split: train
+    description: Mixed-difficulty collection panel.
+    instances: [log-triage/easy/s1, log-triage/easy/s2, log-triage/medium/s1, log-triage/hard/s1,
+                fix-stats/easy/s1, fix-stats/easy/s2, fix-stats/medium/s1, fix-stats/hard/s1]
+  train-easy-only:
+    split: train
+    description: Easy-only collection panel (evaluate transfer on dev-medium-hard / final panels).
+    instances: [log-triage/easy/s1, log-triage/easy/s2, log-triage/easy/s3,
+                fix-stats/easy/s1, fix-stats/easy/s2, fix-stats/easy/s3]
+  dev:
+    split: dev
+    description: Per-cycle monitoring, all difficulties, both trained families.
+    instances: [log-triage/static, fix-stats/static, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101,
+                fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101]
+  dev-medium-hard:
+    split: dev
+    description: Medium/hard only, for the easy-only training condition.
+    instances: [log-triage/medium/s101, log-triage/hard/s101, fix-stats/medium/s101, fix-stats/hard/s101]
+  # Per-family dev panels: with a family-exposure schedule, keep evaluating earlier families (retention).
+  dev-log-triage:
+    split: dev
+    instances: [log-triage/static, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101]
+  dev-fix-stats:
+    split: dev
+    instances: [fix-stats/static, fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101]
+  final-same-family:
+    split: final
+    description: New instances of trained families.
+    instances: [log-triage/easy/s201, log-triage/medium/s201, log-triage/hard/s201,
+                fix-stats/easy/s201, fix-stats/medium/s201, fix-stats/hard/s201]
+  final-held-out-family:
+    split: final
+    description: An entirely held-out family.
+    instances: [csv-revenue/easy/s301, csv-revenue/medium/s301, csv-revenue/hard/s301]

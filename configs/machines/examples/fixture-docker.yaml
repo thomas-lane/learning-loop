@@ -1,0 +1,7 @@
+# Scripted policy/editor against real Harbor Docker tasks (replay/branching on containers).
+name: fixture-docker
+environment_backend: harbor_docker
+docker_concurrency: 1
+inference: {mode: scripted, backend: scripted}
+training: {device: cpu, allow_cpu_fallback: true}
+runs_dir: runs

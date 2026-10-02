@@ -1,0 +1,17 @@
+# Scripted FIXTURE policy that emits a malformed (truncated) tool call, then recovers.
+schema: scripted_policy/v1
+label: fixture
+rules:
+  - name: finish
+    when: {last_observation_regex: '^Wrote \d+ characters'}
+    respond: {content: "Done."}
+  - name: write-after-error
+    when: {last_observation_regex: 'could not parse arguments'}
+    respond:
+      tool_calls:
+        - {name: write_file, arguments: {path: /app/answer.txt, content: "0\n"}}
+  - name: malformed
+    when: {turn: 0}
+    respond:
+      tool_calls:
+        - {name: bash, raw_arguments: '{"command": "grep -h ERROR data/*.l'}

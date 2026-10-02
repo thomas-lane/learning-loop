@@ -1,0 +1,10 @@
+# Family exposure schedule: log-triage first, then add fix-stats; keep evaluating both families
+# (retention of the earlier family).
+base: ../pilot.yaml
+name: pilot-family-exposure
+cycles: 4
+tasks:
+  exposure_schedule:
+    - {from_cycle: 0, families: [log-triage]}
+    - {from_cycle: 2, families: [log-triage, fix-stats]}
+evaluation: {dev_panels: [dev-log-triage, dev-fix-stats]}

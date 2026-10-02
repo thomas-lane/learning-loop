@@ -1,0 +1,13 @@
+# Evaluate what an already-running llama.cpp server serves (no training through it: the Q8_0
+# GGUF is a quantized serving artifact, and PEFT adapters would need GGUF conversion first).
+# served_checkpoint_id is the identity you assert the endpoint serves; the quantized artifact and
+# its revision are recorded from configs/models/gemma-4-e4b-it.yaml (serving.llama_cpp).
+name: external-llama
+environment_backend: harbor_docker
+inference:
+  mode: external
+  backend: llama_cpp
+  api_base: http://localhost:9931/v1
+  served_checkpoint_id: "base:gemma-4-e4b-it@fee6332c1aba"
+  served_model_name: "ggml-org/gemma-4-E4B-it-GGUF:Q8_0"
+runs_dir: runs

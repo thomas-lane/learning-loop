@@ -1,0 +1,161 @@
+# Developer guide
+
+## Commands
+
+```bash
+uv sync --extra train                        # full environment (runner + training)
+uv run pytest                                # fast suite: no Docker, no model downloads
+uv run pytest -m docker tests/integration    # Harbor/Docker: oracle/nop, replay, timing, grading
+uv run pytest -m train tests/train           # real LoRA DPO on Qwen3-0.6B (MPS/CUDA; ~1 min)
+uv run loop smoke fixture                    # 2-cycle orchestration with fixtures (seconds)
+uv run loop validate <exp.yaml> --machines <machine.yaml>
+uv run loop docs-gen                         # regenerate docs/cli.md + docs/configuration.md
+uv run loop docs --open                      # browse all docs at http://localhost:8000/
+```
+
+Run the Docker/train markers after touching tasks, the agent, replay, rendering or training.
+Never leave long training or load tests running unattended on the laptop, never stop services
+this repo did not start (e.g. a llama.cpp server on :9931), and never publish models/data or
+push from automation. Paid compute is limited to Runpod pods declared in a machine profile
+(`pods.py`): existing pods (`pod_id`) may only be started and stopped; pods from a
+`runpod.create` spec may be created, within the spec's GPU types and `max_cost_per_hr`, and must
+be terminated by the same command. Every command that starts or creates a pod must stop or
+terminate it (or leave its idle watchdog running) however the command ends, and code only ever
+terminates pods recorded in the created-pod ledger.
+
+Credentials live in the git-ignored `.env` (template: `.env.example`), loaded automatically by
+`loop`; configs refer to them by variable name only, and they are never synced to remote hosts.
+
+## Where things live
+
+Architecture, the module map and data flow are in `docs/architecture.md`; the contents of a run
+directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. Quick index:
+
+| Concern | Module |
+|---|---|
+| Records / interfaces / config schemas | `records.py`, `interfaces.py`, `config.py` |
+| Seeds and stable IDs | `seeds.py` |
+| Atomic files, run lock, stage manifests | `storage.py` |
+| Episode loop, replay, stop reasons | `episode.py`, `events.py` |
+| Policies (OpenAI-compatible, scripted fixture) | `policy.py` |
+| Environments, fingerprints, backends | `envs/`, `fingerprint.py`, `backends.py` |
+| Tasks, generators, splits | `tasks.py`, `evaluation/generators/`, `evaluation/splits/` |
+| Editor, verification, preferences | `editor.py`, `verify.py`, `preferences.py` |
+| Training, rendering, token counts | `training/`, `token_count.py` |
+| Serving and lifecycle | `serving/`, `inference.py` |
+| Orchestration, CLI, remote | `coordinator.py`, `cli.py`, `remote.py`, `remote_jobs.py` |
+| Metrics and reports | `metrics.py`, `report.py` |
+| Live run dashboard (`loop dashboard`), docs viewer (`loop docs`) | `dashboard.py`, `docserver.py` |
+
+## Tests
+
+```text
+tests/unit/          default suite (`uv run pytest`): no Docker, no model downloads, seconds
+  test_core_*        contracts: seeds, config validation, storage, usage arithmetic
+  test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
+  test_tasks_*       generators and split validation
+  test_editor_*      editor view, validation, grounding
+  test_verify_*      branch specs, costs, acceptance, local end-to-end
+  test_prefs_*       preference construction, exports, buffer
+  test_train_*       rendering/masking, fixture trainer, profiles, precision, server parsing (no weights)
+  test_report_*      metrics, reports, comparisons, the live dashboard (numbers match reports, escaping, path safety, read-only)
+  test_loop_*        orchestration on fixtures: lineage, controls, resume, retries, remote training
+  test_cli_examples  every committed experiment/machine example validates through the CLI
+  test_loop_remote_* remote training and serving against a fake SSH host
+  test_loop_pods     Runpod lifecycle: existing and created pods (fake REST API over HTTP), price limit,
+                     cleanup, watchdog script, key handling
+  test_core_envfile  .env loading precedence, template has no values, secrets never synced
+  test_docs_generated generated docs are current; every config field and CLI argument is described
+  test_docs_server   doc viewer rendering, path safety, and that every doc is in the index and navigation
+tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading)
+tests/train/         `-m train`: real LoRA DPO on Qwen3-0.6B + serving the adapter
+tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/)
+```
+
+Name new test files with the area prefix above. A behavior change comes with a test that would
+have failed before it.
+
+## Integrity invariants (keep tests for each)
+
+- **Seeds/IDs** come from `seeds.py` (SHA-256 over explicit parts). Evaluation seeds depend only on
+  `seeds.root`, instance and attempt, so checkpoints and loop seeds are compared on the same schedule.
+  Original/edited continuations share a seed; the branch label is never a seed input.
+- **Configs are strict**: unknown keys fail; credentials are env-var names; `run.json` is write-once.
+- **No leakage into training**: preference exports accept only train-split instances outside
+  held-out families; prompts contain only messages before the intervened turn; editor
+  justifications and verification evidence live in companion records, never in `prompt/chosen/rejected`.
+- **Hidden grading stays hidden**: tasks use Harbor's separate verifier with explicit artifact
+  transfer; graders that execute agent code (fix-stats) run it as an unprivileged child that
+  cannot read `/tests` or write `/logs/verifier`, and the parent judges its raw outputs. The host
+  agent never writes through the container-writable `/logs/agent` mount except via a
+  symlink-refusing copy. The editor sees only instruction, tool schemas, the learner's turns and
+  scalar outcomes.
+- **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
+  mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
+- **Acceptance** (`strict_all_success_v1`): valid replay, complete success on both branches for every
+  repetition, no infra/budget/safety stops, all costs present, positive saving above the threshold.
+- **Cost accounting**: counterfactual episode cost = shared prefix + intervention request input +
+  learner-tokenizer length of the fixed turn + continuation usage; verification spend is separate.
+  Missing measurements are null, never 0; cached/reasoning tokens are subsets, never added.
+- **Training**: continue the incoming adapter; the DPO reference is the incoming learner including
+  its adapter (precomputed log-probs, cache keyed by reference/example/tokenizer/template); exact
+  optimizer-step budget; oversize examples dropped, never truncated; checkpoints published
+  atomically to unique read-only dirs and reload-checked.
+- **Orchestration**: completed work items are never redone; interrupted/infra-failed attempts are
+  preserved (`*.interrupted-N`) and stay visible in counts; `infra_failed` is terminal once its
+  retry budget is spent; one coordinator per run (flock) and one trainer per work dir (flock, exit
+  4); a lost SSH session is reconciled from the remote PID/result before anything is relaunched;
+  final/external evaluations are separate runs the loop never reads, and `loop resume` re-enters
+  each run kind's own stages.
+- **Fixtures are labeled**: scripted policies/editors, the fixture trainer and fixture preference
+  data never silently stand in for real components.
+- **Pods are never left running**: the pod lifecycle stops existing pods and terminates created
+  pods on success, failure and Ctrl-C; a created pod above its price limit is terminated at once;
+  a pod-side watchdog stops (or terminates) a pod whose coordinator heartbeat goes stale; only
+  ledger pods named `lfe-*` are ever terminated; the account API key never reaches a pod (the
+  watchdog uses the pod-scoped key, created pods get only the SSH public key).
+- **Training-data drops are visible**: pairs the trainer drops (e.g. longer than
+  `dpo.max_length`) are counted with reasons and pair ids in `cycle.json`, `loop status` and the
+  report, never silently.
+
+## Conventions
+
+- Match surrounding style; typed pydantic records with `schema_version`; JSON/JSONL/CSV outputs.
+- Experiment YAML holds scientific choices, machine YAML deployment, model YAML identities.
+  Keep parameter values in configs, not prose.
+
+## Keeping documentation current
+
+Documentation is part of every change, not a follow-up. When you change behavior, structure,
+commands or outputs, update the affected documents **in the same change, without being asked**,
+and re-read the edited sections against the code before finishing. Each topic has one owner, so
+update that file instead of repeating the information elsewhere:
+
+| If you change... | Update |
+|---|---|
+| setup, smoke levels, component status (working / untested) | `README.md` |
+| a `loop` command or argument | its `help`/`description` in `cli.py`, then `uv run loop docs-gen` (regenerates `docs/cli.md`); conventions and workflows are hand-written in the same file |
+| a config field or schema | its `Field(description=...)` in `config.py`, then `uv run loop docs-gen` (regenerates `docs/configuration.md`); cross-field rules are hand-written there |
+| operating procedures, error messages, recovery steps | `docs/operations.md` |
+| the meaning of a term, or a new term | `docs/glossary.md` |
+| a new document, or what a document covers | `docs/index.md` and the viewer's `NAV` in `src/learning_loop/docserver.py` |
+| components, module responsibilities, process/machine roles, data flow, isolation boundaries, identities, extension points, repository folders | `docs/architecture.md` |
+| files or directories a run writes, their names, formats or mutability, run kinds | `docs/run-layout.md` |
+| the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
+| tasks, generators, splits, the agent, grading, the replay contract | `evaluation/README.md` |
+| development commands, test layout, integrity invariants, this policy | `AGENTS.md` |
+
+Rules:
+
+- Describe what the code does now. Remove statements that became false; do not keep history,
+  alternatives that were not built, or plans. Mark anything implemented but not run as untested.
+- Examples must work: every documented `loop` command and config must run as shown. When you add
+  or change an experiment/machine example, keep `tests/unit/test_cli_examples.py` covering it.
+- Never edit between the `BEGIN GENERATED` / `END GENERATED` markers by hand. Every new CLI
+  argument and config field needs a description (enforced by `tests/unit/test_docs_generated.py`,
+  which also fails when the generated docs are stale).
+- When you change an error message, a stop reason or a rejection reason, update the matching row
+  in `docs/operations.md`.
+- Keep parameter values in configs, not prose, and keep generated-run facts (provenance, metrics)
+  in run outputs, not docs.
+- Never present fixture or smoke outputs as research results in any document.

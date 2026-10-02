@@ -1,0 +1,4 @@
+# Editor ablation: the current learner edits its own trajectories (identity changes each cycle).
+base: ../pilot.yaml
+name: pilot-editor-current-learner
+editor: {mode: current_learner}

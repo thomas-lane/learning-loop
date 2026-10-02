@@ -1,0 +1,9 @@
+# Fixed-dataset DPO control: trains every cycle on ONE frozen preference export with the same
+# optimizer-step budget as the pilot, and never collects fresh preferences. Point it at a frozen
+# export, e.g.:  loop run experiments/fixed-dataset-control.yaml --machines M \
+#                  --set training.fixed_dataset=runs/<pilot-run>/cycles/cycle-000/dataset
+base: pilot.yaml
+name: pilot-fixed-dataset
+condition: fixed_dataset
+training:
+  fixed_dataset: REQUIRED-set-with---set

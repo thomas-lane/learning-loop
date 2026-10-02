@@ -1,0 +1,15 @@
+# Scripted learner (fixture) on Harbor Docker tasks, but a REAL editor model served locally.
+# Used to exercise the live editor on real saved trajectories when the small learner itself
+# solves nothing (see README "Smoke tests"). The editor is the initial checkpoint of the
+# experiment's learner profile (initial_policy mode).
+name: fixture-docker-live-editor
+environment_backend: harbor_docker
+docker_concurrency: 1
+inference: {mode: scripted, backend: scripted}
+editor_inference:
+  mode: managed
+  backend: hf_transformers
+  port: 8765
+  device: mps
+training: {device: cpu, allow_cpu_fallback: true}
+runs_dir: runs

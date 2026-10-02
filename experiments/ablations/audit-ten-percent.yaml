@@ -1,0 +1,5 @@
+# Re-verify a seeded random 10% of accepted edits with two fresh continuations per branch.
+# Audit results are reported separately and never change frozen datasets.
+base: ../pilot.yaml
+name: pilot-audit-10
+verification: {audit: {fraction: 0.1, continuations_per_branch: 2}}

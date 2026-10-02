@@ -1,0 +1,31 @@
+# Laptop coordinator (Docker task containers run locally) + a Runpod A100 pod that every command
+# CREATES, uses for serving and training, and TERMINATES again. Nothing is kept on the pod; runs
+# stay in runs/ on this machine. See docs/runpod.md. Put RUNPOD_API_KEY in .env (see .env.example).
+name: runpod-a100
+coordinator: {kind: local}
+environment_backend: harbor_docker
+docker_concurrency: 1
+inference:
+  mode: managed
+  backend: hf_transformers           # learning_loop.serving.hf_server (Qwen3 and Gemma 4 profiles)
+  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  port: 8765                         # the run opens an SSH tunnel to the pod's loopback port
+  device: cuda
+  startup_timeout_sec: 1800          # every new pod downloads the model first
+  request_concurrency: 1
+training:
+  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  device: cuda
+runpod:
+  api_key_env: RUNPOD_API_KEY        # read from .env / the environment on this machine only
+  identity_file: ~/.ssh/id_ed25519   # its .pub is passed to the pod as PUBLIC_KEY
+  idle_stop_minutes: 30              # pod-side watchdog: terminate if this machine stops heartbeating
+  start_timeout_sec: 1800            # creation is retried while no listed GPU is free
+  create:
+    a100:
+      gpu_types: [NVIDIA A100 80GB PCIe, NVIDIA A100-SXM4-80GB]   # preference order
+      cloud_type: SECURE
+      max_cost_per_hr: 2.5
+      container_disk_gb: 200
+runs_dir: runs
+hardware_notes: Runpod A100 80GB pod created per command; laptop runs Docker task containers

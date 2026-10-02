@@ -1,0 +1,22 @@
+# Linux coordinator runs Docker locally; one GPU VM (e.g. a Runpod pod) is a plain SSH host
+# that both serves (sequentially) and trains. Aliases/keys live in ~/.ssh/config.
+# UNTESTED: no such host was available when this example was written.
+name: lab-gpu
+coordinator:
+  kind: ssh
+  ssh_alias: lab-coordinator
+  workdir: /srv/learn-from-experience
+environment_backend: harbor_docker
+docker_concurrency: 4
+inference:
+  mode: managed
+  backend: vllm                  # peft_lora; UNTESTED. Gemma is not supported by hf_server (qwen3 tool format only)
+  host: {kind: ssh, ssh_alias: gpu-box, workdir: /workspace/learn-from-experience}
+  port: 8765
+  api_base: http://127.0.0.1:8765/v1   # keep `ssh -N -L 8765:127.0.0.1:8765 gpu-box` open on the coordinator
+  device: cuda
+  request_concurrency: 1
+training:
+  host: {kind: ssh, ssh_alias: gpu-box, workdir: /workspace/learn-from-experience}
+  device: cuda
+runs_dir: runs

@@ -1,0 +1,40 @@
+# Bounded live smoke test for an M5 MacBook Air (32 GB, fanless): the real small learner and
+# editor, one short Docker task, one proposal, one continuation per branch, 2 optimizer steps.
+# Zero accepted edits is a valid outcome (the cycle is then a recorded no-update cycle).
+# Engineering check only; NOT evidence of learning efficacy or Gemma/GPU readiness.
+name: smoke-mac
+description: Live Qwen3-0.6B loop on one count-errors instance (serial, MPS).
+condition: learning
+learner:
+  model_profile: qwen3-0.6b
+cycles: 1
+seeds: {root: 20260929, loop_seed: 0}
+tasks:
+  splits: evaluation/splits/smoke.yaml
+  collection_panel: train
+  attempts_per_instance: 6         # a 0.6B model often fails; several attempts give the editor a chance
+evaluation:
+  dev_panels: [dev]
+  attempts_per_instance: 1
+episode:
+  sampling: {temperature: 0.7, top_p: 0.95, max_output_tokens: 384}
+  max_turns: 8
+  max_episode_tokens: 24000
+  tool_timeout_sec: 30
+  agent_timeout_sec: 600
+  max_output_chars: 2000
+editor:
+  mode: initial_policy
+  sampling: {temperature: 0.0, max_output_tokens: 512}
+verification:
+  mode: continuation
+  continuations_per_branch: 1
+  min_token_saving: 1
+training:
+  trainer: trl_dpo
+  optimizer_steps: 2
+  dpo: {beta: 0.1, learning_rate: 1.0e-5, per_device_batch_size: 1, max_length: 3072}
+  lora: {r: 8, alpha: 16, dropout: 0.0}
+  data: {selection: current_only, buffer_capacity: 8}
+labels:
+  hyperparameters: smoke values chosen for runtime, not tuned

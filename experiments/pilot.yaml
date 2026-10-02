@@ -1,0 +1,49 @@
+# Small real pilot on the owner's target model. Hyperparameters are INITIAL CHOICES, not tuned.
+# Needs a CUDA host (see configs/machines/examples/lab-gpu.yaml); the Gemma serving/training path
+# is declared but untested in this repository (see configs/models/gemma-4-e4b-it.yaml).
+name: pilot
+description: Verified efficiency edits -> LoRA DPO, 3 cycles, log-triage + fix-stats, csv-revenue held out.
+condition: learning
+learner:
+  model_profile: gemma-4-e4b-it
+  initial_checkpoint: base
+cycles: 3
+seeds: {root: 20260929, loop_seed: 0}
+tasks:
+  splits: evaluation/splits/pilot.yaml
+  collection_panel: train
+  attempts_per_instance: 4
+evaluation:
+  dev_panels: [dev]
+  attempts_per_instance: 2
+  cadence: every_cycle
+  final_panels: [final-same-family, final-held-out-family]   # only via `loop evaluate --final`
+episode:
+  sampling: {temperature: 0.7, top_p: 0.95, max_output_tokens: 4096}
+  max_turns: 30
+  max_episode_tokens: 200000
+  tool_timeout_sec: 60
+  agent_timeout_sec: 900
+  max_output_chars: 8000
+editor:
+  mode: initial_policy            # the fixed initial instruction-tuned policy
+  prompt: prompts/editor/v1.md
+  sampling: {temperature: 0.0, max_output_tokens: 2048}
+  proposals_per_source: 1
+verification:
+  mode: continuation
+  continuations_per_branch: 1
+  acceptance_rule: strict_all_success_v1
+  min_token_saving: 50
+  audit: {fraction: 0.0}          # e.g. 0.1 re-verifies a random 10% of accepted edits (reported only)
+training:
+  trainer: trl_dpo
+  optimizer_steps: 40
+  dpo: {beta: 0.1, learning_rate: 5.0e-6, per_device_batch_size: 1, gradient_accumulation_steps: 4, max_length: 32768,
+        gradient_checkpointing: true}
+  lora: {r: 16, alpha: 32, dropout: 0.0}
+  data: {selection: current_and_history, buffer_capacity: 256, history_fraction: 0.5, task_balanced: true}
+runtime:
+  infra_retries: 2
+labels:
+  hyperparameters: initial choices, not optimized

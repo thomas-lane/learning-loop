@@ -1,0 +1,26 @@
+# Laptop coordinator (Docker task containers run locally) + one existing Runpod GPU pod that the
+# run starts, uses for serving and training, and stops again. See docs/runpod.md.
+# Copy to configs/machines/local/runpod.yaml, set pod_id to your pod's id, and put
+# RUNPOD_API_KEY in .env (see .env.example). Pods are only ever started and stopped.
+name: runpod
+coordinator: {kind: local}
+environment_backend: harbor_docker
+docker_concurrency: 1
+inference:
+  mode: managed
+  backend: hf_transformers           # learning_loop.serving.hf_server (Qwen3 and Gemma 4 profiles)
+  host: {kind: runpod, pod_id: examplepodid, workdir: /workspace/learn-from-experience}
+  port: 8765                         # the run opens an SSH tunnel to the pod's loopback port
+  device: cuda
+  startup_timeout_sec: 900           # first start downloads the model to the pod
+  request_concurrency: 1
+training:
+  host: {kind: runpod, pod_id: examplepodid, workdir: /workspace/learn-from-experience}
+  device: cuda
+runpod:
+  api_key_env: RUNPOD_API_KEY        # read from .env / the environment on this machine only
+  identity_file: ~/.ssh/id_ed25519   # its public key must be saved in your Runpod account
+  stop_when_done: true               # stop the pod when the command ends, however it ends
+  idle_stop_minutes: 30              # pod-side watchdog: stop if this machine stops heartbeating
+runs_dir: runs
+hardware_notes: Runpod pod, single GPU; laptop runs Docker task containers

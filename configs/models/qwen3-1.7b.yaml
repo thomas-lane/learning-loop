@@ -1,0 +1,34 @@
+# Qwen3-1.7B: same chat template as qwen3-0.6b (identical template sha256); a more capable laptop learner.
+# Identity verified with huggingface_hub (model_info sha) and the local snapshot.
+schema_version: 1
+name: qwen3-1.7b
+base_model: Qwen/Qwen3-1.7B
+base_revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+# sha256 of tokenizer.chat_template at that revision; loading fails if it differs.
+chat_template_sha256: a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8
+# Thinking off: the generation prompt pre-fills an empty <think></think> block, so
+# served turns carry no reasoning text (strict single-tool-call editing rejects it).
+chat_template_kwargs:
+  enable_thinking: false
+tool_call_format: qwen3_xml        # <tool_call>{"name": ..., "arguments": {...}}</tool_call>
+training_dtype: float32            # MPS-safe; bf16 is not assumed on Apple Silicon
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+supported_train_devices: [mps, cuda, cpu]
+seed_supported: true               # hf_server seeds torch before sampling; not bitwise-portable
+serving:
+  hf_transformers:
+    backend: hf_transformers
+    adapter_formats: [peft_lora]
+    status: tested
+    notes: >-
+      learning_loop.serving.hf_server, serial, unmerged PEFT adapter. Base model served on MPS and
+      on CUDA (Runpod RTX 3090) in live runs; adapter serving exercised with qwen3-0.6b only.
+  vllm:
+    backend: vllm
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: vLLM --enable-lora with the published PEFT directory; no vLLM host was available.
+notes: >-
+  Training has not been run with this model; the same TRL/PEFT path is validated with qwen3-0.6b
+  on MPS and CUDA. The profile pins the trainable source checkpoint; there is no separate
+  quantized serving artifact.

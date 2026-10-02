@@ -1,0 +1,126 @@
+"""count-errors family: count lines containing `ERROR` in all .log files.
+
+A deliberately small task that runs on BOTH backends:
+- Harbor/Docker (python:3.12-slim; separate verifier container), and
+- the local fixture backend (`environment/files/` is the work dir content,
+  `tests/grade.py` grades a copy of the transferred artifacts).
+It is the family used by scripted-policy fixtures, the smoke split and the
+local integration tests.
+
+Shortcut-resistance: lowercase "error" lines (grep -i overcounts), a .txt file
+with ERROR lines (only .log files count), and (medium/hard) more files; hard
+adds a nested directory (a non-recursive glob undercounts).
+"""
+
+from __future__ import annotations
+
+import random
+from pathlib import Path
+from typing import Any
+
+from .common import PYTHON_BASE, rng_for, task_toml, write
+
+FAMILY = "count-errors"
+VERSION = 2  # v2: base images pinned by digest
+RNG_VERSION = 1  # random stream; unchanged since v1, so instances keep their content
+SKILLS = ["shell", "grep", "counting"]
+DIFFICULTIES = {
+    "easy": {"logs": ["data/app.log", "data/worker.log"]},
+    "medium": {"logs": ["data/app.log", "data/worker.log", "data/db.log"]},
+    "hard": {"logs": ["data/app.log", "data/worker.log", "data/db.log", "data/old/app.1.log"]},
+}
+LEVELS = ["INFO", "INFO", "INFO", "DEBUG", "WARN"]
+MSGS = ["request served", "cache miss", "retrying connection", "job finished", "user login", "queue drained"]
+
+INSTRUCTION = """Count the lines that contain the exact (uppercase) string `ERROR` in all `.log` files under `/app/data/`{extra}.
+
+Write just the number (nothing else) to `/app/answer.txt`.
+"""
+
+GRADE_PY = '''"""Grader for count-errors (stdlib only). Used by tests/test.sh in Harbor's separate
+verifier container and directly by the local fixture backend.
+
+    python3 grade.py --root <dir containing app/answer.txt> --out <reward.json>
+"""
+
+import argparse
+import json
+import os
+
+EXPECTED = {expected}
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--root", default="/")
+ap.add_argument("--out", default="/logs/verifier/reward.json")
+a = ap.parse_args()
+try:
+    with open(os.path.join(a.root, "app", "answer.txt")) as f:
+        actual = f.read().strip()
+except OSError:
+    actual = None
+ok = actual == str(EXPECTED)
+print(f"expected: {{EXPECTED}}")
+print(f"actual:   {{actual!r}}")
+with open(a.out, "w") as f:
+    json.dump({{"reward": 1.0 if ok else 0.0}}, f)
+'''
+
+SOLVE_SH = """#!/bin/bash
+find /app/data -type f -name '*.log' -exec cat {} + | grep -c ERROR > /app/answer.txt
+"""
+
+
+def _log(rng: random.Random, n_lines: int, n_errors: int, n_lower: int) -> tuple[str, int]:
+    kinds = ["E"] * n_errors + ["e"] * n_lower + ["n"] * (n_lines - n_errors - n_lower)
+    rng.shuffle(kinds)
+    lines = []
+    for i, k in enumerate(kinds):
+        ts = f"2026-09-{rng.randint(1, 28):02d}T{rng.randint(0, 23):02d}:{rng.randint(0, 59):02d}:{rng.randint(0, 59):02d}Z"
+        if k == "E":
+            lines.append(f"{ts} ERROR {rng.choice(MSGS)} (code {rng.randint(100, 999)})")
+        elif k == "e":
+            lines.append(f"{ts} INFO recovered from transient error in {rng.choice(MSGS)}")
+        else:
+            lines.append(f"{ts} {rng.choice(LEVELS)} {rng.choice(MSGS)}")
+    return "\n".join(lines) + "\n", n_errors
+
+
+def generate(out_dir: Path, difficulty: str, seed: int) -> dict[str, Any]:
+    spec = DIFFICULTIES[difficulty]
+    rng = rng_for(FAMILY, RNG_VERSION, difficulty, seed)
+    out_dir = Path(out_dir)
+    files = out_dir / "environment" / "files"
+    total = 0
+    counts = {}
+    for rel in spec["logs"]:
+        text, n = _log(rng, rng.randint(12, 30), rng.randint(2, 7), rng.randint(1, 4))
+        write(files / rel, text)
+        counts[rel] = n
+        total += n
+    notes, _ = _log(rng, 8, rng.randint(2, 4), 0)
+    write(files / "data" / "notes.txt", notes)  # ERROR lines here do not count
+    extra = " (including subdirectories)" if difficulty == "hard" else ""
+    write(out_dir / "instruction.md", INSTRUCTION.format(extra=extra))
+    write(out_dir / "environment" / "Dockerfile", "FROM " + PYTHON_BASE + "\n\nWORKDIR /app\nCOPY files/ /app/\n")
+    write(out_dir / "tests" / "grade.py", GRADE_PY.format(expected=total))
+    write(out_dir / "tests" / "test.sh", "#!/bin/bash\npython3 /tests/grade.py --root / --out /logs/verifier/reward.json\n", executable=True)
+    write(out_dir / "tests" / "Dockerfile", "FROM " + PYTHON_BASE + "\nCOPY grade.py test.sh /tests/\n")
+    write(out_dir / "solution" / "solve.sh", SOLVE_SH, executable=True)
+    params = {"logs": spec["logs"], "counts": counts, "expected": total}
+    toml = task_toml(
+        family=FAMILY,
+        generator=f"{FAMILY}@v{VERSION}",
+        generator_seed=seed,
+        difficulty=difficulty,
+        category="shell",
+        tags=["logs", "grep", "fixture-friendly"],
+        skills=SKILLS,
+        artifacts=["/app/answer.txt"],
+        params=params,
+        agent_timeout_sec=120.0,
+        comment=f"Generated by evaluation/generators ({FAMILY}@v{VERSION}, {difficulty}, seed {seed}). Do not edit by hand.",
+    )
+    # TOML allows a sub-table of [metadata] after later tables.
+    toml += '\n# Local fixture backend (host subprocesses; NOT a sandbox - scripted policies only).\n[metadata.local_fixture]\nfiles = "environment/files"\ngrader = "tests/grade.py"\n'
+    write(out_dir / "task.toml", toml)
+    return params

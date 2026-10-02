@@ -1,0 +1,10 @@
+# Scripted FIXTURE editor for the count-errors family (labeled fixture data, not editor output):
+# replace the wasteful `cat data/*.log` (turn 1) with a direct count.
+editor_id: scripted-fixture-count-errors-v1
+proposals:
+  - family: count-errors
+    turn_index: 1
+    replacement:
+      name: bash
+      arguments: {command: "grep -h ERROR data/*.log | wc -l"}
+    justification: "Count matching lines directly instead of printing every log line."

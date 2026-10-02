@@ -1,0 +1,11 @@
+# Fixture editor proposals (ScriptedEditor) for the synthetic log-triage source
+# episode in verify_builders.py. Labeled fixture data: not editor output.
+editor_id: scripted-fixture-verify-v1
+proposals:
+  - instance_id: log-triage/easy/s0
+    turn_index: 0
+    replacement:
+      name: bash
+      arguments:
+        command: "zcat -f /app/logs/* | awk '$9 ~ /^5/ {print $1}' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}' > /app/answer.txt"
+    justification: "One pipeline computes and writes the answer instead of exploring first."

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "fixture",
+  "label": "hand-written fixture preferences for the real DPO smoke test; not verified data",
+  "n_pairs": 3,
+  "preferences_sha256": "496d7fd03450b3c39e407c0aac8971b5c080b1fb3e7a5abfc982a2d0ba52e77a",
+  "verification_mode": "continuation"
+}

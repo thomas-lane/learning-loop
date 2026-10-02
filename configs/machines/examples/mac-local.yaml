@@ -1,0 +1,16 @@
+# One Apple-silicon laptop: coordinator + Docker tasks + HF reference server + MPS training.
+# Copy to configs/machines/local/<name>.yaml (ignored by git) and adjust.
+name: mac-local
+coordinator: {kind: local}
+environment_backend: harbor_docker
+docker_concurrency: 1            # one container at a time on a fanless laptop
+inference:
+  mode: managed                  # the run starts/stops its own server per checkpoint
+  backend: hf_transformers       # accepts peft_lora adapters (see configs/models/*.yaml)
+  port: 8765
+  device: mps
+  request_concurrency: 1         # serial inference
+training:
+  device: mps
+  allow_cpu_fallback: false      # set true to allow (and record) CPU training
+runs_dir: runs
