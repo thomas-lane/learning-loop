@@ -1,0 +1,31 @@
+# Laptop coordinator (Docker task containers run locally) + a Runpod A100 pod created per command,
+# serving with vLLM (hf_server keeps rendering, parsing and token counts) and training there.
+# See docs/runpod.md ("Faster serving with vLLM"). Put RUNPOD_API_KEY in .env.
+name: runpod-a100-vllm
+coordinator: {kind: local}
+environment_backend: harbor_docker
+docker_concurrency: 4                # parallel episodes; vLLM batches their requests
+inference:
+  mode: managed
+  backend: vllm                      # hf_server with a vLLM generation engine (see docs/runpod.md)
+  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  port: 8765                         # the run opens an SSH tunnel to the pod's loopback port
+  device: cuda
+  startup_timeout_sec: 1800          # every new pod downloads the model first
+  request_concurrency: 4             # requests vLLM batches (vLLM --max-num-seqs)
+training:
+  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  device: cuda
+runpod:
+  api_key_env: RUNPOD_API_KEY        # read from .env / the environment on this machine only
+  identity_file: ~/.ssh/id_ed25519   # its .pub is passed to the pod as PUBLIC_KEY
+  idle_stop_minutes: 30              # pod-side watchdog: terminate if this machine stops heartbeating
+  start_timeout_sec: 1800            # creation is retried while no listed GPU is free
+  create:
+    a100:
+      gpu_types: [NVIDIA A100 80GB PCIe, NVIDIA A100-SXM4-80GB]   # preference order
+      cloud_type: SECURE
+      max_cost_per_hr: 2.5
+      container_disk_gb: 200
+runs_dir: runs
+hardware_notes: Runpod A100 80GB pod created per command, vLLM serving; laptop runs Docker task containers

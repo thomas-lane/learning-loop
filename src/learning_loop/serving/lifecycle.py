@@ -148,7 +148,9 @@ class InferenceManager:
     def _server_argv(self, ckpt: CheckpointRef) -> list[str]:
         backend = self.profile.backend
         adapter = self._adapter_path_on_host(ckpt)
-        if backend == "hf_transformers":
+        if backend in ("hf_transformers", "vllm"):
+            # One server API for both: hf_server renders, parses and counts; with `vllm` it
+            # delegates generation to a vLLM child process (serving/vllm_engine.py).
             argv = ["-m", "learning_loop.serving.hf_server", "--profile", self.model.name, "--port", str(self.profile.port), "--device", self.profile.device]
             if adapter:
                 argv += ["--checkpoint-dir", adapter]  # served name = the checkpoint id
@@ -156,13 +158,14 @@ class InferenceManager:
                 argv += ["--base-checkpoint-id", ckpt.checkpoint_id]
                 if self.zero_lora:
                     argv += ["--zero-lora", json.dumps(self.zero_lora, sort_keys=True)]
+            if backend == "vllm":
+                sb = self._backend_profile()
+                if not sb.engine_package:
+                    raise InferenceError(f"configs/models/{self.model.name}.yaml: serving.vllm needs engine_package (e.g. vllm==0.30.0)")
+                argv += ["--engine", "vllm", "--engine-package", sb.engine_package, "--concurrency", str(self.profile.request_concurrency),
+                         "--engine-start-timeout", str(self.profile.startup_timeout_sec)]
+                argv += [f"--engine-arg={a}" for a in sb.launch_args]
             return argv
-        if backend == "vllm":
-            # Untested integration: requires a Linux GPU host with vLLM installed separately.
-            argv = ["vllm", "serve", ckpt.base_model, "--revision", ckpt.base_revision, "--port", str(self.profile.port), "--served-model-name", ckpt.checkpoint_id if not adapter else "base"]
-            if adapter:
-                argv += ["--enable-lora", "--lora-modules", f"{ckpt.checkpoint_id}={adapter}"]
-            return argv + list(self._backend_profile().launch_args)
         raise InferenceError(f"managed serving is not implemented for backend {backend!r} (see configs/models/{self.model.name}.yaml)")
 
     def _start(self, ckpt: CheckpointRef) -> ServerHandle:

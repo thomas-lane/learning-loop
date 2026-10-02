@@ -109,6 +109,8 @@ saved successful trajectories instead.
 |---|---|---|
 | `learner server exited with N while loading <ckpt>; log: ...` | the server crashed: port already in use, out of memory, bad adapter | read the log named in the message; change `inference.port` in your local profile if the port is taken |
 | `... not ready after Ns` | slow first load or a hung server | raise `inference.startup_timeout_sec`; check the log |
+| `vLLM exited with N while starting` in a server log | the vLLM child failed: e.g. not enough free GPU memory (`--gpu-memory-utilization`), a missing build tool, an unsupported model/LoRA combination | the server log (copied into `runs/<id>/logs/`) holds vLLM's own error; the engine environment is `.engines/<package>/` on the host |
+| `vLLM returned HTTP ...` as an `infra:` error | the vLLM child rejected or failed a request | read the server log; check that the model profile's `serving.vllm.launch_args` are valid for the pinned `engine_package` |
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | log into the host and stop that process group yourself before resuming |
 | many `infra:` stops with connection errors or timeouts | the endpoint went away or requests exceed `request_timeout_sec` | check the server log and the tunnel; failed attempts are retried `runtime.infra_retries` times and kept |
 | `model_error:...context_length_exceeded` | the conversation outgrew the server's context | lower `episode.max_output_chars` or `max_turns`, or serve with a longer context |

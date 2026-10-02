@@ -20,7 +20,7 @@ from pathlib import Path
 from ..core.config import REPO_ROOT, HostRef
 
 # Never synced to remote hosts: outputs, environments, caches, private profiles and secrets.
-RSYNC_EXCLUDES = [".venv", "runs", "artifacts", "evaluation/jobs", "__pycache__", ".pytest_cache", "configs/machines/local", ".DS_Store", ".env", ".git"]
+RSYNC_EXCLUDES = [".venv", "runs", "artifacts", "evaluation/jobs", "__pycache__", ".pytest_cache", "configs/machines/local", ".DS_Store", ".env", ".git", ".engines"]
 
 
 class RemoteError(RuntimeError):

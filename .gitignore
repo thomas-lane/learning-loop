@@ -9,6 +9,7 @@ __pycache__/
 # Generated outputs (never commit)
 runs/
 artifacts/
+.engines/
 evaluation/jobs/
 *.safetensors
 *.gguf

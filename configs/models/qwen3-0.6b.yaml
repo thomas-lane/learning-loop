@@ -28,7 +28,10 @@ serving:
     backend: vllm
     adapter_formats: [peft_lora]
     status: untested
-    notes: vLLM --enable-lora with the published PEFT directory; no vLLM host was available.
+    engine_package: vllm==0.30.0
+    notes: >-
+      hf_server --engine vllm: our renderer, parser and token counts around vLLM generation from
+      token ids; equivalence with hf_transformers is checked with learning_loop.serving.equivalence.
 notes: >-
   Training validated on MPS (laptop) and CUDA (Runpod RTX 3090: tests/train and remote training
   runs). The profile pins the trainable source checkpoint; there is no separate quantized

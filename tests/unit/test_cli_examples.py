@@ -21,6 +21,7 @@ CASES = [
     (E / "frozen-baseline.yaml", M / "external-llama.yaml", []),
     (E / "smoke-mac.yaml", M / "runpod.yaml", ["--set", "learner.model_profile=qwen3-1.7b"]),
     (E / "pilot.yaml", M / "runpod-a100.yaml", []),
+    (E / "pilot.yaml", M / "runpod-a100-vllm.yaml", []),
     (E / "pilot.yaml", M / "runpod-a100.yaml", ["--set", "learner.model_profile=gemma-4-e2b-it"]),
     *[(p, M / "lab-gpu.yaml", []) for p in sorted((E / "ablations").glob("*.yaml"))],
 ]

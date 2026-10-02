@@ -36,7 +36,7 @@ flowchart TB
     CO --> BE["episode backend (episodes/backends.py)"]
     BE -->|Harbor Trial, in-process| AG["ToolAgent (evaluation/agents)<br/>runs episodes/episode.py on the host"]
     AG -->|exec / upload| TC[("task container<br/>(Docker)")]
-    AG -->|chat completions| SRV["model server<br/>(serving/hf_server.py, vLLM, llama.cpp)"]
+    AG -->|chat completions| SRV["model server<br/>(serving/hf_server.py: transformers or vLLM engine; llama.cpp)"]
     BE -->|after the episode| VC[("verifier container<br/>tests/ + declared artifacts")]
     CO --> EDT["editor (editing/editor.py)"] --> SRV
     CO --> VER["verifier (editing/verify.py)"] --> BE
@@ -155,7 +155,9 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | | `preferences.py` | preference pairs + provenance, immutable exports, history buffer selection |
 | | `token_count.py` | learner-tokenizer length of a fixed assistant turn |
 | `training/` | | rendering/masking (`render.py`), TRL DPO (`dpo.py`), fixture trainer, publication, CLI (`run.py`) |
-| `serving/` | `hf_server.py`, `tool_parse.py` | reference OpenAI-compatible HF server with PEFT adapters, tool-call parsing |
+| `serving/` | `hf_server.py`, `tool_parse.py` | the model server: renders prompts with `training/render.py`, parses tool calls, counts usage with the training tokenizer; generation by transformers + PEFT (`hf_transformers`) or by a vLLM child process (`vllm`) |
+| | `vllm_engine.py` | vLLM as a token engine behind `hf_server`: separate environment (`.engines/`), token ids in and out, pinned sampling, zero/trained LoRA modules |
+| | `equivalence.py` | GPU gate: vLLM log-probs and greedy decoding against transformers + PEFT for the base model, a trained adapter and a random adapter |
 | | `managed.py` | start/stop an `hf_server` process owned by the caller |
 | | `lifecycle.py` | which checkpoint is served where; start/stop owned servers; policy specs |
 | `orchestration/` | `coordinator.py` | runs, cycles, stages, retries, lineage, evaluation/edit-replay runs, resume |
@@ -273,6 +275,6 @@ model input.
 | A task family | `evaluation/generators/<family>.py`, register it, reference it in a split file | follow the task and replay contract in `evaluation/README.md` |
 | An environment type | an `EnvironmentSession` (execute, fingerprint) and an `EpisodeBackend` | declare an honest `RestoreCapability`; never claim deterministic replay you cannot check |
 | A trainer | the `Trainer` interface (TrainRequest -> CheckpointRecord), selectable via `training.trainer` | keep reference/continuation/publication semantics; add `-m train` tests |
-| A serving backend | an entry in the model profile's `serving` + argv in `serving/lifecycle.py` | declare `adapter_formats`; validation refuses LoRA runs on backends that cannot load the adapter |
+| A serving backend | an entry in the model profile's `serving` + argv in `serving/lifecycle.py` (an `hf_server` engine keeps rendering, parsing and token counts identical) | declare `adapter_formats`; validation refuses LoRA runs on backends that cannot load the adapter; a new engine needs an equivalence check like `serving/equivalence.py` |
 | An editor condition | `editor.mode` + `make_editor` | the editor identity must change with it |
 | An acceptance rule | a new named rule in `editing/verify.py` + config literal | never silently replace `strict_all_success_v1` |

@@ -221,3 +221,10 @@ cycle 0, a frozen baseline, an initial-policy editor of the same model) are serv
 all-zero LoRA of the experiment's shape. Its outputs are bit-identical to the plain base model,
 and every checkpoint pays the same adapter overhead, so timings are comparable across cycles and
 conditions. The run's serving record states it (`base_checkpoints_served_as`).
+
+The serving backend is part of a run's conditions: compare runs only when they used the same
+backend and request concurrency (both are in the serving record). With the vLLM engine, prompts
+are still rendered, parsed and counted by `hf_server`, so what the learner sees and what is
+counted do not change; generation uses vLLM's bf16 kernels (including bf16 LoRA arithmetic), and
+with request concurrency above 1 an output can depend on which requests share a batch, which adds
+noise to seed-matched comparisons.

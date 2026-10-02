@@ -289,7 +289,8 @@ Exact identity of a model and how it is rendered, served and trained. Files: `co
 | `serving.<name>.adapter_formats` | list of `peft_lora` or `gguf_lora` | `[]` | Adapter formats this backend can load. Learning runs require `peft_lora` (what the trainer produces). |
 | `serving.<name>.quantization` | str or null | null | Quantization of the served artifact (e.g. `Q8_0`); recorded in run.json. A quantized artifact is not a trainable source. |
 | `serving.<name>.status` | `tested` or `untested` or `unsupported` | `untested` | Whether this backend+model combination has actually been exercised in this repository. `validate` warns when it is not `tested`. |
-| `serving.<name>.launch_args` | list of str | `[]` | Extra server flags for managed launches (e.g. a vLLM tool-call parser). |
+| `serving.<name>.launch_args` | list of str | `[]` | Extra engine flags for managed launches (vLLM server flags). |
+| `serving.<name>.engine_package` | str or null | null | `vllm` only: pip requirement installed into a separate environment on the serving host (`.engines/`), e.g. `vllm==0.30.0`. |
 | `serving.<name>.notes` | str or null | null | Free text: what was verified and what was not. |
 | `training_dtype` | `float32` or `bfloat16` or `float16` | `float32` | Weight dtype for training and reference log-probs (logits are always computed in float32). |
 | `lora_target_modules` | list of str | `[]` | Default LoRA target module names (overridable by `training.lora.target_modules`). |

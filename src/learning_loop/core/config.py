@@ -40,7 +40,8 @@ class ServingBackendProfile(Strict):
     adapter_formats: list[Literal["peft_lora", "gguf_lora"]] = Field(default_factory=list, description="Adapter formats this backend can load. Learning runs require `peft_lora` (what the trainer produces).")
     quantization: str | None = Field(default=None, description="Quantization of the served artifact (e.g. `Q8_0`); recorded in run.json. A quantized artifact is not a trainable source.")
     status: Literal["tested", "untested", "unsupported"] = Field(default="untested", description="Whether this backend+model combination has actually been exercised in this repository. `validate` warns when it is not `tested`.")
-    launch_args: list[str] = Field(default_factory=list, description="Extra server flags for managed launches (e.g. a vLLM tool-call parser).")
+    launch_args: list[str] = Field(default_factory=list, description="Extra engine flags for managed launches (vLLM server flags).")
+    engine_package: str | None = Field(default=None, description="`vllm` only: pip requirement installed into a separate environment on the serving host (`.engines/`), e.g. `vllm==0.30.0`.")
     notes: str | None = Field(default=None, description="Free text: what was verified and what was not.")
 
 

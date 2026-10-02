@@ -30,7 +30,8 @@ that gains are guaranteed.
 | Live small-model loop (`experiments/smoke-mac.yaml`) | runs end to end; Qwen3-0.6B and 1.7B solved 0/6 smoke attempts, so cycles were recorded no-updates (see "Smoke tests") |
 | Live editor on real saved trajectories (`loop edit-replay`) | runs; small Qwen editors produced only proposals rejected by validation so far |
 | Runpod / SSH GPU host for serving and training (laptop coordinator) | fixed-SSH-host mode validated on one RTX 3090 pod (CUDA training tests, live runs, remote training + adapter serving); pod-per-command mode (create, use, terminate) and existing-pod start/stop tested against a fake Runpod API; live use recorded in [docs/runpod.md](docs/runpod.md#what-was-validated) |
-| Gemma 4 (E4B, E2B) serving with the reference server and LoRA DPO training on CUDA; vLLM/llama.cpp serving; SSH coordinator (`loop submit`) | implemented or declared, **untested** (the Gemma tool-call parser is tested against the pinned templates) |
+| Gemma-4-E4B: serving (`hf_server`, transformers or vLLM engine) and LoRA DPO training on an A100 | exercised in probes and a partial pilot run (see [docs/runpod.md](docs/runpod.md)); vLLM checked against transformers + PEFT with `serving/equivalence.py` |
+| Gemma-4-E2B; llama.cpp serving; SSH coordinator (`loop submit`) | implemented or declared, **untested** |
 
 ## Setup
 

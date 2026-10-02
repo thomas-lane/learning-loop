@@ -30,7 +30,13 @@ serving:
     backend: vllm
     adapter_formats: [peft_lora]
     status: untested
-    notes: Serve base_model@base_revision with --enable-lora; needs a CUDA host (not available).
+    engine_package: vllm==0.30.0
+    # Full CUDA graphs for decoding without torch.compile: measured on an A100 (E4B), 88 s to start
+    # and 76 tok/s unbatched, against 210 s and 81 tok/s for the default (-O2).
+    launch_args: ['--compilation-config', '{"mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY"}']
+    notes: >-
+      hf_server --engine vllm: our renderer, parser and token counts around vLLM generation from
+      token ids; equivalence with hf_transformers is checked with learning_loop.serving.equivalence.
 notes: >-
   Multimodal checkpoint (Gemma4ForConditionalGeneration); text-only LoRA DPO through the same
   TRL/PEFT path is expected to need the text submodule's module names verified on a GPU host.

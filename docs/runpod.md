@@ -250,19 +250,52 @@ What is in place, and what has not run yet:
 
 - The reference server (`backend: hf_transformers`) serves both with the `gemma4` tool-call
   parser. The parser round-trips the pinned chat templates (tokenizer-only tests), and E4B's base
-  model completed a three-turn tool-calling exchange on an A100 (below). Serving a trained Gemma
-  adapter has not run yet.
+  model completed a three-turn tool-calling exchange on an A100 (below); the pilot run served its
+  cycle-0 adapter in cycle 1.
 - LoRA is restricted to the language model (`lora_exclude_modules` skips the vision/audio towers).
 - Training memory: the trainer computes logits only over the completion tokens, and
   `pilot.yaml` enables `training.dpo.gradient_checkpointing` with `max_length: 32768`. On an A100,
   E4B LoRA DPO ran on 7.3k- and 28.9k-token pairs (peaks 24 GB and 54 GB, see the GPU size table).
 - Both checkpoints are public (not gated) at the pinned revisions; the pod downloads them on the
   first server start, so allow a longer `inference.startup_timeout_sec` on a pod without a volume.
-- vLLM (`backend: vllm`) remains a declared, untested alternative; it is not part of this
-  project's environment.
+- vLLM (`inference.backend: vllm`) runs as `hf_server`'s generation engine (below).
 
 Treat a first Gemma run as integration work: `loop evaluate` of the base checkpoint, then a
 one-cycle run, before the full pilot.
+
+## Faster serving with vLLM
+
+`hf_server` generates with transformers one token at a time from Python: about 10–15 tokens/s
+for Gemma-4-E4B on an A100, which makes model time about 98% of an episode. With
+`inference.backend: vllm` (`configs/machines/examples/runpod-a100-vllm.yaml`), `hf_server` still
+renders every prompt with `training/render.py`, parses tool calls and counts tokens with the
+training tokenizer, but a vLLM child process does the generation from token ids:
+
+- vLLM is installed on first use into `.engines/vllm==<version>/` on the pod (its own torch; a few
+  minutes on a new pod), from the model profile's `serving.vllm.engine_package`;
+- sampling is fully explicit (`--generation-config vllm`), prefix caching is off, and base
+  checkpoints are served through the zero LoRA like trained ones;
+- `request_concurrency` sets how many requests vLLM batches; `docker_concurrency` must be at
+  least as large for batching to help.
+
+Measured on an A100 with Gemma-4-E4B and the zero LoRA (768-token generations):
+
+| Engine | Server start | Tokens/s |
+|---|---|---|
+| `hf_server` (transformers) | ~1 min | 10.2 |
+| vLLM, profile launch args (full decode CUDA graphs, no compile) | 88 s | 76.2 unbatched; 505 total with 8 concurrent requests |
+| vLLM default (`-O2`, torch.compile) | 210 s | 81.3 |
+
+Before relying on vLLM for a model profile, run the equivalence gate on a GPU host (it needs a
+trained adapter of the model, e.g. a published checkpoint copied to the host):
+
+```bash
+uv run --extra train python -m learning_loop.serving.equivalence --profile gemma-4-e4b-it \
+    --adapter runs/<run>/checkpoints/<ckpt> --out equivalence.json
+```
+
+It compares token log-probabilities and greedy decoding against transformers + PEFT for the base
+model, the trained adapter and a strong random adapter (see `serving/equivalence.py`).
 
 ## Costs
 
@@ -328,6 +361,16 @@ script driven through the normal pod lifecycle (not a `loop` command).
 | Terminate | terminated at the end; `loop pod cleanup --dry-run` found nothing |
 | Model loading straight to the GPU (`device_map`, CUDA only) | the 7.3k-token stage took 128 s instead of 450 s: first load 57 s including the download, reload check 16 s, reference log-probs 10 s, training 24 s |
 | `pytest -m train tests/train` on the A100 (three more created pods) | 7 passed twice with deterministic kernels; with the default (efficient) attention kernels, a resumed stage differed from an uninterrupted one by 2-9e-5 between identical runs, which is CUDA kernel noise, not resume logic |
+
+**vLLM engine, Gemma-4-E4B (A100, created pods; scratch scripts through the normal pod
+lifecycle):** vLLM 0.30.0 installed into `.engines/` on each new pod (it needs `ninja` on the
+engine environment's PATH, which `ensure_engine` provides). The speeds in the table above were
+measured on 768-token generations. The equivalence gate passed with the profile's launch
+arguments and the pilot's cycle-0 adapter: identical prompt ids; mean |delta log-prob| per token
+0.007 (zero LoRA) and 0.0055 (trained adapter); a strong random adapter's effect within 4.9% per
+sequence (per-token correlation 0.995); zero LoRA exactly equal to no LoRA inside vLLM; greedy
+decoding identical to transformers on all three prompts. A learning run with the vLLM engine has
+not run yet.
 
 **Not covered yet:**
 - the existing-pod mode on a real pod (start, the watchdog's self-stop, stop at the end);
