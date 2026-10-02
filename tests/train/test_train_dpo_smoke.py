@@ -246,3 +246,27 @@ def test_serve_trained_adapter_tool_calling(runs):
     finally:
         rc = srv.stop()
     assert rc == 0, srv.log_tail()
+
+
+def test_zero_lora_serving_matches_the_base_model(runs):
+    """A base checkpoint served through an all-zero LoRA (so every cycle pays the same adapter
+    overhead) answers exactly like the plain base model."""
+    from learning_loop.core.config import load_model_profile
+    from learning_loop.serving.hf_server import HFEngine
+    from learning_loop.training.common import load_preference_dataset
+
+    prof = load_model_profile(PROFILE)
+    ex = load_preference_dataset(FIX)[0][0]
+    body = {"model": "base", "messages": ex.prompt, "tools": ex.tools, "temperature": 0, "max_tokens": 48, "seed": 5}
+    spec = {"r": 8, "alpha": 16, "target_modules": sorted(prof.lora_target_modules), "exclude_modules": None}
+    out = []
+    for zero in (None, spec):
+        eng = HFEngine(prof, None, device=runs["device"], zero_lora=zero)
+        try:
+            assert eng.info()["zero_lora"] == zero
+            assert (sum(1 for n, _ in eng.model.named_modules() if n.endswith("lora_A")) > 0) == (zero is not None)
+            r = eng.complete(body)
+            out.append((r["learning_loop"]["raw_completion_text"], r["usage"]))
+        finally:
+            eng.close()
+    assert out[0] == out[1]

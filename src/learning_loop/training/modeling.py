@@ -41,6 +41,24 @@ def load_base_model(profile: ModelProfile, device: str, dtype: str | None = None
     return model if device == "cuda" else model.to(device)
 
 
+def apply_zero_lora(base: Any, spec: dict[str, Any]) -> Any:
+    """Wrap `base` in a LoRA whose B matrices are exactly zero (PEFT's default init), so every
+    adapted layer adds exactly 0.0: outputs equal the base model's while each forward runs the same
+    adapter operations as a trained checkpoint. Serving base checkpoints this way keeps timing
+    comparable across cycles. `spec`: r, alpha, target_modules, exclude_modules."""
+    from peft import LoraConfig, get_peft_model
+
+    cfg = LoraConfig(
+        r=spec["r"], lora_alpha=spec["alpha"], lora_dropout=0.0, target_modules=list(spec["target_modules"]),
+        exclude_modules=spec.get("exclude_modules"), task_type="CAUSAL_LM", init_lora_weights=True,
+    )
+    model = get_peft_model(base, cfg)
+    b = [p for n, p in model.named_parameters() if "lora_B" in n]
+    if not b or any(bool(p.detach().abs().max() != 0) for p in b):
+        raise TrainingRequestError("zero LoRA: expected adapter B matrices that are all exactly zero")
+    return model
+
+
 def verify_adapter_dir(ref: CheckpointRef) -> Path:
     """The published adapter directory of `ref`, after checking its recorded hash."""
     if ref.adapter_path is None:

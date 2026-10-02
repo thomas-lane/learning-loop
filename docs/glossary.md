@@ -80,6 +80,7 @@ notes are the point of this page.
 | **Coordinator** | The process running `loop run`: it owns the run directory, Docker work and serving swaps. |
 | **Pod lifecycle** | For `kind: runpod` hosts: each command starts an existing pod (`pod_id`) or creates one from a spec (`pod:`), prepares it, keeps a heartbeat, and stops (existing) or terminates (created) it at the end. |
 | **Created pod** | A pod `loop` created from a `runpod.create` spec for one command, named `lfe-<spec>-<stamp>` and recorded in the ledger `artifacts/runpod/created.jsonl`; the only kind of pod `loop` terminates. |
+| **Zero LoRA** | An adapter of the experiment's LoRA shape whose B matrices are exactly zero; base checkpoints are served through it so that every cycle pays the same adapter overhead while producing the base model's exact outputs. |
 | **Watchdog** | A process on a pod that stops the pod (a created pod: terminates it) when the coordinator's heartbeat is older than `idle_stop_minutes`, so a sleeping or crashed laptop cannot leave it running. |
 | **Dropped pair** | An exported preference pair the trainer did not train on (e.g. longer than `dpo.max_length`); counted with its reason in `cycle.json`, `loop status` and the report. |
 | **Managed / external / scripted inference** | The run starts and stops its own model server / uses an existing endpoint for one declared checkpoint / uses a fixture policy. |

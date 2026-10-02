@@ -103,13 +103,14 @@ class HFEngine:
         allow_cpu_fallback: bool = False,
         dtype: str | None = None,
         base_checkpoint_id: str = "base",
+        zero_lora: dict[str, Any] | None = None,
         default_max_tokens: int = 1024,
         max_context: int | None = None,
     ):
         import torch  # noqa: F401  (train extra)
 
         from ..training.common import resolve_device
-        from ..training.modeling import load_adapter, load_base_model, verify_adapter_dir
+        from ..training.modeling import apply_zero_lora, load_adapter, load_base_model, verify_adapter_dir
         from ..training.render import chat_template_sha256, end_of_turn_ids, load_tokenizer
 
         if profile.tool_call_format not in PARSERS:
@@ -123,6 +124,9 @@ class HFEngine:
         self.eot = end_of_turn_ids(self.tok, profile)
         self.record: CheckpointRecord | None = None
         base = load_base_model(profile, self.device, self.dtype)
+        if checkpoint_dir is not None and zero_lora:
+            raise ValueError("--zero-lora applies to base checkpoints only")
+        self.zero_lora = zero_lora
         if checkpoint_dir is not None:
             rec = CheckpointRecord.model_validate(read_json(Path(checkpoint_dir) / "checkpoint.json"))
             ref = rec.checkpoint
@@ -136,7 +140,7 @@ class HFEngine:
             self.served_model = ref.checkpoint_id
             self.adapter_sha256 = ref.adapter_sha256
         else:
-            self.model = base
+            self.model = apply_zero_lora(base, zero_lora) if zero_lora else base
             self.served_model = base_checkpoint_id
             self.adapter_sha256 = None
         self.model.eval()
@@ -152,6 +156,7 @@ class HFEngine:
             "base_model": self.profile.base_model,
             "base_revision": self.profile.base_revision,
             "adapter_sha256": self.adapter_sha256,
+            "zero_lora": self.zero_lora,
             "chat_template_sha256": self.template_sha,
             "chat_template_kwargs": self.profile.chat_template_kwargs,
             "device": self.device,
@@ -324,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--profile", required=True)
     ap.add_argument("--checkpoint-dir", type=Path, default=None, help="published checkpoint dir; omit to serve the base model")
     ap.add_argument("--base-checkpoint-id", default="base")
+    ap.add_argument("--zero-lora", default=None, help="JSON {r, alpha, target_modules, exclude_modules}: serve the base model "
+                    "through an all-zero LoRA of this shape (same outputs, same adapter overhead as trained checkpoints)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
@@ -335,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = HFEngine(
         load_model_profile(a.profile), a.checkpoint_dir, device=a.device, allow_cpu_fallback=a.allow_cpu_fallback,
         dtype=a.dtype, base_checkpoint_id=a.base_checkpoint_id, default_max_tokens=a.default_max_tokens,
+        zero_lora=json.loads(a.zero_lora) if a.zero_lora else None,
         max_context=a.max_context,
     )
     serve(engine, a.host, a.port)

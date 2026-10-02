@@ -19,7 +19,8 @@ File kinds used below:
 runs/<run-id>/                        run id: <experiment>-<UTC stamp>-s<loop_seed> (or --run-id)
 ├── .lock                             flock held by the active coordinator (holder pid/host inside)
 ├── run.json                          write-once: resolved experiment, machine, model profiles,
-│                                     serving record, initial checkpoint, panels, splits, instances
+│                                     serving record (backend, concurrency, zero-LoRA serving of base
+│                                     checkpoints), initial checkpoint, panels, splits, instances
 ├── provenance.json                   write-once: code identity, packages, uv.lock hash, hardware
 ├── invocations.jsonl                 append-only: provenance of every later resume/re-invocation
 ├── machine-overrides.jsonl           append-only: `loop resume --machines ...` overrides

@@ -62,8 +62,10 @@ class ServerHandle:
 class InferenceManager:
     """One manager per role (learner / editor) per coordinator process."""
 
-    def __init__(self, profile: InferenceProfile, model: ModelProfile, log_dir: Path, role: str = "learner"):
+    def __init__(self, profile: InferenceProfile, model: ModelProfile, log_dir: Path, role: str = "learner",
+                 zero_lora: dict[str, Any] | None = None):
         self.profile = profile
+        self.zero_lora = zero_lora  # serve base checkpoints through an all-zero LoRA of this shape
         self.model = model
         self.log_dir = Path(log_dir)
         self.role = role
@@ -152,6 +154,8 @@ class InferenceManager:
                 argv += ["--checkpoint-dir", adapter]  # served name = the checkpoint id
             else:
                 argv += ["--base-checkpoint-id", ckpt.checkpoint_id]
+                if self.zero_lora:
+                    argv += ["--zero-lora", json.dumps(self.zero_lora, sort_keys=True)]
             return argv
         if backend == "vllm":
             # Untested integration: requires a Linux GPU host with vLLM installed separately.

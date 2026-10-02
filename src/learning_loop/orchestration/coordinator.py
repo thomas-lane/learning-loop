@@ -114,7 +114,8 @@ class RunContext:
         if role not in self.managers:
             prof = self.machine.inference if role == "learner" else (self.machine.editor_inference or self.machine.inference)
             model = self.learner_profile if role == "learner" else self.editor_profile
-            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role)
+            zero = zero_lora_spec(self.exp, self.learner_profile) if model.name == self.learner_profile.name else None
+            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role, zero_lora=zero)
         return self.managers[role]
 
     def pods(self, log: Callable[[str], None] | None = None):
@@ -356,7 +357,7 @@ def create_run(exp_path: str | Path, machine_path: str | Path, run_id: str | Non
             "experiment": exp.model_dump(mode="json"),
             "machine": machine.model_dump(mode="json"),
             "model_profiles": {"learner": learner.model_dump(mode="json"), "editor": editor.model_dump(mode="json")},
-            "serving": serving_record(machine, learner),
+            "serving": serving_record(machine, learner, exp),
             "initial_checkpoint": initial.model_dump(mode="json"),
             "panels": panels,
             "panel_split": {k: v.value for k, v in panel_split.items()},
@@ -380,11 +381,28 @@ def record_provenance(run_dir: Path, run_id: str) -> None:
         JsonlAppender(run_dir / "invocations.jsonl").append(rec)
 
 
-def serving_record(machine: MachineProfile, learner: ModelProfile) -> dict[str, Any]:
+def zero_lora_spec(exp: ExperimentConfig, learner: ModelProfile) -> dict[str, Any] | None:
+    """LoRA shape for serving base checkpoints of the learner's model through an all-zero adapter:
+    every experiment that trains LoRA adapters (`trl_dpo`) serves base and trained checkpoints with
+    the same adapter overhead, so timings are comparable across cycles and conditions."""
+    if exp.training.trainer != "trl_dpo":
+        return None
+    return {
+        "r": exp.training.lora.r,
+        "alpha": exp.training.lora.alpha,
+        "target_modules": sorted(exp.training.lora.target_modules or learner.lora_target_modules),
+        "exclude_modules": learner.lora_exclude_modules,
+    }
+
+
+def serving_record(machine: MachineProfile, learner: ModelProfile, exp: ExperimentConfig | None = None) -> dict[str, Any]:
     """Serving backend/artifact/quantization/concurrency, so timing comparisons are interpretable."""
     inf = machine.inference
     sb = learner.serving.get(inf.backend)
+    zero = zero_lora_spec(exp, learner) if exp is not None and inf.mode == "managed" else None
     return {
+        "base_checkpoints_served_as": "zero_lora" if zero else ("base_model" if inf.mode == "managed" else None),
+        "zero_lora": zero,
         "mode": inf.mode,
         "backend": inf.backend,
         "artifact": (sb.artifact if sb and sb.artifact else learner.base_model) if inf.mode != "scripted" else None,

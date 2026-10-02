@@ -201,3 +201,22 @@ def test_reference_cache_key_carries_logp_path():
     pair = RenderedPair(pair_id="p", example_sha256="e" * 64, prompt_ids=[1], chosen_ids=[2], rejected_ids=[3],
                         prompt_text="", chosen_text="", rejected_text="")
     assert reference_cache_key(ref, pair, "t", "m", {}, "bfloat16")["logp_path"] == LOGP_PATH
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_zero_lora_is_applied_and_changes_no_output(dtype):
+    """Base checkpoints are served through an all-zero LoRA (same adapter overhead as trained
+    checkpoints): the adapter modules are really present and the outputs are bit-identical."""
+    from learning_loop.training.modeling import apply_zero_lora
+
+    base = _tiny_model(dtype, "cpu").eval()
+    ids = torch.randint(0, 512, (2, 16), generator=torch.Generator().manual_seed(1))
+    with torch.no_grad():
+        want = base(input_ids=ids).logits.clone()
+        greedy = base.generate(input_ids=ids[:1], max_new_tokens=8, do_sample=False).clone()
+    model = apply_zero_lora(base, {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj", "down_proj"], "exclude_modules": None}).eval()
+    lora = [n for n, _ in model.named_modules() if n.endswith("lora_A")]
+    assert len(lora) == 3  # one layer x 3 targets
+    with torch.no_grad():
+        assert torch.equal(model(input_ids=ids).logits, want)
+        assert torch.equal(model.generate(input_ids=ids[:1], max_new_tokens=8, do_sample=False), greedy)

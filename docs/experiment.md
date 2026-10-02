@@ -215,3 +215,9 @@ CUDA training runs (identical inputs gave adapters differing by up to about 1e-4
 an A100). The local smoke test
 uses serial inference; research runs record serving backend, template, quantization, hardware and
 concurrency so that timing comparisons are interpretable.
+
+In experiments that train LoRA adapters (`trainer: trl_dpo`), base checkpoints (the learner in
+cycle 0, a frozen baseline, an initial-policy editor of the same model) are served through an
+all-zero LoRA of the experiment's shape. Its outputs are bit-identical to the plain base model,
+and every checkpoint pays the same adapter overhead, so timings are comparable across cycles and
+conditions. The run's serving record states it (`base_checkpoints_served_as`).
