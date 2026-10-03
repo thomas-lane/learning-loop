@@ -106,8 +106,12 @@ tool, whose parameters are that tool's own (the replacement call) plus `edit_tur
 the editable turns) and `edit_justification` (kept out of every student prompt), or `abstain`.
 The answer therefore passes through the serving stack's tool-call parser in the model's native
 format, so code and file contents in a replacement need no hand-written escaping; the replaced
-call's id is taken from the chosen turn. A trajectory with no editable turn is not sent to the
-editor (recorded as `skipped:no_editable_turns`). The editor cannot approve its own edit, change
+call's id is taken from the chosen turn. A reply that is exactly one answer-tool call written
+without the model format's call markers (Gemma often writes `replace_with_bash{...}` without
+`<|tool_call>`) is accepted as that call and recorded (`answer_recovery: bare_tool_call` in the
+proposal's raw response); it is validated like any other answer. Learner turns are never
+recovered this way. A trajectory with no editable turn is not sent to the editor (recorded as
+`skipped:no_editable_turns`). The editor cannot approve its own edit, change
 grading or budgets, or touch the source environment.
 
 Validation happens before execution. The initial, strict condition accepts only:

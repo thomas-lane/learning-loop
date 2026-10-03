@@ -678,6 +678,24 @@ def editor_tools(learner_tools: list[ToolSchema], editable: list[int]) -> list[T
     return out
 
 
+def recover_bare_answer(message: Message, answer_tools: list[ToolSchema]) -> tuple[Message, bool]:
+    """If the editor's reply has no parsed tool call but its text is exactly one call to one of its
+    answer tools written without the model format's call markers (e.g. Gemma's
+    `replace_with_bash{command:<|"|>...<|"|>,...}`), turn it into that tool call. Recorded by the
+    caller; the result is validated like any other answer. Only the editor's answer is recovered
+    this way; learner turns never are."""
+    from ..serving.tool_parse import parse_bare_call
+
+    if tool_calls_of(message) or not isinstance(message.get("content"), str):
+        return message, False
+    parsed = parse_bare_call(message["content"], {t["function"]["name"] for t in answer_tools})
+    if parsed is None:
+        return message, False
+    name, args = parsed
+    call = {"id": "recovered", "type": "function", "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
+    return {**message, "content": "", "tool_calls": [call]}, True
+
+
 def proposal_from_tool_calls(
     message: Message,
     turns: list[TurnRecord],
@@ -858,7 +876,10 @@ class LLMEditor(_EditorBase):
             err = f"editor_infra_error:{decision.infra_error}" if decision.infra_error else f"editor_request_error:{decision.request_error}"
             return EditProposal(**common, status="invalid", rejection_reasons=[err], raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
         server_errors = ((decision.raw_response or {}).get("learning_loop") or {}).get("parse_errors") or []
-        proposal = proposal_from_tool_calls(decision.history_message, turns, parse_errors=[*decision.parse_errors, *server_errors], **common)
+        answer, recovered = recover_bare_answer(decision.history_message, answer_tools)
+        if recovered:
+            raw["answer_recovery"] = "bare_tool_call"  # the reply was the call without the format's markers
+        proposal = proposal_from_tool_calls(answer, turns, parse_errors=[*decision.parse_errors, *server_errors], **common)
         if proposal.status == "invalid" and decision.finish_reason == "length":
             proposal = proposal.model_copy(update={"rejection_reasons": [*proposal.rejection_reasons, "editor_output_truncated"]})
         proposal = proposal.model_copy(update={"raw_response": raw, "usage": decision.usage, "duration_sec": decision.latency_sec})

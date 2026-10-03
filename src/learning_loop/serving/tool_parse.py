@@ -221,6 +221,29 @@ def parse_gemma4(text: str, id_seed: str) -> ParsedCompletion:
 PARSERS = {"qwen3_xml": parse_qwen3, "gemma4": parse_gemma4}
 
 
+def parse_bare_call(text: str, names: set[str]) -> tuple[str, dict[str, Any]] | None:
+    """A reply that is exactly one tool call written without the format's call markers, to one of
+    `names`: Gemma style `name{key:value,...}` (optionally prefixed `call:`) or `name {json}`.
+    Used only for the editor's answer (its replies are proposals, not learner turns); returns None
+    unless the whole text is consumed."""
+    t = (text or "").strip()
+    t = t.removeprefix("<|tool_call>").removesuffix("<tool_call|>").removesuffix("<").strip()
+    t = t.removeprefix("call:")
+    brace = t.find("{")
+    name = t[:brace].strip() if brace > 0 else ""
+    if name not in names:
+        return None
+    try:
+        return _gemma_call("call:" + name + t[brace:])
+    except ValueError:
+        pass
+    try:
+        args = json.loads(t[brace:])
+    except json.JSONDecodeError:
+        return None
+    return (name, args) if isinstance(args, dict) else None
+
+
 def parse_completion(tool_call_format: str, text: str, id_seed: str) -> ParsedCompletion:
     if tool_call_format in PARSERS:
         return PARSERS[tool_call_format](text, id_seed)

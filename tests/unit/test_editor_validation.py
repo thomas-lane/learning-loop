@@ -344,3 +344,21 @@ async def test_trajectory_without_editable_turns_is_not_sent(tmp_path):
     pol = FakePolicy(_answer(("abstain", {"edit_justification": "x"})))
     p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS)
     assert p.status == "abstained" and p.rejection_reasons == ["skipped:no_editable_turns"] and pol.calls == []
+
+
+async def test_bare_answer_call_is_recovered_visibly_and_validated(tmp_path):
+    summary, turns = source(tmp_path)
+    inst = vb.make_instance(tmp_path)
+    q = '<|"|>'
+    bare = f"replace_with_bash{{command:{q}{GOOD_CMD}{q},edit_justification:{q}one pipeline{q},edit_turn:0}}"
+    p = await _editor(FakePolicy(bare)).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "proposed" and p.raw_response["answer_recovery"] == "bare_tool_call"
+    assert p.replacement == ProposedCall(name="bash", arguments={"command": GOOD_CMD}) and p.tool_call_id == "call_0"
+    # recovered answers are validated like any other (hindsight constant still rejected)
+    hard = f"replace_with_bash{{command:{q}echo 10.0.0.7 > /app/answer.txt{q},edit_justification:{q}x{q},edit_turn:0}}"
+    p = await _editor(FakePolicy(hard)).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "invalid" and "ungrounded_constant:10.0.0.7" in p.rejection_reasons
+    # prose around a call, or a name that is not an answer tool, is not recovered
+    for text in [f"I suggest {bare}", "bash{command:" + q + "ls" + q + "}"]:
+        p = await _editor(FakePolicy(text)).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS)
+        assert p.status == "invalid" and p.rejection_reasons == ["no_tool_call"] and "answer_recovery" not in p.raw_response
