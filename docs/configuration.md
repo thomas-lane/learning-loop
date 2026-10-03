@@ -130,7 +130,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `editor.mode` | `initial_policy` or `current_learner` or `external` or `scripted` | **required** | `initial_policy` (fixed initial checkpoint; default condition), `current_learner` (changes every cycle), `external` (a fixed separate model) or `scripted` (fixture). |
 | `editor.model_profile` | str or null | null | `external` only: the editor's model profile. |
 | `editor.checkpoint` | str or null | null | `external` only: `base` or a checkpoint directory (default `base`). |
-| `editor.prompt` | str | `prompts/editor/v1.md` | Editor prompt; its SHA-256 is part of the editor identity. |
+| `editor.prompt` | str | `prompts/editor/v2.md` | Editor prompt; its SHA-256 is part of the editor identity. |
 | `editor.sampling` | mapping | `{'temperature': 0.0, 'max_output_tokens': 2048}` | Editor decoding. |
 | `editor.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `editor.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |

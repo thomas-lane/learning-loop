@@ -99,7 +99,7 @@ configs/
   models/                     model identity + serving + training profiles (pinned revisions)
   machines/examples/          committed deployment examples
   machines/local/             private deployment profiles (git-ignored)
-prompts/editor/v1.md          versioned editor prompt (its hash is part of the editor identity)
+prompts/editor/v2.md          versioned editor prompt (its hash is part of the editor identity)
 scripts/setup_gpu_host.sh     prepares a Linux GPU host (e.g. a Runpod pod) over SSH
 scripts/pod_watchdog.py       pod-side idle watchdog (stops the pod when the heartbeat goes stale)
 .env.example                  template for the git-ignored .env (credentials by variable name)

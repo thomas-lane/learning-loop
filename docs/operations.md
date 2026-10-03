@@ -132,7 +132,8 @@ saved successful trajectories instead.
 | Symptom (reason in the report) | Meaning | Action |
 |---|---|---|
 | `nonempty_reasoning`, `nonempty_assistant_content` | the learner writes reasoning/text with its tool calls; strict mode cannot edit such turns | serve the learner with reasoning disabled (`chat_template_kwargs`) |
-| `identical_replacement`, `unparseable_response`, `response_schema` | weak editor output | try a stronger editor condition (`editor.mode: external`) via `edit-replay` |
+| `no_tool_call`, `multiple_tool_calls:N`, `unknown_editor_tool:...`, `response_schema:...`, `unparsed_tool_call:...`, `identical_replacement` | weak editor output: no single valid answer-tool call (`unparsed_tool_call` names the parse error of a malformed native tool call) | try a stronger editor condition (`editor.mode: external`) via `edit-replay` |
+| `skipped:no_editable_turns` (status abstained) | no turn of the source can be edited (e.g. every tool-call turn carries text or reasoning); no editor request was made | expected; see the eligibility reasons above |
 | `ungrounded_constant:<value>` | the replacement contains a value first seen after the decision (possible hindsight) | expected to reject answer hardcoding; inspect `proposals.csv` if it rejects legitimate edits |
 | `replay_failed:<branch>:rN` with `replay:observation:...` | a replayed command printed something different (timestamps, randomness) | make the task deterministic, or declare a narrow, justified normalizer in the task |
 | `replay:fingerprint:...` | the restored state differs from the source | the task has unmodeled state; fix the task |

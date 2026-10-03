@@ -273,7 +273,7 @@ class EditorConfig(Strict):
     mode: Literal["initial_policy", "current_learner", "external", "scripted"] = Field(description="`initial_policy` (fixed initial checkpoint; default condition), `current_learner` (changes every cycle), `external` (a fixed separate model) or `scripted` (fixture).")
     model_profile: str | None = Field(default=None, description="`external` only: the editor's model profile.")
     checkpoint: str | None = Field(default=None, description="`external` only: `base` or a checkpoint directory (default `base`).")
-    prompt: str = Field(default="prompts/editor/v1.md", description="Editor prompt; its SHA-256 is part of the editor identity.")
+    prompt: str = Field(default="prompts/editor/v2.md", description="Editor prompt; its SHA-256 is part of the editor identity.")
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig(temperature=0.0, max_output_tokens=2048), description="Editor decoding.")
     proposals_per_source: int = Field(default=1, ge=1, description="Proposals per successful source; only 1 is supported (more would need fresh-seed confirmation).")
     include_outcome_metrics: bool = Field(default=True, description="Show the editor scalar outcomes of the source episode (success, token totals).")

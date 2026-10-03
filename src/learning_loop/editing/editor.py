@@ -10,8 +10,13 @@ Claude/Codex configuration. It sees only `build_trajectory_view()`:
   - optionally a few scalar outcome metrics (success, partial reward, tokens).
 
 It never sees tests/, solution/, verifier output text, other trajectories,
-file paths of run artifacts, or held-out data. It executes no code; it returns
-one structured JSON proposal (or abstains). It cannot approve its own edit,
+file paths of run artifacts, or held-out data. It executes no code; it answers
+with exactly one tool call (see `editor_tools()`): `replace_with_<tool>` for a
+learner tool, whose parameters are that tool's own plus `edit_turn` (restricted
+to the editable turns) and `edit_justification`, or `abstain`. The replacement
+arguments therefore come through the serving stack's tool-call parser in the
+model's native format (no hand-written JSON with escaped code). Trajectories
+with no editable turn are not sent to the editor. It cannot approve its own edit,
 change budgets or the grader, or touch the source environment: verification
 (`verify.py`) is a separate step on fresh environments.
 
@@ -23,6 +28,7 @@ kept with every reason for audit.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -56,7 +62,11 @@ from ..episodes.events import load_turns, read_events
 if TYPE_CHECKING:
     from ..core.config import EditorConfig
 
-VIEW_VERSION = 1
+VIEW_VERSION = 2
+EDIT_TOOL_PREFIX = "replace_with_"
+ABSTAIN_TOOL = "abstain"
+EDIT_TURN = "edit_turn"
+EDIT_JUSTIFICATION = "edit_justification"
 ASSISTANT_TEXT_POLICIES = ("reject_nonempty",)
 
 # --------------------------------------------------------------------------- #
@@ -605,6 +615,7 @@ def build_trajectory_view(
         "system_prompt": system_prompt,
         "tools": tools,
         "turns": view_turns,
+        "editable_turns": [t["turn_index"] for t in view_turns if t["eligible"]],
         "later_observations_included": cutoff is None,
     }
     if outcome is not None:
@@ -629,75 +640,84 @@ def editor_identity(mode: str, checkpoint_id: str | None, prompt_sha256: str | N
     return stable_id("editor", mode, checkpoint_id, prompt_sha256, decoding)
 
 
-_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
+def editable_turns(view: dict[str, Any]) -> list[int]:
+    return [t["turn_index"] for t in view["turns"] if t.get("eligible")]
 
 
-def parse_editor_response(text: str) -> dict[str, Any]:
-    """Extract the single JSON object from the editor's reply (fences tolerated)."""
-    text = (text or "").strip()
-    m = _FENCE.search(text)
-    if m:
-        text = m.group(1).strip()
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start < 0 or end <= start:
-            raise ValueError("no JSON object in editor response") from None
-        obj = json.loads(text[start : end + 1])
-    if not isinstance(obj, dict):
-        raise ValueError("editor response is not a JSON object")
-    return obj
+def editor_tools(learner_tools: list[ToolSchema], editable: list[int]) -> list[ToolSchema]:
+    """The editor's answer tools: one `replace_with_<name>` per learner tool (that tool's own
+    parameters plus `edit_turn`, restricted to the editable turns, and `edit_justification`) and
+    `abstain`. The editor calls exactly one of them."""
+    out: list[ToolSchema] = []
+    for t in learner_tools:
+        fn = t["function"]
+        params = copy.deepcopy(fn.get("parameters") or {"type": "object", "properties": {}})
+        props = params.get("properties") or {}
+        clash = {EDIT_TURN, EDIT_JUSTIFICATION} & set(props)
+        if clash:
+            raise ValueError(f"learner tool {fn['name']!r} has parameters {sorted(clash)}, which the editor tools reserve")
+        params["properties"] = {
+            EDIT_TURN: {"type": "integer", "enum": list(editable),
+                        "description": "turn_index of the learner turn whose tool call this replaces (an editable turn)"},
+            **props,
+            EDIT_JUSTIFICATION: {"type": "string", "description": "one or two sentences on why this is cheaper; never shown to the learner"},
+        }
+        params["required"] = [EDIT_TURN, *params.get("required", []), EDIT_JUSTIFICATION]
+        out.append({"type": "function", "function": {
+            "name": EDIT_TOOL_PREFIX + fn["name"],
+            "description": f"Propose replacing the learner's tool call at `{EDIT_TURN}` with this call to its `{fn['name']}` tool. "
+                           f"The learner tool: {fn.get('description', '')}",
+            "parameters": params,
+        }})
+    out.append({"type": "function", "function": {
+        "name": ABSTAIN_TOOL,
+        "description": "Make no edit (no editable turn has a clearly better single action).",
+        "parameters": {"type": "object", "properties": {EDIT_JUSTIFICATION: {"type": "string", "description": "one sentence"}},
+                       "required": [EDIT_JUSTIFICATION]},
+    }})
+    return out
 
 
-def proposal_from_response(
-    obj: dict[str, Any],
+def proposal_from_tool_calls(
+    message: Message,
+    turns: list[TurnRecord],
     *,
+    parse_errors: list[str] | None = None,
     proposal_id: str,
     source_episode_id: str,
     instance_id: str,
     editor_id: str,
 ) -> EditProposal:
-    """Map the structured response onto an EditProposal (status proposed/abstained/invalid)."""
+    """Map the editor's single tool call onto an EditProposal (status proposed/abstained/invalid).
+    The replaced call's id is taken from the chosen turn, so the editor never copies ids."""
     base = dict(proposal_id=proposal_id, source_episode_id=source_episode_id, instance_id=instance_id, editor_id=editor_id)
-    decision = obj.get("decision")
-    justification = obj.get("justification") if isinstance(obj.get("justification"), str) else None
-    if decision == "abstain":
+    calls = tool_calls_of(message)
+    if len(calls) != 1:
+        reasons = ["no_tool_call" if not calls else f"multiple_tool_calls:{len(calls)}"]
+        reasons += [f"unparsed_tool_call:{e}" for e in (parse_errors or [])]
+        return EditProposal(**base, status="invalid", rejection_reasons=reasons)
+    name = (calls[0].get("function") or {}).get("name")
+    args = parse_call_arguments(calls[0])
+    if args is None:
+        return EditProposal(**base, status="invalid", rejection_reasons=["response_schema:arguments"])
+    justification = args.pop(EDIT_JUSTIFICATION, None)
+    justification = justification if isinstance(justification, str) else None
+    if name == ABSTAIN_TOOL:
         return EditProposal(**base, status="abstained", justification=justification)
-    if decision != "edit":
-        return EditProposal(**base, status="invalid", justification=justification, rejection_reasons=[f"response_schema:decision={decision!r}"])
-    reasons = []
-    if obj.get("source_trajectory_id") not in (None, source_episode_id):
-        reasons.append("source_trajectory_mismatch")
-    turn_index = obj.get("turn_index")
+    if not isinstance(name, str) or not name.startswith(EDIT_TOOL_PREFIX):
+        return EditProposal(**base, status="invalid", justification=justification, rejection_reasons=[f"unknown_editor_tool:{name}"])
+    turn_index = args.pop(EDIT_TURN, None)
     if not isinstance(turn_index, int) or isinstance(turn_index, bool):
-        reasons.append("response_schema:turn_index")
-        turn_index = None
-    call_id = obj.get("tool_call_id")
-    if not isinstance(call_id, str):
-        reasons.append("response_schema:tool_call_id")
-        call_id = None
-    rep = obj.get("replacement")
-    replacement = None
-    if isinstance(rep, dict) and isinstance(rep.get("name"), str):
-        args = rep.get("arguments")
-        if isinstance(args, str):  # tolerate a JSON-string encoding, visibly
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = None
-        if isinstance(args, dict):
-            replacement = ProposedCall(name=rep["name"], arguments=args)
-    if replacement is None:
-        reasons.append("response_schema:replacement")
+        return EditProposal(**base, status="invalid", justification=justification, rejection_reasons=["response_schema:edit_turn"])
+    turn = next((t for t in turns if t.turn_index == turn_index), None)
+    turn_calls = tool_calls_of(turn.assistant_message) if turn is not None else []
     return EditProposal(
         **base,
-        status="invalid" if reasons else "proposed",
+        status="proposed",
         turn_index=turn_index,
-        tool_call_id=call_id,
-        replacement=replacement,
+        tool_call_id=turn_calls[0].get("id") if len(turn_calls) == 1 else None,
+        replacement=ProposedCall(name=name[len(EDIT_TOOL_PREFIX):], arguments=args),
         justification=justification,
-        rejection_reasons=reasons,
     )
 
 
@@ -780,6 +800,7 @@ class LLMEditor(_EditorBase):
                 "assistant_text_policy": assistant_text_policy,
             },
             "proposals_per_source": proposals_per_source,
+            "answer": "tool_call",
         }
         self.editor_id = editor_identity(mode, checkpoint_id, self.prompt_sha256, self.decoding)
 
@@ -813,11 +834,16 @@ class LLMEditor(_EditorBase):
             assistant_text_policy=self.assistant_text_policy,
         )
         proposal_id = proposal_id or stable_id("prop", self.editor_id, source.episode_id, proposal_index)
+        common = dict(proposal_id=proposal_id, source_episode_id=source.episode_id, instance_id=instance.instance_id, editor_id=self.editor_id)
+        editable = editable_turns(view)
+        if not editable:  # nothing the editor could change: no request is made
+            return EditProposal(**common, status="abstained", rejection_reasons=["skipped:no_editable_turns"])
         messages = self.request_messages(view)
+        answer_tools = editor_tools(tools, editable)
         if seed is None:
             seed = derive_seed(self.root_seed, "editor_proposal", self.editor_id, source.episode_id, proposal_index)
-        # The editor answers in JSON text; it gets no tools (it executes nothing).
-        decision = await self.policy.decide(messages, [], seed)
+        # The editor answers with one of its answer tools; nothing it calls is executed.
+        decision = await self.policy.decide(messages, answer_tools, seed)
         raw = {
             "request_messages": messages,
             "seed": seed,
@@ -828,19 +854,16 @@ class LLMEditor(_EditorBase):
             "request_error": decision.request_error,
             "infra_error": decision.infra_error,
         }
-        common = dict(proposal_id=proposal_id, source_episode_id=source.episode_id, instance_id=instance.instance_id, editor_id=self.editor_id)
         if decision.infra_error or decision.request_error:
             err = f"editor_infra_error:{decision.infra_error}" if decision.infra_error else f"editor_request_error:{decision.request_error}"
             return EditProposal(**common, status="invalid", rejection_reasons=[err], raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
-        text = decision.history_message.get("content") or ""
-        try:
-            obj = parse_editor_response(text if isinstance(text, str) else json.dumps(text))
-        except (ValueError, json.JSONDecodeError) as e:
-            reasons = [f"unparseable_response:{e}"]
-            if decision.finish_reason == "length":
-                reasons.append("editor_output_truncated")
-            return EditProposal(**common, status="invalid", rejection_reasons=reasons, raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
-        proposal = proposal_from_response(obj, **common).model_copy(update={"raw_response": raw, "usage": decision.usage, "duration_sec": decision.latency_sec})
+        server_errors = ((decision.raw_response or {}).get("learning_loop") or {}).get("parse_errors") or []
+        proposal = proposal_from_tool_calls(decision.history_message, turns, parse_errors=[*decision.parse_errors, *server_errors], **common)
+        if proposal.status == "invalid" and decision.finish_reason == "length":
+            proposal = proposal.model_copy(update={"rejection_reasons": [*proposal.rejection_reasons, "editor_output_truncated"]})
+        proposal = proposal.model_copy(update={"raw_response": raw, "usage": decision.usage, "duration_sec": decision.latency_sec})
+        if proposal.status != "proposed":
+            return proposal
         return self._validate(proposal, turns, tools, instruction, source, system_prompt)
 
 
@@ -906,14 +929,22 @@ class ScriptedEditor(_EditorBase):
         e = self._entry(source, instance)
         if e is None:
             return EditProposal(**common, status="abstained", justification="no scripted proposal", usage=no_model)
-        obj = {k: v for k, v in e.items() if k not in ("instance_id", "family", "attempt_index")}
-        obj.setdefault("decision", "edit")
-        obj.setdefault("source_trajectory_id", source.episode_id)
-        if obj["decision"] == "edit" and "tool_call_id" not in obj:
-            turn = next((t for t in turns if t.turn_index == obj.get("turn_index")), None)
-            calls = tool_calls_of(turn.assistant_message) if turn else []
-            obj["tool_call_id"] = calls[0].get("id") if len(calls) == 1 else None
-        proposal = proposal_from_response(obj, **common).model_copy(update={"raw_response": {"scripted_entry": e, "script": str(self.path)}, "usage": no_model})
+        # The scripted entry becomes the editor's answer tool call, parsed like a model's.
+        just = {EDIT_JUSTIFICATION: e["justification"]} if isinstance(e.get("justification"), str) else {}
+        if e.get("decision", "edit") == "abstain":
+            name, args = ABSTAIN_TOOL, just
+        else:
+            rep = e.get("replacement") or {}
+            name = EDIT_TOOL_PREFIX + str(rep.get("name"))
+            args = {EDIT_TURN: e.get("turn_index"), **(rep.get("arguments") or {}), **just}
+        answer = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "scripted", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+        proposal = proposal_from_tool_calls(answer, turns, **common)
+        if "tool_call_id" in e:  # a script may name the replaced call explicitly (e.g. to test validation)
+            proposal = proposal.model_copy(update={"tool_call_id": e["tool_call_id"]})
+        proposal = proposal.model_copy(update={"raw_response": {"scripted_entry": e, "script": str(self.path)}, "usage": no_model})
+        if proposal.status != "proposed":
+            return proposal
         return self._validate(proposal, turns, tools, instruction, source, system_prompt)
 
 

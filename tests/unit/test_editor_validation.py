@@ -19,16 +19,16 @@ from learning_loop.editing.editor import (  # noqa: E402
     build_trajectory_view,
     extract_constants,
     hidden_path_references,
+    editor_tools,
     make_edited_message,
-    parse_editor_response,
-    proposal_from_response,
+    proposal_from_tool_calls,
     select_sources,
     validate_proposal,
 )
 from learning_loop.episodes.events import load_turns  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
-PROMPT = REPO / "prompts" / "editor" / "v1.md"
+PROMPT = REPO / "prompts" / "editor" / "v2.md"
 GOOD_CMD = vb.PIPELINE + " | awk '{print $2}' > /app/answer.txt"
 
 
@@ -161,7 +161,8 @@ def test_view_contains_only_declared_data(tmp_path):
     summary, turns = source(tmp_path, overrides={1: {"reasoning": "hmm"}})
     summary = summary.model_copy(update={"trial_dir": "/secret/trial", "reward": {"reward": 1.0, "hidden_detail": 3.0}})
     view = build_trajectory_view(turns, vb.INSTRUCTION, vb.TOOLS, outcome=summary, source_trajectory_id="src-ep", system_prompt=vb.SYSTEM)
-    assert set(view) == {"view_version", "source_trajectory_id", "instruction", "system_prompt", "tools", "turns", "later_observations_included", "outcome"}
+    assert set(view) == {"view_version", "source_trajectory_id", "instruction", "system_prompt", "tools", "turns", "editable_turns",
+                         "later_observations_included", "outcome"}
     blob = json.dumps(view)
     assert "/secret/trial" not in blob and "events.jsonl" not in blob and "hidden_detail" not in blob
     assert set(view["outcome"]) == {"success", "partial_reward", "total_tokens", "n_requests", "n_tool_calls"}
@@ -170,6 +171,7 @@ def test_view_contains_only_declared_data(tmp_path):
     assert t0["eligible"] is True
     assert view["turns"][1]["eligible"] is False and "nonempty_reasoning" in view["turns"][1]["ineligible_reasons"]
     assert view["turns"][-1]["eligible"] is False  # final answer
+    assert view["editable_turns"] == [t["turn_index"] for t in view["turns"] if t["eligible"]] and 1 not in view["editable_turns"]
 
 
 def test_view_without_later_observations(tmp_path):
@@ -190,15 +192,42 @@ def test_edited_message_keeps_id_and_content(tmp_path):
     assert orig["tool_calls"][0]["function"]["arguments"] == '{"command":"ls /app/logs"}'  # original untouched
 
 
-def test_parse_editor_response_variants():
-    assert parse_editor_response('```json\n{"decision": "abstain"}\n```') == {"decision": "abstain"}
-    assert parse_editor_response('Sure: {"decision": "abstain", "justification": "x"} ok')["decision"] == "abstain"
-    with pytest.raises(ValueError):
-        parse_editor_response("no json here")
-    p = proposal_from_response({"decision": "maybe"}, proposal_id="p", source_episode_id="s", instance_id="i", editor_id="e")
-    assert p.status == "invalid"
-    p = proposal_from_response({"decision": "edit", "turn_index": 0, "tool_call_id": "c", "replacement": {"name": "bash"}}, proposal_id="p", source_episode_id="s", instance_id="i", editor_id="e")
-    assert p.status == "invalid" and "response_schema:replacement" in p.rejection_reasons
+def _answer(*calls):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": f"e{i}", "type": "function", "function": {"name": n, "arguments": a if isinstance(a, str) else json.dumps(a)}}
+        for i, (n, a) in enumerate(calls)]}
+
+
+def test_editor_tools_wrap_each_learner_tool():
+    tools = editor_tools(vb.TOOLS, [0, 2])
+    names = [t["function"]["name"] for t in tools]
+    assert names == [f"replace_with_{t['function']['name']}" for t in vb.TOOLS] + ["abstain"]
+    bash = next(t for t in tools if t["function"]["name"] == "replace_with_bash")["function"]["parameters"]
+    learner = next(t for t in vb.TOOLS if t["function"]["name"] == "bash")["function"]["parameters"]
+    assert bash["properties"]["edit_turn"] == {"type": "integer", "enum": [0, 2], "description": bash["properties"]["edit_turn"]["description"]}
+    assert set(learner["properties"]) < set(bash["properties"]) and bash["required"][0] == "edit_turn"
+    with pytest.raises(ValueError, match="reserve"):
+        editor_tools([{"type": "function", "function": {"name": "x", "parameters": {"type": "object", "properties": {"edit_turn": {}}}}}], [0])
+
+
+def test_proposal_from_tool_calls(tmp_path):
+    _, turns = source(tmp_path)
+    ids = dict(proposal_id="p", source_episode_id="s", instance_id="i", editor_id="e")
+    p = proposal_from_tool_calls(_answer(("replace_with_bash", {"edit_turn": 0, "command": "ls -la", "edit_justification": "j"})), turns, **ids)
+    assert (p.status, p.turn_index, p.tool_call_id, p.justification) == ("proposed", 0, "call_0", "j")
+    assert p.replacement == ProposedCall(name="bash", arguments={"command": "ls -la"})  # editor-only fields stripped
+    assert proposal_from_tool_calls(_answer(("abstain", {"edit_justification": "fine"})), turns, **ids).status == "abstained"
+    for msg, reason in [
+        ({"role": "assistant", "content": '{"decision": "edit"}'}, "no_tool_call"),
+        (_answer(("abstain", {}), ("abstain", {})), "multiple_tool_calls:2"),
+        (_answer(("rm_rf", {})), "unknown_editor_tool:rm_rf"),
+        (_answer(("replace_with_bash", {"command": "ls"})), "response_schema:edit_turn"),
+        (_answer(("replace_with_bash", "not json")), "response_schema:arguments"),
+    ]:
+        p = proposal_from_tool_calls(msg, turns, **ids)
+        assert p.status == "invalid" and p.rejection_reasons[0] == reason, (reason, p.rejection_reasons)
+    p = proposal_from_tool_calls({"role": "assistant", "content": "<|tool_call>call:x{"}, turns, parse_errors=["unterminated"], **ids)
+    assert p.rejection_reasons == ["no_tool_call", "unparsed_tool_call:unterminated"]
 
 
 def test_select_sources_only_successful_collection(tmp_path):
@@ -208,16 +237,16 @@ def test_select_sources_only_successful_collection(tmp_path):
 
 
 class FakePolicy:
-    def __init__(self, content: str, infra_error: str | None = None):
+    def __init__(self, answer: dict | str, infra_error: str | None = None):
         self.spec = PolicySpec(kind="openai", served_model_name="base", sampling=SamplingConfig(temperature=0.0, max_output_tokens=512))
-        self.content = content
+        self.answer = answer if isinstance(answer, dict) else {"role": "assistant", "content": answer}
         self.infra_error = infra_error
         self.calls = []
 
     async def decide(self, messages, tools, seed):
         self.calls.append((messages, tools, seed))
         return PolicyDecision(
-            raw_request={}, raw_response={"id": "r"}, history_message={"role": "assistant", "content": self.content},
+            raw_request={}, raw_response={"id": "r"}, history_message=self.answer,
             finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5,
             infra_error=self.infra_error, seed_sent=seed,
         )
@@ -230,14 +259,15 @@ def _editor(policy, **kw):
 async def test_llm_editor_valid_proposal_and_identity(tmp_path):
     summary, turns = source(tmp_path)
     inst = vb.make_instance(tmp_path)
-    resp = json.dumps({"decision": "edit", "source_trajectory_id": "src-ep", "turn_index": 0, "tool_call_id": "call_0", "replacement": {"name": "bash", "arguments": {"command": GOOD_CMD}}, "justification": "one pipeline"})
+    resp = _answer(("replace_with_bash", {"edit_turn": 0, "command": GOOD_CMD, "edit_justification": "one pipeline"}))
     pol = FakePolicy(resp)
     ed = _editor(pol)
     p = await ed.propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
     assert p.status == "proposed" and p.rejection_reasons == [] and p.editor_id == ed.editor_id
     assert p.usage.input_tokens == 900
     messages, tools, seed = pol.calls[0]
-    assert tools == [] and messages[0]["content"] == PROMPT.read_text()
+    assert [t["function"]["name"] for t in tools] == [t["function"]["name"] for t in editor_tools(vb.TOOLS, [0])]
+    assert messages[0]["content"] == PROMPT.read_text()
     assert "one pipeline" not in json.dumps(messages)  # nothing editor-generated is fed back
     # identity: stable, and independent of the learner checkpoint that produced the source
     assert _editor(FakePolicy(resp)).editor_id == ed.editor_id
@@ -253,13 +283,13 @@ async def test_llm_editor_valid_proposal_and_identity(tmp_path):
 async def test_llm_editor_abstain_garbage_and_infra(tmp_path):
     summary, turns = source(tmp_path)
     inst = vb.make_instance(tmp_path)
-    p = await _editor(FakePolicy('{"decision": "abstain", "justification": "fine as is"}')).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS)
-    assert p.status == "abstained"
+    p = await _editor(FakePolicy(_answer(("abstain", {"edit_justification": "fine as is"})))).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS)
+    assert p.status == "abstained" and p.justification == "fine as is"
     p = await _editor(FakePolicy("I think turn 0 is fine")).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS)
-    assert p.status == "invalid" and p.rejection_reasons[0].startswith("unparseable_response")
+    assert p.status == "invalid" and p.rejection_reasons == ["no_tool_call"]
     p = await _editor(FakePolicy("", infra_error="connection refused")).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS)
     assert p.status == "invalid" and p.rejection_reasons == ["editor_infra_error:connection refused"]
-    hard = json.dumps({"decision": "edit", "turn_index": 0, "tool_call_id": "call_0", "replacement": {"name": "bash", "arguments": {"command": "echo 10.0.0.7 > /app/answer.txt"}}})
+    hard = _answer(("replace_with_bash", {"edit_turn": 0, "command": "echo 10.0.0.7 > /app/answer.txt", "edit_justification": "x"}))
     p = await _editor(FakePolicy(hard)).propose(summary, turns, inst, vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
     assert p.status == "invalid" and "ungrounded_constant:10.0.0.7" in p.rejection_reasons
 
@@ -298,7 +328,7 @@ async def test_make_editor_and_propose_for(tmp_path):
     scripted = make_editor(EditorConfig(mode="scripted", scripted_path=str(REPO / "tests/fixtures/verify/scripted_edits.yaml")), ckpt, None)
     p = await scripted.propose_for(proposal_id="prop-x", source=summary, source_dir=tmp_path / "item", instance=inst, seed=3)
     assert p.proposal_id == "prop-x" and p.status == "proposed", p.rejection_reasons
-    resp = json.dumps({"decision": "edit", "turn_index": 0, "tool_call_id": "call_0", "replacement": {"name": "bash", "arguments": {"command": GOOD_CMD}}})
+    resp = _answer(("replace_with_bash", {"edit_turn": 0, "command": GOOD_CMD, "edit_justification": "j"}))
     pol = FakePolicy(resp)
     llm = make_editor(EditorConfig(mode="initial_policy"), ckpt, None, policy=pol)
     p = await llm.propose_for(proposal_id="prop-y", source=summary, source_dir=tmp_path / "item", instance=inst, seed=42)
@@ -307,3 +337,10 @@ async def test_make_editor_and_propose_for(tmp_path):
     assert json.loads(pol.calls[0][0][1]["content"])["system_prompt"] == vb.SYSTEM
     # fixed editor identity: the same initial checkpoint gives the same id regardless of the learner
     assert make_editor(EditorConfig(mode="initial_policy"), ckpt, None, policy=FakePolicy(resp)).editor_id == llm.editor_id
+
+
+async def test_trajectory_without_editable_turns_is_not_sent(tmp_path):
+    summary, turns = source(tmp_path, overrides={i: {"content": "thinking aloud"} for i in range(len(vb.DEFAULT_TURNS))})
+    pol = FakePolicy(_answer(("abstain", {"edit_justification": "x"})))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS)
+    assert p.status == "abstained" and p.rejection_reasons == ["skipped:no_editable_turns"] and pol.calls == []

@@ -27,7 +27,7 @@ episode:
   max_output_chars: 8000
 editor:
   mode: initial_policy            # the fixed initial instruction-tuned policy
-  prompt: prompts/editor/v1.md
+  prompt: prompts/editor/v2.md
   sampling: {temperature: 0.0, max_output_tokens: 2048}
   proposals_per_source: 1
 verification:

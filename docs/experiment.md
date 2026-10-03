@@ -98,12 +98,17 @@ environment; prior attempts are preserved and failures remain in denominators.
 ## Editing
 
 The editor is a repository component (`src/learning_loop/editing/editor.py`, prompt
-`prompts/editor/v1.md`) with a pinned prompt hash, decoding settings and a proposal budget. It
+`prompts/editor/v2.md`) with a pinned prompt hash, decoding settings and a proposal budget. It
 sees only: the instruction, the learner's system prompt and tool schemas, the learner's turns as
-the learner saw them (including later observations), and optional scalar outcome metrics. It
-returns structured JSON naming the source trajectory, turn, tool-call id, replacement call and a
-justification (kept out of every student prompt). It cannot approve its own edit, change grading
-or budgets, or touch the source environment.
+the learner saw them (including later observations), which turns are editable, and optional
+scalar outcome metrics. It answers with exactly one tool call: `replace_with_<tool>` for a learner
+tool, whose parameters are that tool's own (the replacement call) plus `edit_turn` (restricted to
+the editable turns) and `edit_justification` (kept out of every student prompt), or `abstain`.
+The answer therefore passes through the serving stack's tool-call parser in the model's native
+format, so code and file contents in a replacement need no hand-written escaping; the replaced
+call's id is taken from the chosen turn. A trajectory with no editable turn is not sent to the
+editor (recorded as `skipped:no_editable_turns`). The editor cannot approve its own edit, change
+grading or budgets, or touch the source environment.
 
 Validation happens before execution. The initial, strict condition accepts only:
 
