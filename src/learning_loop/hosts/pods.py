@@ -41,7 +41,7 @@ from ..core.config import REPO_ROOT, HostRef, MachineProfile, RunpodConfig
 from ..core.storage import JsonlAppender, now_iso
 
 # Runpod's Cloudflare front end rejects urllib's default agent (error 1010).
-USER_AGENT = "learn-from-experience-loop/1"
+USER_AGENT = "learning-loop-loop/1"
 NO_FREE_GPU = "not enough free GPUs"  # Runpod's start error while the pod's host is fully used
 GPU_RETRY_MIN_SEC = 30.0
 KNOWN_HOSTS_DIR = REPO_ROOT / "artifacts" / "runpod"

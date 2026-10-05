@@ -8,13 +8,13 @@ docker_concurrency: 4                # parallel episodes; vLLM batches their req
 inference:
   mode: managed
   backend: vllm                      # hf_server with a vLLM generation engine (see docs/runpod.md)
-  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  host: {kind: runpod, pod: a100, workdir: /workspace/learning-loop}
   port: 8765                         # the run opens an SSH tunnel to the pod's loopback port
   device: cuda
   startup_timeout_sec: 1800          # every new pod downloads the model first
   request_concurrency: 4             # requests vLLM batches (vLLM --max-num-seqs)
 training:
-  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  host: {kind: runpod, pod: a100, workdir: /workspace/learning-loop}
   device: cuda
 runpod:
   api_key_env: RUNPOD_API_KEY        # read from .env / the environment on this machine only

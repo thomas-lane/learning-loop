@@ -125,7 +125,7 @@ def page(title: str, body: str, current: str, mermaid: bool = False, banner: str
     banner_html = f'<div class="banner">{banner}</div>' if banner else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)} - learn-from-experience docs</title>
+<title>{html.escape(title)} - learning-loop docs</title>
 <style>
 :root {{ --fg:#1f2328; --bg:#ffffff; --muted:#59636e; --line:#d1d9e0; --code:#f6f8fa; --link:#0969da; --warn:#fff8c5; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --fg:#e6edf3; --bg:#0d1117; --muted:#9198a1; --line:#3d444d;
@@ -158,7 +158,7 @@ th, td {{ border:1px solid var(--line); padding:6px 12px; vertical-align:top; }}
 th {{ background:var(--code); }}
 .banner {{ background:var(--warn); border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin-bottom:16px; }}
 </style></head>
-<body><nav><div class="title">learn-from-experience</div>{_nav(current)}<div class="path">{html.escape(current)}</div>{toc}</nav>
+<body><nav><div class="title">learning-loop</div>{_nav(current)}<div class="path">{html.escape(current)}</div>{toc}</nav>
 <main>{banner_html}{body}</main>{script}</body></html>"""
 
 

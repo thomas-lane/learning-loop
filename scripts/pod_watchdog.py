@@ -59,7 +59,7 @@ def _pod_action(env: dict[str, str], action: str) -> tuple[bool, str]:
     if not key:
         return False, f"{detail}; RUNPOD_API_KEY not available"
     url, method = (f"https://rest.runpod.io/v1/pods/{pod}/stop", "POST") if action == "stop" else (f"https://rest.runpod.io/v1/pods/{pod}", "DELETE")
-    req = urllib.request.Request(url, method=method, headers={"Authorization": f"Bearer {key}", "User-Agent": "learn-from-experience-watchdog/1"})
+    req = urllib.request.Request(url, method=method, headers={"Authorization": f"Bearer {key}", "User-Agent": "learning-loop-watchdog/1"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return 200 <= r.status < 300, f"rest {method} {r.status} (after {detail})"

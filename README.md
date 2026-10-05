@@ -1,4 +1,4 @@
-# Learn from Experience
+# Learning Loop
 
 Can an LLM agent learn from its own experience by updating its own weights? This repository runs
 one repeatable loop. Each pass is a **cycle**:

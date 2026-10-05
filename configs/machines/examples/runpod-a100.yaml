@@ -8,13 +8,13 @@ docker_concurrency: 1
 inference:
   mode: managed
   backend: hf_transformers           # learning_loop.serving.hf_server (Qwen3 and Gemma 4 profiles)
-  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  host: {kind: runpod, pod: a100, workdir: /workspace/learning-loop}
   port: 8765                         # the run opens an SSH tunnel to the pod's loopback port
   device: cuda
   startup_timeout_sec: 1800          # every new pod downloads the model first
   request_concurrency: 1
 training:
-  host: {kind: runpod, pod: a100, workdir: /workspace/learn-from-experience}
+  host: {kind: runpod, pod: a100, workdir: /workspace/learning-loop}
   device: cuda
 runpod:
   api_key_env: RUNPOD_API_KEY        # read from .env / the environment on this machine only

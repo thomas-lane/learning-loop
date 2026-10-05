@@ -10,7 +10,7 @@
 set -euo pipefail
 
 PERSIST="${PERSIST:-/workspace}"                      # survives pod restarts
-WORKDIR="${WORKDIR:-$PERSIST/learn-from-experience}"   # must equal the machine profile's workdir
+WORKDIR="${WORKDIR:-$PERSIST/learning-loop}"           # must equal the machine profile's workdir
 
 echo "== tools"
 need=()

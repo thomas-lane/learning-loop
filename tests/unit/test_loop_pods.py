@@ -193,8 +193,8 @@ def test_starts_prepares_watches_and_stops(api, tmp_path):
     kinds = [e[0] for e in FakeRemote.log]
     assert kinds.count("push_repo") == 1
     setup = [e for e in FakeRemote.log if e[0] == "ssh" and e[3]]  # setup script fed on stdin
-    assert setup and setup[0][1] == "/" and "WORKDIR=/workspace/learn-from-experience bash -s" in setup[0][2]
-    assert ("run", "/workspace/learn-from-experience", ["uv", "sync", "--frozen", "--extra", "train"]) in FakeRemote.log
+    assert setup and setup[0][1] == "/" and "WORKDIR=/workspace/learning-loop bash -s" in setup[0][2]
+    assert ("run", "/workspace/learning-loop", ["uv", "sync", "--frozen", "--extra", "train"]) in FakeRemote.log
     watchdog = [e for e in FakeRemote.log if e[0] == "detached"][0][2]
     assert watchdog[:2] == ["python3", "scripts/pod_watchdog.py"] and watchdog[3] == str(30 * 60)
     events = [json.loads(line)["event"] for line in (tmp_path / "logs" / "pod-lifecycle.jsonl").read_text().splitlines()]

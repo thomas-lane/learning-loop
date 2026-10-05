@@ -25,7 +25,7 @@ their docs where a step depends on it.
 
 ```text
 laptop (coordinator)                                  Runpod pod (GPU host)
-  uv run loop run ...                                   /workspace/learn-from-experience
+  uv run loop run ...                                   /workspace/learning-loop
   Runpod REST API: create / start / stop  ─────────>    (pod started, address looked up)
   Docker task + verifier containers   ── ssh / rsync ─>   model server (one per checkpoint)
   runs/<run-id>/ (all results, logs)  <─ rsync ───────    trainer (LoRA DPO), checkpoints
@@ -157,7 +157,7 @@ other pods in your account.
    `loop pod start`, use the address `loop pod status` prints, then `loop pod stop`:
 
    ```bash
-   ssh -p <port> root@<ip> 'cd /workspace/learn-from-experience && uv run --extra train pytest -m train tests/train -q'
+   ssh -p <port> root@<ip> 'cd /workspace/learning-loop && uv run --extra train pytest -m train tests/train -q'
    ```
 
 A stopped pod can restart only on the machine it was created on. While others use that machine's
