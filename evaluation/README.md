@@ -80,7 +80,7 @@ A family module defines `FAMILY = Family(name, version, cluster, skills, difficu
 | field | what it is |
 |---|---|
 | `instruction` | the learner-visible instruction (`instruction.md`) |
-| `files` | learner-visible files, keyed by path relative to `/app`; `modes` sets a file's mode (default 0644) |
+| `files` | learner-visible files, keyed by path relative to `/app`; `modes` sets a file's mode (default 0644), and `symlinks` adds links (`{path: target}`, which may dangle; Docker's `COPY` keeps them as links) |
 | `grader` | a grader kind with its hidden answer key (below) |
 | `oracle` | the reference `Solution` |
 | `shortcuts` | named wrong `Solution`s that must fail |

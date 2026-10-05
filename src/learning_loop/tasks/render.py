@@ -147,14 +147,17 @@ def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profil
 
 
 def _mtime_ns(path: str, rel: str, is_dir: bool) -> int:
-    """FIXED_MTIME plus a sub-second part derived from the content (files) or the path
-    relative to the task directory (directories). Docker's BuildKit sends a build context
+    """FIXED_MTIME plus a sub-second part derived from the content (files), the target
+    (symlinks) or the path relative to the task directory (directories). Docker's BuildKit sends a build context
     incrementally and skips a file whose path, size and mtime match a copy it already holds
     from an earlier build, even of another task; with one constant mtime, same-sized files
     that differ (e.g. two answer keys) would be built from the stale copy. Seconds stay at
     FIXED_MTIME, so `ls -l` is unchanged. The verifier's digest check (`tests_digest`) and the
     agent-side probe catch the remaining, astronomically unlikely, collisions."""
-    data = rel.encode() if is_dir else Path(path).read_bytes()
+    if os.path.islink(path):
+        data = b"L" + os.readlink(path).encode()
+    else:
+        data = rel.encode() if is_dir else Path(path).read_bytes()
     return FIXED_MTIME * 1_000_000_000 + int.from_bytes(hashlib.sha256(data).digest()[:8], "big") % 1_000_000_000
 
 
@@ -185,6 +188,12 @@ def render_generated(family: Family, difficulty: str, seed: int, gen: Generated,
         if rel.startswith("/") or ".." in Path(rel).parts:
             raise ValueError(f"{family.name}: file path {rel!r} must be relative to {WORKDIR}")
         _write(env / "files" / rel, content, spec.modes.get(rel, 0o644))
+    for rel, target in sorted(spec.symlinks.items()):
+        if rel.startswith("/") or ".." in Path(rel).parts or rel in spec.files:
+            raise ValueError(f"{family.name}: symlink path {rel!r} must be relative to {WORKDIR} and not also a file")
+        link = env / "files" / rel
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, link)
     _write(env / "Dockerfile", f"# {header}\nFROM {profile.base_image}\n{_env_lines(profile)}WORKDIR {WORKDIR}\nCOPY files/ {WORKDIR}/\n")
     _write(env / "docker-compose.yaml", _compose(profile))
 

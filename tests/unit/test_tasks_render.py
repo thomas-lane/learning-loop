@@ -176,3 +176,22 @@ def test_replay_contract_carries_the_agent_probe_with_the_app_digest(rendered):
     fam, d = rendered
     probe = load_state_spec(d).env_probe
     assert probe == PROFILES[fam.profile].probe_expectation() | {"app_digest": {"path": "/app", "sha256": tree_digest(str(d / "environment" / "files"))}}
+
+
+def test_symlinks_are_rendered_as_links_and_counted_in_the_app_digest(tmp_path):
+    from learning_loop.tasks.runtime.probe import tree_digest
+    from learning_loop.tasks.spec import ExactAnswer, Solution, TaskSpec
+
+    def build(ctx, links):
+        return TaskSpec(instruction="x", files={"data/a.txt": "1\n"}, symlinks=links, grader=ExactAnswer("/app/answer.txt", "1"),
+                        oracle=Solution("echo 1 > /app/answer.txt\n", lambda f: {"/app/answer.txt": "1\n"}))
+
+    digests = []
+    for i, links in enumerate(({"data/cur": "a.txt", "data/old": "../missing.txt"}, {"data/cur": "a.txt", "data/old": "../other.txt"})):
+        fam = Family(name="links", version=1, cluster="fixture", skills=(), difficulties={"easy": {}}, build=lambda ctx, links=links: build(ctx, links))
+        d = tmp_path / f"t{i}"
+        render(fam, "easy", 1, d)
+        files = d / "environment" / "files" / "data"
+        assert (files / "old").is_symlink() and not (files / "old").exists() and (files / "cur").read_text() == "1\n"
+        digests.append(tree_digest(str(d / "environment" / "files")))
+    assert digests[0] != digests[1]  # the link target is learner-visible state

@@ -234,6 +234,7 @@ class TaskSpec:
     oracle: Solution
     shortcuts: Mapping[str, Solution] = field(default_factory=dict)
     modes: Mapping[str, int] = field(default_factory=dict)  # file modes (relative to /app); others are 0o644
+    symlinks: Mapping[str, str] = field(default_factory=dict)  # symlinks (relative to /app) -> target text, which may dangle
     params: Mapping[str, Any] = field(default_factory=dict)  # recorded in task.toml (params_json)
 
 
