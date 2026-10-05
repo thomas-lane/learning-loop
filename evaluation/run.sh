@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Convenience wrapper: run from anywhere, extra args go to `harbor run`.
-#   evaluation/run.sh                         # all tasks, config defaults
-#   evaluation/run.sh -p evaluation/tasks/log-triage -k 3   # one task, 3 attempts
+# Convenience wrapper: run from anywhere, extra args go to `harbor run`. Render tasks first:
+#   uv run loop render-tasks evaluation/splits/pilot.yaml --panel dev   # -> evaluation/rendered/
+#   evaluation/run.sh                         # every rendered task, config defaults
+#   evaluation/run.sh -p evaluation/rendered/log-triage__easy__s101 -k 3   # one task, 3 attempts
 #   evaluation/run.sh -m some/other-model --ak api_base=http://gpu-box:8000/v1
 # The agent imports `evaluation.*` and `learning_loop` (src/), so both go on PYTHONPATH.
 # Prefers the project's virtualenv Harbor (same pinned version) when it exists.

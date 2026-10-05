@@ -167,6 +167,18 @@ def cmd_preflight(a: argparse.Namespace) -> int:
     return preflight_main(["--profile", a.model_profile, *([] if a.trainable else ["--no-train"])])
 
 
+def cmd_render_tasks(a: argparse.Namespace) -> int:
+    from .tasks.instances import load_splits, materialize, validate_splits
+
+    splits = load_splits(a.splits)
+    instances = materialize(splits, repo_path(a.out), panels=a.panel or None, ids=a.id or None)
+    for note in validate_splits(splits, instances):
+        print(f"note: {note}", file=sys.stderr)
+    for iid, inst in instances.items():
+        print(f"{iid}\t{inst.task_dir}")
+    return 0
+
+
 def cmd_submit(a: argparse.Namespace) -> int:
     from .hosts.remote_jobs import submit
 
@@ -361,6 +373,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--n-tasks", type=int, help="evaluate only the first N tasks of the dataset")
     s.add_argument("--task", action="append", help="explicit task subset (repeatable)")
     s.add_argument("--execute", action="store_true", help="launch Harbor instead of printing the command")
+
+    s = _cmd(sub, "render-tasks", cmd_render_tasks, "Render a split's task instances into Harbor task directories",
+             "Renders every instance of the split file (or only the given panels and ids) into OUT/<id>, one\n"
+             "Harbor task directory each, exactly as a run materializes them, and validates the split. An\n"
+             "existing instance directory is reused when its family version is current and refused otherwise.\n"
+             "Point `harbor run -p OUT` at the result to run tasks outside the loop.")
+    s.add_argument("splits", help="split file, e.g. evaluation/splits/pilot.yaml")
+    s.add_argument("--out", default="evaluation/rendered", help="output directory (default evaluation/rendered)")
+    s.add_argument("--panel", action="append", help="render only this panel's instances (repeatable)")
+    s.add_argument("--id", action="append", help="render only this instance id (repeatable)")
 
     # --- checks ------------------------------------------------------------- #
     s = _cmd(sub, "smoke", cmd_smoke, "Run a bounded smoke test",

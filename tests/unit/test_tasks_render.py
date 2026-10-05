@@ -47,9 +47,9 @@ def test_render_is_deterministic_in_bytes_modes_and_mtimes(tmp_path, module, dif
     assert sha256_tree(tmp_path / "a") != sha256_tree(tmp_path / "c")
     for p in _all_paths(tmp_path / "a"):
         st = p.lstat()
-        assert st.st_mtime == FIXED_MTIME, p
-        twin = tmp_path / "b" / p.relative_to(tmp_path / "a")
-        assert stat.S_IMODE(st.st_mode) == stat.S_IMODE(twin.lstat().st_mode), p
+        assert int(st.st_mtime) == FIXED_MTIME, p
+        twin = (tmp_path / "b" / p.relative_to(tmp_path / "a")).lstat()
+        assert stat.S_IMODE(st.st_mode) == stat.S_IMODE(twin.st_mode) and st.st_mtime_ns == twin.st_mtime_ns, p
 
 
 def test_images_are_pinned_with_fixed_env_and_no_run(rendered):
@@ -98,7 +98,7 @@ def test_task_toml_is_valid_harbor_config_with_the_replay_contract(rendered):
     meta = tomllib.loads((d / "task.toml").read_text())["metadata"]
     assert meta["generator"] == fam.generator_id and meta["generator_seed"] == 3 and meta["network"] == "none"
     params = json.loads(meta["params_json"])
-    assert {"nop_reward", "draws", "shortcut_rewards"} <= set(params)
+    assert {"oracle_reward", "nop_reward", "draws", "shortcut_rewards"} <= set(params)
     spec = load_state_spec(d)
     assert spec.restore == RestoreCapability.DETERMINISTIC_REPLAY and spec.fingerprint_paths == ["/app"]
     assert ("local_fixture" in meta) == fam.local_fixture
@@ -148,3 +148,22 @@ def test_local_fixture_backend_grades_with_the_rendered_shared_grader(tmp_path):
     assert backend._grade(d, meta, _Session(work))[0] == {"reward": 0.0}
     os.unlink(work / "app" / "answer.txt")
     assert backend._grade(d, meta, _Session(work))[0] == {"reward": 0.0}
+
+
+def test_verifier_env_carries_the_digest_of_the_grader_files(rendered):
+    from learning_loop.tasks.runtime.grade import TESTS_DIGEST_ENV, tests_digest
+
+    fam, d = rendered
+    cfg = TaskConfig.model_validate_toml((d / "task.toml").read_text())
+    assert cfg.verifier.env == {TESTS_DIGEST_ENV: tests_digest(str(d / "tests"))}
+
+
+def test_same_size_files_with_different_content_get_different_mtimes(tmp_path):
+    # BuildKit skips re-sending a context file whose path, size and mtime it has seen before
+    fam = fixture_family("sum_numbers")
+    render(fam, "easy", 1, tmp_path / "a")
+    render(fam, "easy", 2, tmp_path / "b")
+    ka, kb = (tmp_path / x / "tests" / "key.json" for x in "ab")
+    if ka.read_bytes() != kb.read_bytes():
+        assert ka.stat().st_mtime_ns != kb.stat().st_mtime_ns
+    assert int(ka.stat().st_mtime) == FIXED_MTIME

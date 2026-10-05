@@ -9,7 +9,10 @@ host to grade each instance's oracle, shortcut and no-op outputs with the same c
 `--root` is the directory that stands for the container's `/` (artifacts are read from
 `<root>/<path>`); `--key` defaults to `key.json` next to this file; `--probe` runs
 `probe.py` (also next to this file) first and refuses to grade when the environment
-violates the expectation. The grader writes exactly one key, `reward`, in [0, 1].
+violates the expectation. When `LL_TESTS_SHA256` is set (the renderer puts it in task.toml's
+`[verifier] env`, which reaches the container without passing through the image build), the
+grader also refuses unless `tests_digest` of its own directory matches, so a verifier image
+built from stale files never grades. The grader writes exactly one key, `reward`, in [0, 1].
 
 Grader kinds (the `kind` field of the key):
 
@@ -28,6 +31,7 @@ Every `nobody` process is killed before the reward is written.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -45,10 +49,22 @@ CHILD_TIMEOUT_SEC = 30
 MARKER = "@@CHECK_OBSERVATIONS@@ "
 EXIT_PROBE_FAILED = 3
 EXIT_GRADER_ERROR = 4
+EXIT_STALE_FILES = 5
+TESTS_DIGEST_ENV = "LL_TESTS_SHA256"
+TESTS_DIGEST_FILES = ("grade.py", "key.json", "probe.py")
 
 
 class GraderError(Exception):
     """The grader cannot produce a trustworthy reward; no reward is written."""
+
+
+def tests_digest(directory):
+    """sha256 over the grader's own files (names and contents), in a fixed order."""
+    h = hashlib.sha256()
+    for name in TESTS_DIGEST_FILES:
+        with open(os.path.join(directory, name), "rb") as f:
+            h.update(name.encode() + b"\0" + hashlib.sha256(f.read()).hexdigest().encode() + b"\n")
+    return h.hexdigest()
 
 
 def read_artifact(root, path):
@@ -262,6 +278,12 @@ def _observe_isolated(key, read, key_dir, log):
         return {}
 
 
+def run_checks(lib, checks):
+    """Check name -> passed for `lib` (a dict of our own functions), in this process, with
+    the same observe/judge round trip the verifier uses. Generation-time only."""
+    return judge(checks, json.loads(json.dumps(observe(lib, _inputs(checks)))))
+
+
 def _observe_trusted(key, read):
     """Generation-time only: our own reference/buggy sources, run in-process."""
     source = read(key["path"])
@@ -327,6 +349,13 @@ def main(argv=None):
     ap.add_argument("--key", default=os.path.join(here, "key.json"))
     ap.add_argument("--probe", default=None, help="JSON expectation; grade only if the environment matches it")
     a = ap.parse_args(argv)
+    want = os.environ.get(TESTS_DIGEST_ENV)
+    if want is not None and tests_digest(here) != want:
+        remove_reward_files(os.path.dirname(a.out) or ".")
+        print("verifier files differ from the rendered task (stale image build); not grading")
+        return EXIT_STALE_FILES
+    if want is not None:
+        print("verifier files match the rendered task")
     if a.probe is not None:
         sys.path.insert(0, here)
         import probe

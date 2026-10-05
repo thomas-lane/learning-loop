@@ -41,7 +41,7 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 | Episode loop, replay, stop reasons | `episodes/episode.py`, `episodes/events.py` |
 | Policies (OpenAI-compatible, scripted fixture) | `episodes/policy.py` |
 | Environments, fingerprints, backends | `episodes/envs/`, `episodes/fingerprint.py`, `episodes/backends.py` |
-| Tasks, generators, splits | `tasks/instances.py`, `evaluation/generators/`, `evaluation/splits/` |
+| Task families, splits | `evaluation/families/`, `evaluation/splits/`, `tasks/instances.py` |
 | Task specs, generation checks, rendering, shared grader, probe | `tasks/spec.py`, `tasks/generate.py`, `tasks/render.py`, `tasks/runtime/` |
 | Editor, verification, preferences | `editing/editor.py`, `editing/verify.py`, `editing/preferences.py` |
 | Training, rendering, token counts | `training/`, `editing/token_count.py` |
@@ -57,8 +57,8 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 tests/unit/          default suite (`uv run pytest`): no Docker, no model downloads, seconds
   test_core_*        contracts: seeds, config validation, storage, usage arithmetic
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
-  test_tasks_*       generators, split validation, task specs: generation checks, rendering, shared grader,
-                     environment probe, family lint (fixture families in tests/fixtures/tasks/)
+  test_tasks_*       families (determinism, traps), split validation, generation checks, rendering, shared
+                     grader, environment probe, family lint (fixture families in tests/fixtures/tasks/)
   test_editor_*      editor view, answer tools, validation, grounding
   test_verify_*      branch specs, costs, acceptance, end-to-end on the local fixture environment
   test_prefs_*       preference construction, exports, buffer
@@ -94,11 +94,18 @@ have failed before it.
   held-out families; prompts contain only messages before the intervened turn; editor
   justifications and verification evidence live in companion records, never in `prompt/chosen/rejected`.
 - **Hidden grading stays hidden**: tasks use Harbor's separate verifier with explicit artifact
-  transfer; graders that execute agent code (fix-stats) run it as an unprivileged child that
+  transfer; the `checks` grader, the only one that executes agent code, runs it as an unprivileged child that
   cannot read `/tests` or write `/logs/verifier`, and the parent judges its raw outputs. The host
   agent never writes through the container-writable `/logs/agent` mount except via a
   symlink-refusing copy. The editor sees only the instruction, the learner's system prompt and tool
   schemas, the learner's turns with their tool outputs, and scalar outcomes.
+- **Task environments are rendered and checked**: task directories are written only by
+  `tasks/render.py` from a family's spec (pinned base, no `RUN`, fixed `ENV`, hostname and file
+  times, `network_mode: none` for agent and verifier, answer key only in `tests/`); generation
+  grades each instance's oracle, shortcut and no-op models with the shared grader and redraws
+  until the oracle passes and the rest fail; the verifier grades only after its probe and its
+  `LL_TESTS_SHA256` digest check pass; families draw randomness only from `ctx.rng`; the
+  per-family Docker test checks every model against the real scripts.
 - **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
   mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
 - **Acceptance** (`strict_all_success_v1`): valid replay, the fixed action ran without tool error or
@@ -152,7 +159,7 @@ update that file instead of repeating the information elsewhere:
 | components, module responsibilities, process/machine roles, data flow, isolation boundaries, identities, extension points, repository folders | `docs/architecture.md` |
 | files or directories a run writes, their names, formats or mutability, run kinds | `docs/run-layout.md` |
 | the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
-| tasks, generators, splits, the agent, grading, the replay contract | `evaluation/README.md` |
+| task families, the task spec and renderer, environment guarantees, splits, the agent, grading, the replay contract | `evaluation/README.md` |
 | development commands, test layout, integrity invariants, this policy | `AGENTS.md` |
 
 Rules:

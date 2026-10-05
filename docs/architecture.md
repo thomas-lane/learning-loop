@@ -101,11 +101,9 @@ scripts/                      GPU host setup (setup_gpu_host.sh), pod idle watch
 .env.example                  template for the git-ignored .env
 evaluation/                   everything Harbor-facing (see evaluation/README.md)
   agents/                       ToolAgent, tools, system prompt
-  tasks/                        hand-written tasks
-  generators/                   instance generators per family
+  families/                     task families: one module each, build(ctx) -> TaskSpec
   splits/                       split files: instances and panels
-  scripts/                      task data helpers
-  configs/, run.sh              plain `harbor run` workflow
+  configs/, run.sh              plain `harbor run` workflow on tasks from `loop render-tasks`
 src/learning_loop/            the loop (module map below)
 tests/                        unit/, integration/ (-m docker), train/ (-m train), fixtures/
 runs/                         run directories (git-ignored)
@@ -256,7 +254,7 @@ How the containers are separated is in
 
 | Object | Identity |
 |---|---|
-| Task instance | `family/difficulty/sSEED` or `family/static` (from the split file), plus hashes of the task directory and of its learner-visible inputs; the second lets split validation reject the same content in two splits |
+| Task instance | `family/difficulty/sSEED` (from the split file), plus hashes of the task directory and of its learner-visible inputs; the second lets split validation reject the same content in two splits |
 | Base checkpoint | `base:<profile>@<rev12>` (first 12 characters of the pinned revision) |
 | Trained checkpoint | `cNNN-<hash12>` over run, cycle, dataset hash, incoming checkpoint, training config, seed, trainer |
 | Editor | hash of mode, checkpoint, prompt SHA-256, decoding settings |
@@ -276,7 +274,7 @@ checkpoint is evaluated on the same seeds.
 
 | To add | Implement | Notes |
 |---|---|---|
-| A task family | `evaluation/generators/<family>.py`, added to `GENERATORS` in `evaluation/generators/__init__.py` and referenced in a split file | follow `evaluation/README.md` |
+| A task family | `evaluation/families/<family>.py` (`FAMILY = Family(...)` with `build(ctx) -> TaskSpec`), added to `FAMILIES` in `evaluation/families/__init__.py` and referenced in a split file | follow `evaluation/README.md` |
 | An environment type | an `EnvironmentSession` and an `EpisodeBackend` (`core/interfaces.py`) | set the session's `capabilities.restore` to `deterministic_replay` only if a fresh session plus the replayed prefix reproduces the state; branch episodes stop before the intervention on any other value |
 | A trainer | the `Trainer` interface (`core/interfaces.py`), a `training.trainer` value and its dispatch in `training/run.py` | continue the incoming adapter, use it as the DPO reference and publish through `training/common.py` (the coordinator checks parent and reference); add `-m train` tests |
 | A serving backend | a `serving` entry in the model profile + its launch command in `serving/lifecycle.py`, or a generation engine behind `hf_server` | declare `adapter_formats`; learning runs require `peft_lora`, the format the trainer writes. An engine behind `hf_server` keeps rendering, parsing and token counting unchanged, so it only needs an equivalence check like `serving/equivalence.py` that its generations match |

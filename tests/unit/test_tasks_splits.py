@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -14,7 +13,6 @@ from learning_loop.tasks.instances import (
     assert_exportable,
     load_splits,
     materialize,
-    public_content_hash,
     validate_splits,
 )
 
@@ -101,24 +99,22 @@ def test_rejects_unknown_panel_instance_and_generator_problems(tmp_path):
 
 
 def test_rejects_identical_content_across_splits(tmp_path):
-    # two static tasks with byte-identical learner-visible content, in different splits
-    for name in ("t1", "t2"):
-        shutil.copytree(REPO_ROOT / "evaluation" / "tasks" / "log-triage", tmp_path / name)
-    (tmp_path / "t2" / "tests" / "test.sh").write_text("#!/bin/bash\necho 0 > /logs/verifier/reward.txt\n")  # hidden part differs
-    assert public_content_hash(tmp_path / "t1") == public_content_hash(tmp_path / "t2")
-    body = f"""
+    # different seeds can still produce the same learner-visible task; that must not cross splits
+    body = """
 instances:
-  - {{id: x, family: log-triage, static: {tmp_path / 't1'}, split: train}}
-  - {{id: y, family: log-triage, static: {tmp_path / 't2'}, split: dev}}
+  - {id: x, family: count-errors, difficulty: easy, seed: 1, split: train}
+  - {id: y, family: count-errors, difficulty: easy, seed: 2, split: dev}
 panels:
-  train: {{split: train, instances: [x]}}
-  dev: {{split: dev, instances: [y]}}
+  train: {split: train, instances: [x]}
+  dev: {split: dev, instances: [y]}
 """
     s = load_splits(_write(tmp_path, body))
     inst = materialize(s, tmp_path / "mat")
-    assert inst["x"].content_hash != inst["y"].content_hash
+    assert inst["x"].public_content_hash != inst["y"].public_content_hash
+    validate_splits(s, inst)
+    same = {"x": inst["x"], "y": inst["y"].model_copy(update={"public_content_hash": inst["x"].public_content_hash})}
     with pytest.raises(SplitValidationError, match="identical learner-visible content in different splits"):
-        validate_splits(s, inst)
+        validate_splits(s, same)
 
 
 def test_export_boundary():

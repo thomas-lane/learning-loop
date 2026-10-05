@@ -250,12 +250,18 @@ async def test_stub_core_counts_from_events_or_unavailable(tmp_path, instance):
 # --------------------------------------------------------------------------- #
 
 
-def test_network_caveat_recorded_for_public_network_replay(instance):
-    spec = load_state_spec(Path(instance.task_dir))
-    assert NETWORK_CAVEAT in spec.caveats
-    toml = Path(instance.task_dir) / "task.toml"
+def test_network_caveat_only_without_network_isolation(instance):
+    d = Path(instance.task_dir)
+    assert load_state_spec(d).caveats == []  # rendered: network_mode none for agent and verifier
+    overlay = d / "tests" / "docker-compose.yaml"
+    text = overlay.read_text()
+    overlay.unlink()
+    assert NETWORK_CAVEAT in load_state_spec(d).caveats
+    overlay.write_text(text.replace('network_mode: "none"', 'network_mode: "bridge"'))
+    assert NETWORK_CAVEAT in load_state_spec(d).caveats
+    toml = d / "task.toml"
     toml.write_text(toml.read_text().replace("memory_mb = 1024", 'memory_mb = 1024\nnetwork_mode = "no-network"', 1))
-    assert load_state_spec(Path(instance.task_dir)).caveats == []
+    assert load_state_spec(d).caveats == []
 
 
 async def test_image_identity_recorded_and_carried_into_replay_spec(tmp_path, instance):
@@ -272,18 +278,15 @@ async def test_image_identity_recorded_and_carried_into_replay_spec(tmp_path, in
 
 
 def test_task_dockerfiles_pin_base_images_by_digest(tmp_path):
-    from evaluation.generators import GENERATORS, generate
-    from learning_loop.core.config import REPO_ROOT
+    from evaluation.families import FAMILIES
     from learning_loop.episodes.envs.base import build_inputs_identity
+    from learning_loop.tasks.render import render
 
-    dirs = [REPO_ROOT / "evaluation/tasks/fix-stats", REPO_ROOT / "evaluation/tasks/log-triage"]
-    for fam in GENERATORS:
-        generate(fam, "easy", 1, tmp_path / fam)
-        dirs.append(tmp_path / fam)
-    for d in dirs:
+    for name, fam in FAMILIES.items():
+        render(fam, "easy", 1, tmp_path / name)
         for sub in ("environment", "tests"):
-            ident = build_inputs_identity("harbor_docker", d / sub)
-            assert ident["base_pinned"] is True and all("@sha256:" in b for b in ident["base_images"]), (d, sub, ident)
+            ident = build_inputs_identity("harbor_docker", tmp_path / name / sub)
+            assert ident["base_pinned"] is True and all("@sha256:" in b for b in ident["base_images"]), (name, sub, ident)
 
 
 # --------------------------------------------------------------------------- #

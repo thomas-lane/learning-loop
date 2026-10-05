@@ -19,4 +19,4 @@ agents:
       # extra_body: {top_k: 40, min_p: 0.05}   # passed straight through to the server
 
 datasets:
-  - path: evaluation/tasks   # every subdirectory with a task.toml is a task
+  - path: evaluation/rendered   # from `loop render-tasks`; every subdirectory with a task.toml is a task

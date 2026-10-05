@@ -9,16 +9,15 @@ Split files (`evaluation/splits/*.yaml`) are authored by hand:
       log-triage: {skills: [shell, logs]}    # optional default skills per family
     instances:
       - {id: log-triage/easy/s1, family: log-triage, difficulty: easy, seed: 1, split: train}
-      - {id: log-triage/static, family: log-triage, static: evaluation/tasks/log-triage, split: dev}
     panels:
       train: {split: train, instances: [log-triage/easy/s1]}
 
 Every instance is declared once, with exactly one split. A panel is a named
 list of instances of one split (an instance may appear in several panels of
-its split). Generated instances come from `evaluation/generators` (family,
-difficulty, seed); static instances are copied from a task directory.
+its split). An instance is (family, difficulty, seed); its task directory is
+rendered from the family in `evaluation/families` by `tasks.render`.
 
-`materialize()` writes instance task dirs and returns content-hashed
+`materialize()` renders instance task dirs and returns content-hashed
 `TaskInstance` records. `validate_splits()` rejects: an instance id declared
 twice or with two splits, a panel mixing splits, held-out families in any
 train panel/split, the same generator coordinates under two ids, and identical
@@ -36,7 +35,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.config import REPO_ROOT, repo_path
 from ..core.interfaces import StateSpec
@@ -61,22 +60,13 @@ class InstanceDef(_Strict):
     instance_id: str = Field(alias="id")
     family: str
     split: Split
-    difficulty: str | None = None
-    seed: int | None = None  # generator seed (generated instances)
-    static: str | None = None  # task dir (static instances), relative to the repo root
+    difficulty: str
+    seed: int  # generation seed
     skills: list[str] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def _check(self) -> "InstanceDef":
-        if (self.static is None) == (self.seed is None):
-            raise ValueError(f"{self.instance_id}: give exactly one of `seed` (generated) or `static` (task dir)")
-        if self.static is None and self.difficulty is None:
-            raise ValueError(f"{self.instance_id}: generated instances need a difficulty")
-        return self
-
     @property
-    def generator_key(self) -> tuple[str, str | None, int | None, str | None]:
-        return (self.family, self.difficulty, self.seed, self.static)
+    def generator_key(self) -> tuple[str, str, int]:
+        return (self.family, self.difficulty, self.seed)
 
 
 class Panel(_Strict):
@@ -154,7 +144,7 @@ def load_splits(path: str | Path) -> Splits:
 
 
 def structural_errors(splits: Splits) -> list[str]:
-    from evaluation.generators import GENERATORS
+    from evaluation.families import FAMILIES
 
     errs: list[str] = []
     for name, panel in splits.panels.items():
@@ -166,14 +156,11 @@ def structural_errors(splits: Splits) -> list[str]:
     for inst in splits.instances.values():
         if inst.split == Split.TRAIN and inst.family in splits.held_out_families:
             errs.append(f"held-out family {inst.family!r} has a train-split instance {inst.instance_id!r}")
-        if inst.static is None:
-            gen = GENERATORS.get(inst.family)
-            if gen is None:
-                errs.append(f"{inst.instance_id}: no generator for family {inst.family!r}")
-            elif inst.difficulty not in gen.DIFFICULTIES:
-                errs.append(f"{inst.instance_id}: unknown difficulty {inst.difficulty!r} for {inst.family}")
-        elif not repo_path(inst.static).joinpath("task.toml").exists():
-            errs.append(f"{inst.instance_id}: static task dir {inst.static!r} has no task.toml")
+        fam = FAMILIES.get(inst.family)
+        if fam is None:
+            errs.append(f"{inst.instance_id}: unknown family {inst.family!r}")
+        elif inst.difficulty not in fam.difficulties:
+            errs.append(f"{inst.instance_id}: unknown difficulty {inst.difficulty!r} for {inst.family}")
     seen: dict[tuple[Any, ...], str] = {}
     for inst in splits.instances.values():
         key = inst.generator_key
@@ -196,15 +183,27 @@ def read_task_toml(task_dir: Path) -> dict[str, Any]:
 NETWORK_CAVEAT = "network: public (unmodeled)"
 
 
+def network_isolated(task_dir: Path) -> bool:
+    """Whether the rendered compose overlays give both the agent container
+    (`environment/`) and the separate verifier (`tests/`) `network_mode: none`."""
+    for sub in ("environment", "tests"):
+        compose = Path(task_dir) / sub / "docker-compose.yaml"
+        if not compose.is_file():
+            return False
+        main = ((yaml.safe_load(compose.read_text()) or {}).get("services") or {}).get("main") or {}
+        if main.get("network_mode") != "none":
+            return False
+    return True
+
+
 def load_state_spec(task_dir: Path) -> StateSpec:
     """The task's `[metadata.learning_loop]` replay contract (NONE when absent).
 
-    Deterministic replay should run without network access, but Harbor 0.23.0's
-    Docker backend rejects `network_mode = "no-network"` on hosts whose kernel
-    lacks its egress-control support (Docker Desktop on this Mac; see
-    evaluation/README.md). Such tasks run with the public network, and the spec
-    records that as the caveat `NETWORK_CAVEAT` (it travels with every plan into
-    `episode_start`) instead of claiming isolation."""
+    Deterministic replay must not depend on the network. Rendered tasks block it with
+    a `network_mode: none` compose overlay for both containers (`network_isolated`).
+    A replayable task without that overlay (and without Harbor's `no-network`) records
+    the caveat `NETWORK_CAVEAT`, which travels with every plan into `episode_start`,
+    instead of claiming isolation."""
     toml = read_task_toml(task_dir)
     meta = toml.get("metadata", {}).get("learning_loop")
     if meta is None:
@@ -213,7 +212,7 @@ def load_state_spec(task_dir: Path) -> StateSpec:
     if spec.restore == RestoreCapability.DETERMINISTIC_REPLAY and not spec.fingerprint_paths:
         raise ValueError(f"{task_dir}: deterministic replay requires fingerprint_paths")
     network = (toml.get("environment") or {}).get("network_mode", "public")
-    if spec.restore == RestoreCapability.DETERMINISTIC_REPLAY and network != "no-network":
+    if spec.restore == RestoreCapability.DETERMINISTIC_REPLAY and network != "no-network" and not network_isolated(task_dir):
         caveat = NETWORK_CAVEAT if network == "public" else f"network: {network} (unmodeled)"
         if caveat not in spec.caveats:
             spec.caveats.append(caveat)
@@ -242,34 +241,31 @@ def _instance_dir_name(inst: InstanceDef) -> str:
 
 
 def materialize_instance(splits: Splits, inst: InstanceDef, dest_root: Path) -> TaskInstance:
-    from evaluation.generators import generate, generator_id
+    from evaluation.families import FAMILIES
 
+    from .render import render
+
+    fam = FAMILIES[inst.family]
     dest = Path(dest_root) / _instance_dir_name(inst)
     tmp = dest.with_name(dest.name + ".tmp")
     params: dict[str, Any] = {}
     if not dest.exists():
         if tmp.exists():
             shutil.rmtree(tmp)
-        if inst.static is not None:
-            shutil.copytree(repo_path(inst.static), tmp, ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"))
-        else:
-            generate(inst.family, inst.difficulty or "", inst.seed or 0, tmp)
+        render(fam, inst.difficulty, inst.seed, tmp)
         tmp.rename(dest)
     toml = read_task_toml(dest)
     meta = toml.get("metadata", {})
     if "params_json" in meta:
         params = json.loads(meta["params_json"])
     spec = load_state_spec(dest)
-    gen = None
-    if inst.static is None:
-        gen = generator_id(inst.family)
-        if meta.get("generator") != gen:
-            raise SplitValidationError(f"{dest}: generated by {meta.get('generator')!r}, current generator is {gen!r}; use a fresh directory")
-    difficulty = inst.difficulty or meta.get("difficulty")
+    gen = fam.generator_id
+    if meta.get("generator") != gen:
+        raise SplitValidationError(f"{dest}: rendered by {meta.get('generator')!r}, current family is {gen!r}; use a fresh directory")
     return TaskInstance(
         instance_id=inst.instance_id,
         family=inst.family,
-        difficulty=difficulty,
+        difficulty=inst.difficulty,
         skills=splits.skills_for(inst) or list(meta.get("skills", [])),
         generator=gen,
         generator_seed=inst.seed,

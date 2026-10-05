@@ -5,9 +5,13 @@
 | Term | Meaning |
 |---|---|
 | **Harbor** | The external framework that runs a task: it starts the task's container, lets an agent act in it, then grades the declared artifacts in a separate verifier container ([evaluation/README.md](../evaluation/README.md)). |
-| **Family** | A kind of task with its own generator in `evaluation/generators/`, e.g. `log-triage`. |
-| **Difficulty** | One of a generator's parameter sets: `easy`, `medium` or `hard`. |
-| **Task instance** | One concrete Harbor task, id `family/difficulty/sSEED` (generated) or `family/static` (hand-written). |
+| **Family** | A kind of task whose instances are drawn from a seed, defined by one module in `evaluation/families/` (`FAMILY = Family(...)` with `build(ctx) -> TaskSpec`), e.g. `log-triage`. Families are grouped into clusters of similar skills (`Family.cluster`). |
+| **Difficulty** | One of a family's parameter sets: `easy`, `medium` or `hard`. |
+| **Task instance** | One concrete Harbor task, id `family/difficulty/sSEED`: the directory the renderer writes for that family, difficulty and seed. |
+| **Task spec** | What a family's `build` returns (`TaskSpec` in `src/learning_loop/tasks/spec.py`): instruction, learner-visible files, grader with its hidden answer key, oracle and shortcuts. The renderer turns it into the task directory. |
+| **Oracle / shortcut** | The reference solution of a task / a declared wrong method that must fail on every instance. Each is a `Solution` with a `shell` form that runs in the container and a `model` that predicts, in Python, the artifacts the shell form writes. |
+| **Profile** | The container environment of a family (`PROFILES` in `spec.py`): pinned base image, environment variables, hostname, required tools, resources and allowed processes. |
+| **Environment probe** | `src/learning_loop/tasks/runtime/probe.py`: checks that a running container matches its profile (no network, environment variables, hostname, tools, processes). The verifier writes no reward when it fails. |
 | **Skill** | A family tag (e.g. `gzip`) used only to group reports. |
 | **Split** | An instance's single purpose, set in its split file: `train` (training data), `dev` (evaluated every cycle), or `final`/`external` (evaluated only with `loop evaluate --final`, once method choices are frozen). |
 | **Panel** | A named list of same-split instances in a split file (`evaluation/splits/*.yaml`). Experiments name panels (`tasks.collection_panel`, `evaluation.dev_panels`, `evaluation.final_panels`), not splits. |

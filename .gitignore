@@ -11,6 +11,7 @@ runs/
 artifacts/
 .engines/
 evaluation/jobs/
+evaluation/rendered/
 *.safetensors
 *.gguf
 

@@ -129,3 +129,55 @@ def test_main_writes_no_reward_on_grader_error(tmp_path):
 def test_a_checks_key_without_checks_is_an_error():
     with pytest.raises(g.GraderError, match="at least one check"):
         g.grade(CHECKS | {"checks": []}, reader({}), trusted=True)
+
+
+def test_judge_rejects_every_forged_observation_shape():
+    checks = [
+        {"name": "v", "func": "mean", "kind": "value", "args": [[1, 2]], "expected": 1.5},
+        {"name": "r", "func": "mean", "kind": "raises", "args": [[]]},
+        {"name": "m", "func": "median", "kind": "no_mutation", "args": [[3, 1, 2]]},
+    ]
+    good = {"v": {"value": 1.5}, "r": {"raised": "ValueError", "value_error": True}, "m": {"after": [3, 1, 2]}}
+    assert g.judge(checks, good) == {"v": True, "r": True, "m": True}
+    forged = [
+        {"v": {"value": True}, "r": {"raised": "X", "value_error": 1}, "m": {"after": [1, 2, 3]}},
+        {"v": {"value": "1.5"}, "r": {"raised": "X", "value_error": "true"}, "m": {"after": [3, 1, 2], "x": 1}},
+        {"v": {"value": 1.5, "ok": True}, "r": {"returned": True}, "m": None},
+        {"v": True, "r": True, "m": True},
+        {"v": {"value": float("nan")}},
+        [],
+        "all passed",
+    ]
+    for obs in forged:
+        assert not any(g.judge(checks, obs).values()), obs
+
+
+def test_observe_reports_plain_values_not_objects():
+    class AlwaysEqual(float):
+        __hash__ = float.__hash__
+
+        def __eq__(self, other):
+            return True
+
+    class NotANumber:
+        def __eq__(self, other):
+            return True
+
+    lib = {"mean": lambda xs: AlwaysEqual(0), "median": lambda xs: NotANumber()}
+    checks = [{"name": "a", "func": "mean", "kind": "value", "args": [[1, 2]]}, {"name": "b", "func": "median", "kind": "value", "args": [[1]]}]
+    obs = json.loads(json.dumps(g.observe(lib, checks)))
+    assert obs == {"a": {"value": 0.0}, "b": {"value": None}}
+    assert g.judge([{**checks[0], "expected": 1.5}, {**checks[1], "expected": 1}], obs) == {"a": False, "b": False}
+
+
+def test_main_refuses_files_that_differ_from_the_rendered_digest(tmp_path, monkeypatch):
+    key, out = _task(tmp_path, {"kind": "exact", "path": "/app/answer.txt", "expected": "7"}, "7\n")
+    here = Path(g.__file__).parent
+    monkeypatch.setattr(g, "__file__", str(key.parent / "grade.py"))
+    for name in ("grade.py", "probe.py"):
+        (key.parent / name).write_bytes((here / name).read_bytes())
+    monkeypatch.setenv(g.TESTS_DIGEST_ENV, g.tests_digest(str(key.parent)))
+    args = ["--root", str(tmp_path), "--key", str(key), "--out", str(out)]
+    assert g.main(args) == 0 and json.loads(out.read_text()) == {"reward": 1.0}
+    key.write_text(json.dumps({"kind": "exact", "path": "/app/answer.txt", "expected": "8"}))  # a stale/other key
+    assert g.main(args) == g.EXIT_STALE_FILES and not out.exists()

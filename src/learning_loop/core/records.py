@@ -54,9 +54,9 @@ class TaskInstance(Record):
 
     instance_id: str  # stable, human-readable, e.g. "log-triage/easy/s3"
     family: str
-    difficulty: str | None = None  # easy | medium | hard | None (static task)
+    difficulty: str | None = None  # easy | medium | hard; None for a task directory not rendered from a split
     skills: list[str] = Field(default_factory=list)
-    generator: str | None = None  # generator name/version, None for static tasks
+    generator: str | None = None  # family@vN that rendered the task; None when not rendered from a split
     generator_seed: int | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     task_dir: str  # path of the Harbor task directory

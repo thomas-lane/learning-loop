@@ -16,14 +16,15 @@ construction rather than by convention:
 
 Because no image runs RUN, the hash of the build context (which contains the pinned FROM)
 identifies the image exactly. Every rendered file and directory gets the mtime
-`FIXED_MTIME`; Docker's COPY keeps it, so `ls -l` and `stat` show the same times on any
-host and on every re-render. Harbor appends a task's `docker-compose.yaml` after its own
+`FIXED_MTIME` (plus a sub-second part derived from its content, see `_mtime_ns`); Docker's
+COPY keeps it, so `ls -l` and `stat` show the same times on any host and on every re-render. Harbor appends a task's `docker-compose.yaml` after its own
 compose files, for the agent container (context `environment/`) and for the separate
 verifier (context `tests/`), which is how both get `network_mode: none`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .generate import Generated, describe, generate_spec
+from .runtime.grade import TESTS_DIGEST_ENV, tests_digest
 from .spec import PROFILES, WORKDIR, Family, Profile
 
 FIXED_MTIME = 1767225600  # 2026-01-01T00:00:00Z
@@ -82,7 +84,7 @@ def _compose(profile: Profile) -> str:
     )
 
 
-def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profile: Profile) -> str:
+def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profile: Profile, tests_sha256: str) -> str:
     params = dict(gen.spec.params) | describe(gen)
     lines = [
         f"# {_header(family, difficulty, seed)}",
@@ -128,6 +130,8 @@ def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profil
         "[verifier]",
         f"timeout_sec = {family.verifier_timeout_sec}",
         'environment_mode = "separate"',
+        "# Checked by tests/grade.py inside the verifier: it refuses to grade files from a stale build.",
+        f"env = {_toml({TESTS_DIGEST_ENV: tests_sha256})}",
         "",
         "[environment]",
         "build_timeout_sec = 300.0",
@@ -138,11 +142,26 @@ def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profil
     return "\n".join(lines)
 
 
+def _mtime_ns(path: str, rel: str, is_dir: bool) -> int:
+    """FIXED_MTIME plus a sub-second part derived from the content (files) or the path
+    relative to the task directory (directories). Docker's BuildKit sends a build context
+    incrementally and skips a file whose path, size and mtime match a copy it already holds
+    from an earlier build, even of another task; with one constant mtime, same-sized files
+    that differ (e.g. two answer keys) would be built from the stale copy. Seconds stay at
+    FIXED_MTIME, so `ls -l` is unchanged. The verifier's digest check (`tests_digest`) and the
+    agent-side probe catch the remaining, astronomically unlikely, collisions."""
+    data = rel.encode() if is_dir else Path(path).read_bytes()
+    return FIXED_MTIME * 1_000_000_000 + int.from_bytes(hashlib.sha256(data).digest()[:8], "big") % 1_000_000_000
+
+
 def _fix_mtimes(root: Path) -> None:
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
-        for name in filenames + dirnames:
-            os.utime(os.path.join(dirpath, name), (FIXED_MTIME, FIXED_MTIME), follow_symlinks=False)
-    os.utime(root, (FIXED_MTIME, FIXED_MTIME))
+        for name, is_dir in [(f, False) for f in filenames] + [(d, True) for d in dirnames]:
+            path = os.path.join(dirpath, name)
+            t = _mtime_ns(path, os.path.relpath(path, root), is_dir)
+            os.utime(path, ns=(t, t), follow_symlinks=False)
+    t = _mtime_ns(str(root), ".", True)
+    os.utime(root, ns=(t, t))
 
 
 def render_generated(family: Family, difficulty: str, seed: int, gen: Generated, out_dir: Path) -> dict[str, Any]:
@@ -182,7 +201,7 @@ def render_generated(family: Family, difficulty: str, seed: int, gen: Generated,
     for name, sol in sorted(spec.shortcuts.items()):
         _write(out_dir / "solution" / "shortcuts" / f"{name}.sh", "#!/bin/bash\n" + sol.shell, 0o755)
     _write(out_dir / "instruction.md", spec.instruction)
-    _write(out_dir / "task.toml", task_toml(family, difficulty, seed, gen, profile))
+    _write(out_dir / "task.toml", task_toml(family, difficulty, seed, gen, profile, tests_digest(str(tests))))
     _fix_mtimes(out_dir)
     return dict(spec.params) | describe(gen)
 

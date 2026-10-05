@@ -86,6 +86,7 @@ uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
 | [`loop compare`](#loop-compare) | Paired comparison of runs on shared panels |
 | [`loop dashboard`](#loop-dashboard) | Watch runs live in a local web dashboard |
 | [`loop external-eval`](#loop-external-eval) | Evaluate a checkpoint on a version-pinned Harbor dataset |
+| [`loop render-tasks`](#loop-render-tasks) | Render a split's task instances into Harbor task directories |
 | [`loop smoke`](#loop-smoke) | Run a bounded smoke test |
 | [`loop preflight`](#loop-preflight) | Check the local environment for the smoke test |
 | [`loop docs-gen`](#loop-docs-gen) | Regenerate or check the generated documentation |
@@ -328,6 +329,26 @@ checkpoint yourself first. Results are never read by the learning loop.
 | `--n-tasks` `N_TASKS` |  |  | evaluate only the first N tasks of the dataset |
 | `--task` `TASK` ... |  |  | explicit task subset (repeatable) |
 | `--execute` |  |  | launch Harbor instead of printing the command |
+
+### loop render-tasks
+
+Render a split's task instances into Harbor task directories.
+
+```text
+loop render-tasks [-h] [--out OUT] [--panel PANEL] [--id ID] splits
+```
+
+Renders every instance of the split file (or only the given panels and ids) into `OUT/<id>`, one
+Harbor task directory each, exactly as a run materializes them, and validates the split. An
+existing instance directory is reused when its family version is current and refused otherwise.
+Point `harbor run -p OUT` at the result to run tasks outside the loop.
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `splits` | yes |  | split file, e.g. evaluation/splits/pilot.yaml |
+| `--out` `OUT` |  | `evaluation/rendered` | output directory (default evaluation/rendered) |
+| `--panel` `PANEL` ... |  |  | render only this panel's instances (repeatable) |
+| `--id` `ID` ... |  |  | render only this instance id (repeatable) |
 
 ### loop smoke
 

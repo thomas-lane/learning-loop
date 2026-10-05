@@ -2,8 +2,9 @@
 completions endpoint (llama.cpp's llama-server, vLLM, SGLang, ...).
 
 Run it with:
+    uv run loop render-tasks evaluation/splits/pilot.yaml --panel dev   # tasks -> evaluation/rendered/
     evaluation/run.sh                     # uses configs/local-llama.yaml
-    harbor run -p evaluation/tasks -a evaluation.agents.tool_agent:ToolAgent \
+    harbor run -p evaluation/rendered -a evaluation.agents.tool_agent:ToolAgent \
         -m <model-id> --ak api_base=http://localhost:8080/v1
 
 Where it runs: this class runs in the Harbor process on the *host*. Only tool

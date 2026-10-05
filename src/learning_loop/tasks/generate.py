@@ -6,7 +6,8 @@ Python predictions with the same grader code the verifier runs (`runtime/grade.p
 - the oracle's predicted artifacts reach the success threshold (otherwise the family is
   wrong: `GenerationError`);
 - every shortcut's predicted artifacts stay below it, and so does doing nothing (the
-  initial files as they are). The no-op reward is recorded as `nop_reward`.
+  initial files as they are). The predicted rewards are recorded (`oracle_reward`,
+  `nop_reward`, `shortcut_rewards`) for the family's Docker test to compare against.
 
 A family signals an unusable draw (a tied answer, a shortcut that happens to be right) by
 raising `Reject`, from `build` or from a solution model; a shortcut or no-op that reaches
@@ -36,6 +37,7 @@ class GenerationError(RuntimeError):
 class Generated:
     spec: TaskSpec
     draws: int
+    oracle_reward: float
     nop_reward: float
     shortcut_rewards: dict[str, float]
 
@@ -66,8 +68,8 @@ def grade_in_process(spec: TaskSpec, files: Files, artifacts: Artifacts | None) 
     return reward
 
 
-def check_spec(family: Family, spec: TaskSpec) -> tuple[float, dict[str, float]]:
-    """(nop reward, shortcut rewards). Raises Reject for a bad draw, GenerationError for a bad family."""
+def check_spec(family: Family, spec: TaskSpec) -> tuple[float, float, dict[str, float]]:
+    """(oracle reward, nop reward, shortcut rewards). Raises Reject for a bad draw, GenerationError for a bad family."""
     files = file_bytes(spec)
     threshold = family.success_threshold
     for path in spec.grader.artifacts:
@@ -84,7 +86,7 @@ def check_spec(family: Family, spec: TaskSpec) -> tuple[float, dict[str, float]]
         shortcuts[name] = grade_in_process(spec, files, sol.model(files))
         if shortcuts[name] >= threshold:
             raise Reject(f"shortcut {name!r} reaches the success threshold")
-    return nop, shortcuts
+    return oracle, nop, shortcuts
 
 
 def generate_spec(family: Family, difficulty: str, seed: int) -> Generated:
@@ -96,13 +98,13 @@ def generate_spec(family: Family, difficulty: str, seed: int) -> Generated:
         ctx = GenContext(family=family.name, difficulty=difficulty, seed=seed, params=family.difficulties[difficulty], rng=rng)
         try:
             spec = family.build(ctx)
-            nop, shortcuts = check_spec(family, spec)
+            oracle, nop, shortcuts = check_spec(family, spec)
         except Reject as e:
             last = e
             continue
-        return Generated(spec=spec, draws=draw, nop_reward=nop, shortcut_rewards=shortcuts)
+        return Generated(spec=spec, draws=draw, oracle_reward=oracle, nop_reward=nop, shortcut_rewards=shortcuts)
     raise GenerationError(f"{family.name}/{difficulty}/seed {seed}: no valid instance in {MAX_DRAWS} draws (last: {last})")
 
 
 def describe(generated: Generated) -> dict[str, Any]:
-    return {"draws": generated.draws, "nop_reward": round(generated.nop_reward, 6), "shortcut_rewards": {k: round(v, 6) for k, v in generated.shortcut_rewards.items()}}
+    return {"draws": generated.draws, "oracle_reward": round(generated.oracle_reward, 6), "nop_reward": round(generated.nop_reward, 6), "shortcut_rewards": {k: round(v, 6) for k, v in generated.shortcut_rewards.items()}}
