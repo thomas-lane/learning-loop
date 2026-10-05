@@ -8,10 +8,15 @@ directory from it. Nothing else writes task files.
 
 Paths: `TaskSpec.files` keys are relative to the working directory `/app`; grader paths and
 the artifacts a `Solution.model` returns are absolute container paths.
+
+A model returns the files the solution leaves behind that differ from the initial files:
+{absolute path: content}, where content is text, bytes, `FileState(content, mode)`, or None
+for a file the solution deleted (or moved away).
 """
 
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -19,7 +24,17 @@ from typing import Any, Callable, Mapping
 WORKDIR = "/app"
 
 Files = Mapping[str, bytes]  # path relative to /app -> content
-Artifacts = Mapping[str, "str | bytes"]  # absolute container path -> content
+
+
+@dataclass(frozen=True)
+class FileState:
+    """A file a solution model predicts, with its mode (e.g. 0o640)."""
+
+    content: str | bytes
+    mode: int
+
+
+Artifacts = Mapping[str, "str | bytes | FileState | None"]  # absolute container path -> content; None = deleted
 
 
 @dataclass(frozen=True)
@@ -113,14 +128,17 @@ class NumericAnswer:
 
 
 @dataclass(frozen=True)
-class JsonAnswer:
-    """The JSON value in `path` equals `expected` (object key order ignored)."""
+class ParsedAnswer:
+    """`path` parsed as `format` equals `expected`: "json", "toml" (object key order ignored),
+    "dotenv" (KEY=VALUE lines into a dict; duplicate keys fail), "lines" (non-empty stripped
+    lines, in order) or "line-set" (the same, sorted)."""
 
     path: str
+    format: str
     expected: Any
 
     def key(self) -> dict[str, Any]:
-        return {"kind": "json", "path": self.path, "expected": self.expected}
+        return {"kind": "parsed", "path": self.path, "format": self.format, "expected": self.expected}
 
     @property
     def artifacts(self) -> list[str]:
@@ -128,10 +146,37 @@ class JsonAnswer:
 
 
 @dataclass(frozen=True)
+class FileTree:
+    """The regular files under the directory `root` are exactly `expected`:
+    {relative path: {"sha256": hex, optional "mode": "0644"}}. Reward = correct entries /
+    (expected + unexpected entries). Build `expected` with `tree_entry`."""
+
+    root: str
+    expected: Mapping[str, Mapping[str, str]]
+
+    def key(self) -> dict[str, Any]:
+        return {"kind": "tree", "root": self.root, "expected": {k: dict(v) for k, v in self.expected.items()}}
+
+    @property
+    def artifacts(self) -> list[str]:
+        return [self.root]
+
+
+def tree_entry(content: str | bytes, mode: int | None = None) -> dict[str, str]:
+    data = content.encode() if isinstance(content, str) else content
+    entry = {"sha256": hashlib.sha256(data).hexdigest()}
+    if mode is not None:
+        entry["mode"] = f"{mode:04o}"
+    return entry
+
+
+@dataclass(frozen=True)
 class Checks:
     """Call functions of the Python module at `path` (importable as `module`) with hidden
     inputs; the reward is the fraction of checks passed. Each check is
-    `{"name", "func", "kind": "value"|"raises"|"no_mutation", "args", "expected"?, "abs_tol"?}`."""
+    `{"name", "func", "kind", "args", ...}` with kind `value` (number; "expected", optional
+    "abs_tol"), `equal` (JSON-equal "expected"), `raises` (optional "exception" class name,
+    default any ValueError) or `no_mutation` (the first argument is unchanged)."""
 
     path: str
     module: str
@@ -145,7 +190,28 @@ class Checks:
         return [self.path]
 
 
-Grader = ExactAnswer | NumericAnswer | JsonAnswer | Checks
+@dataclass(frozen=True)
+class Commands:
+    """Run commands against the agent's programs: the artifacts `files` (absolute /app paths)
+    are copied to the same paths relative to a scratch directory, and each check
+    `{"name", "argv", optional "stdin", "inputs" {rel: text}, "stdout", "exit", "outputs" {rel: text}}`
+    runs `argv` there; the given stdout (trailing newlines ignored), exit code and output files
+    must match. Reward = fraction of checks passed."""
+
+    files: tuple[str, ...]
+    checks: tuple[Mapping[str, Any], ...]
+    timeout_sec: float = 10.0
+
+    def key(self) -> dict[str, Any]:
+        return {"kind": "commands", "files": list(self.files), "checks": [dict(c) for c in self.checks], "timeout_sec": self.timeout_sec, "workdir": WORKDIR}
+
+    @property
+    def artifacts(self) -> list[str]:
+        return list(self.files)
+
+
+Grader = ExactAnswer | NumericAnswer | ParsedAnswer | FileTree | Checks | Commands
+LOCAL_FIXTURE_GRADERS = (ExactAnswer, NumericAnswer, ParsedAnswer)  # read one file; no agent code, no directories
 
 
 @dataclass(frozen=True)
@@ -167,7 +233,7 @@ class TaskSpec:
     grader: Grader
     oracle: Solution
     shortcuts: Mapping[str, Solution] = field(default_factory=dict)
-    executables: frozenset[str] = frozenset()  # files (relative to /app) rendered with mode 0755
+    modes: Mapping[str, int] = field(default_factory=dict)  # file modes (relative to /app); others are 0o644
     params: Mapping[str, Any] = field(default_factory=dict)  # recorded in task.toml (params_json)
 
 
@@ -194,7 +260,7 @@ class Family:
     agent_timeout_sec: float = 300.0
     verifier_timeout_sec: float = 60.0
     success_threshold: float = 1.0
-    local_fixture: bool = False  # also runnable on the local fixture backend (exact/numeric/json graders only)
+    local_fixture: bool = False  # also runnable on the local fixture backend (LOCAL_FIXTURE_GRADERS only)
 
     @property
     def generator_id(self) -> str:

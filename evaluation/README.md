@@ -80,15 +80,26 @@ A family module defines `FAMILY = Family(name, version, cluster, skills, difficu
 | field | what it is |
 |---|---|
 | `instruction` | the learner-visible instruction (`instruction.md`) |
-| `files` | learner-visible files, keyed by path relative to `/app` |
-| `grader` | a grader kind with its hidden answer key: `ExactAnswer`, `NumericAnswer`, `JsonAnswer` or `Checks` |
+| `files` | learner-visible files, keyed by path relative to `/app`; `modes` sets a file's mode (default 0644) |
+| `grader` | a grader kind with its hidden answer key (below) |
 | `oracle` | the reference `Solution` |
 | `shortcuts` | named wrong `Solution`s that must fail |
 | `params` | values recorded in `task.toml` (`params_json`), outside the agent's container |
 
+| grader kind | reward |
+|---|---|
+| `ExactAnswer(path, expected)` | 1 if the stripped text of `path` equals `expected` |
+| `NumericAnswer(path, expected, abs_tol, rel_tol)` | 1 if the number in `path` is within tolerance |
+| `ParsedAnswer(path, format, expected)` | 1 if `path` parsed as `json`, `toml`, `dotenv` (KEY=VALUE, duplicates fail), `lines` or `line-set` equals `expected` |
+| `FileTree(root, expected)` | the regular files under `root` against `{relative path: tree_entry(content, mode)}`: correct entries / (expected + unexpected entries) |
+| `Checks(path, module, checks)` | fraction of calls into the agent's Python module that pass: `value` (a number), `equal` (JSON-equal), `raises` (optionally a named exception), `no_mutation` |
+| `Commands(files, checks)` | fraction of commands run against the agent's programs (copied from `files` into a scratch directory with each check's input files) whose stdout, exit code and output files match |
+
 A `Solution` has two forms. `shell` is a script that runs in the container: the oracle becomes
 Harbor's `solution/solve.sh`, and the shortcuts go to `solution/shortcuts/`. `model` is a Python
-function that predicts, from the task's files, the artifacts that script writes. The model lets
+function that predicts, from the task's files, the files that script leaves behind:
+`{absolute path: content}`, where content is text, bytes, `FileState(content, mode)`, or `None`
+for a file the script deleted or moved away. The model lets
 every instance be checked in milliseconds without Docker; the family's Docker test checks that
 each model is right about its script. csv-revenue writes both forms from one Python source, so
 they cannot drift apart.
@@ -190,20 +201,23 @@ CLI, make, patch, jq or curl.
   file with `O_EXCL | O_NOFOLLOW`. It writes only the `reward` key: Harbor averages each key
   across trials and counts a key missing from a trial as 0.
 
-Agent-written code never runs in the process that writes the reward. Only the `checks` grader
-(fix-stats) executes agent code (`src/learning_loop/tasks/runtime/grade.py`):
+Agent-written code never runs in the process that writes the reward. Only the `checks` and
+`commands` graders execute agent code (`src/learning_loop/tasks/runtime/grade.py`):
 
-- it makes the key's directory mode 0700 and runs a copy of the artifact in a child
-  `python3 -I -B` process as `nobody`, which therefore cannot read the expected values;
+- they make the key's directory mode 0700 and run copies of the artifacts as `nobody`, which
+  therefore cannot read the expected values: `checks` in a child `python3 -I -B` process,
+  `commands` in a scratch directory per check, with a fixed environment and a timeout;
 - the child gets only the check inputs and prints raw observations as JSON on one marker line;
   the grader accepts only plain JSON numbers and literal booleans for known checks, so an object
   whose `__eq__` always returns true fails its check, and a second observation line fails all
   checks;
-- it kills every `nobody` process before writing, so a reward from an `atexit` hook or forked
+- `commands` compares only the stdout, exit code and output files each check names;
+- they kill every `nobody` process before writing, so a reward from an `atexit` hook or forked
   daemon never counts (`test_forged_fix_stats_artifact_does_not_score`).
 
-Outside a root-owned container (e.g. on the local fixture backend) the `checks` grader refuses to
-run and writes no reward, which is why the renderer rejects local-fixture families that use it.
+Outside a root-owned container (e.g. on the local fixture backend) these graders refuse to run
+and write no reward. The local fixture backend also copies only single regular files, so the
+renderer allows local-fixture families only `ExactAnswer`, `NumericAnswer` and `ParsedAnswer`.
 
 ## The agent (`agents/tool_agent.py`)
 
@@ -334,7 +348,10 @@ A **split file** declares every instance once (id, family, difficulty, seed and 
 duplicate ids, panels mixing splits, held-out families in train panels or the train split, the
 same (family, difficulty, seed) under two ids, unknown families or difficulties, and identical
 learner-visible content (`instruction.md` plus `environment/`) in different splits. The content
-check exists because different seeds can still produce the same task. In `pilot.yaml`,
+check exists because different seeds can still produce the same task. Seeds 900000-999999 are
+reserved for calibrating a family's difficulty against a model (`CALIBRATION_SEEDS` in
+`tasks/instances.py`), so no split may use them: tuning a family never looks at an instance that
+is later trained on or evaluated. In `pilot.yaml`,
 `csv-revenue` is held out and appears only in the `final-held-out-family` panel.
 
 ## Adding a family

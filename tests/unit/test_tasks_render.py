@@ -22,7 +22,7 @@ from learning_loop.tasks.instances import load_state_spec
 from learning_loop.tasks.render import FIXED_MTIME, RUNTIME_DIR, render
 from learning_loop.tasks.spec import PROFILES, Family
 
-CASES = [("sum_numbers", "easy"), ("sum_numbers", "hard"), ("fix_add", "easy")]
+CASES = [("sum_numbers", "easy"), ("sum_numbers", "hard"), ("fix_add", "easy"), ("copy_private", "easy"), ("upper_tool", "easy")]
 
 
 @pytest.fixture(params=CASES, ids=[f"{m}-{d}" for m, d in CASES])
@@ -94,7 +94,8 @@ def test_task_toml_is_valid_harbor_config_with_the_replay_contract(rendered):
     cfg = TaskConfig.model_validate_toml((d / "task.toml").read_text())
     assert cfg.verifier.environment_mode.value == "separate"
     key = json.loads((d / "tests" / "key.json").read_text())
-    assert [str(a) if isinstance(a, str) else a for a in cfg.artifacts] == [key["path"]]
+    expected_artifacts = {"tree": lambda k: [k["root"]], "commands": lambda k: k["files"]}.get(key["kind"], lambda k: [k["path"]])(key)
+    assert [str(a) if isinstance(a, str) else a for a in cfg.artifacts] == expected_artifacts
     meta = tomllib.loads((d / "task.toml").read_text())["metadata"]
     assert meta["generator"] == fam.generator_id and meta["generator_seed"] == 3 and meta["network"] == "none"
     params = json.loads(meta["params_json"])

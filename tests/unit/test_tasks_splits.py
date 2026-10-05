@@ -125,3 +125,8 @@ def test_export_boundary():
             assert_exportable(s, bad)
     with pytest.raises(SplitValidationError, match="held out"):
         assert_exportable(s, "fix-stats/easy/s1", forbidden_families=["fix-stats"])
+
+
+def test_calibration_seeds_are_reserved(tmp_path):
+    with pytest.raises(SplitValidationError, match="reserved for calibration"):
+        load_splits(_write(tmp_path, "instances:\n  - {id: a, family: count-errors, difficulty: easy, seed: 900000, split: dev}\npanels: {}\n"))

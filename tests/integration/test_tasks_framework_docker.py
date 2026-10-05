@@ -39,7 +39,7 @@ if not _docker_ok():  # pragma: no cover
     pytest.skip("Docker daemon not available", allow_module_level=True)
 
 
-@pytest.mark.parametrize("module,difficulty", [("sum_numbers", "hard"), ("fix_add", "easy")])
+@pytest.mark.parametrize("module,difficulty", [("sum_numbers", "hard"), ("fix_add", "easy"), ("copy_private", "easy"), ("upper_tool", "easy")])
 async def test_shell_solutions_score_what_their_models_predicted(tmp_path, module, difficulty):
     assert await check_predictions(fixture_family(module), difficulty, 1, tmp_path) == []
 

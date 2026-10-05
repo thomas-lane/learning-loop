@@ -47,6 +47,11 @@ class SplitValidationError(ValueError):
     pass
 
 
+# Seeds reserved for calibrating family difficulty against a model. No split may use them, so
+# tuning a family never looks at an instance that is later trained on or evaluated.
+CALIBRATION_SEEDS = range(900_000, 1_000_000)
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -156,6 +161,8 @@ def structural_errors(splits: Splits) -> list[str]:
     for inst in splits.instances.values():
         if inst.split == Split.TRAIN and inst.family in splits.held_out_families:
             errs.append(f"held-out family {inst.family!r} has a train-split instance {inst.instance_id!r}")
+        if inst.seed in CALIBRATION_SEEDS:
+            errs.append(f"{inst.instance_id}: seed {inst.seed} is reserved for calibration ({CALIBRATION_SEEDS.start}-{CALIBRATION_SEEDS.stop - 1})")
         fam = FAMILIES.get(inst.family)
         if fam is None:
             errs.append(f"{inst.instance_id}: unknown family {inst.family!r}")

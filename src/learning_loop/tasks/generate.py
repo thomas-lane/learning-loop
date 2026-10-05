@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .runtime import grade as grade_runtime
-from .spec import WORKDIR, Artifacts, Family, Files, GenContext, Reject, TaskSpec
+from .spec import WORKDIR, Artifacts, Family, Files, FileState, GenContext, Reject, TaskSpec
 
 MAX_DRAWS = 100
 
@@ -54,17 +54,22 @@ def file_bytes(spec: TaskSpec) -> dict[str, bytes]:
     return {k: _bytes(v) for k, v in spec.files.items()}
 
 
-def _reader(files: Files, artifacts: Artifacts | None):
-    """`read(path)` over the container state: the initial files under /app, overlaid with
-    the artifacts a solution wrote."""
-    state = {posixpath.join(WORKDIR, rel): content for rel, content in files.items()}
+def container_view(spec: TaskSpec, files: Files, artifacts: Artifacts | None) -> grade_runtime.MemoryView:
+    """The container state after a solution: the initial files under /app (with their modes),
+    overlaid with what the solution's model returns (None deletes a file)."""
+    state = {posixpath.join(WORKDIR, rel): (content, spec.modes.get(rel, 0o644)) for rel, content in files.items()}
     for path, content in (artifacts or {}).items():
-        state[path] = _bytes(content)
-    return lambda path: state.get(path)
+        if content is None:
+            state.pop(path, None)
+        elif isinstance(content, FileState):
+            state[path] = (_bytes(content.content), content.mode)
+        else:
+            state[path] = (_bytes(content), state[path][1] if path in state else 0o644)
+    return grade_runtime.MemoryView(state)
 
 
 def grade_in_process(spec: TaskSpec, files: Files, artifacts: Artifacts | None) -> float:
-    reward, _ = grade_runtime.grade(spec.grader.key(), _reader(files, artifacts), trusted=True)
+    reward, _ = grade_runtime.grade(spec.grader.key(), container_view(spec, files, artifacts), trusted=True)
     return reward
 
 

@@ -19,7 +19,7 @@ CHECKS = {"kind": "checks", "path": "/app/calc.py", "module": "calc", "checks": 
 
 
 def reader(files: dict[str, bytes | None]):
-    return lambda p: files.get(p)
+    return g.MemoryView({p: (data, 0o644) for p, data in files.items() if data is not None})
 
 
 @pytest.mark.parametrize("text,reward", [(b"42\n", 1.0), (b"  42  ", 1.0), (b"42.0", 0.0), (b"\xff\xfe", 0.0), (None, 0.0)])
@@ -34,8 +34,8 @@ def test_numeric(text, reward):
 
 
 @pytest.mark.parametrize("text,reward", [(b'{"b": [1, 2], "a": 1}', 1.0), (b'{"a": 1, "b": [2, 1]}', 0.0), (b'{"a": NaN}', 0.0), (b"{", 0.0)])
-def test_json_ignores_key_order_only(text, reward):
-    key = {"kind": "json", "path": "/app/a", "expected": {"a": 1, "b": [1, 2]}}
+def test_parsed_json_ignores_key_order_only(text, reward):
+    key = {"kind": "parsed", "format": "json", "path": "/app/a", "expected": {"a": 1, "b": [1, 2]}}
     assert g.grade(key, reader({"/app/a": text}))[0] == reward
 
 
@@ -181,3 +181,77 @@ def test_main_refuses_files_that_differ_from_the_rendered_digest(tmp_path, monke
     assert g.main(args) == 0 and json.loads(out.read_text()) == {"reward": 1.0}
     key.write_text(json.dumps({"kind": "exact", "path": "/app/answer.txt", "expected": "8"}))  # a stale/other key
     assert g.main(args) == g.EXIT_STALE_FILES and not out.exists()
+
+
+@pytest.mark.parametrize(
+    "fmt,text,expected,reward",
+    [
+        ("toml", b'[a]\nb = 1\nc = "x"\n', {"a": {"c": "x", "b": 1}}, 1.0),
+        ("toml", b"[a\n", {"a": {}}, 0.0),
+        ("dotenv", b"# c\nA=1\n\nB = two\n", {"A": "1", "B": "two"}, 1.0),
+        ("dotenv", b"A=1\nA=2\n", {"A": "2"}, 0.0),  # duplicate keys fail
+        ("dotenv", b"A=1\njunk\n", {"A": "1"}, 0.0),
+        ("lines", b" x \n\ny\n", ["x", "y"], 1.0),
+        ("lines", b"y\nx\n", ["x", "y"], 0.0),
+        ("line-set", b"y\nx\n", ["x", "y"], 1.0),
+    ],
+)
+def test_parsed_formats(fmt, text, expected, reward):
+    assert g.grade({"kind": "parsed", "format": fmt, "path": "/app/f", "expected": expected}, reader({"/app/f": text}))[0] == reward
+
+
+def _sha(b):
+    import hashlib
+
+    return hashlib.sha256(b).hexdigest()
+
+
+def test_tree_counts_correct_entries_against_expected_plus_extras():
+    key = {"kind": "tree", "root": "/app/out", "expected": {"a.txt": {"sha256": _sha(b"A")}, "d/b.txt": {"sha256": _sha(b"B"), "mode": "0600"}}}
+    good = g.MemoryView({"/app/out/a.txt": (b"A", 0o644), "/app/out/d/b.txt": (b"B", 0o600), "/app/other": (b"x", 0o644)})
+    assert g.grade(key, good)[0] == 1.0
+    wrong_mode = g.MemoryView({"/app/out/a.txt": (b"A", 0o644), "/app/out/d/b.txt": (b"B", 0o644)})
+    assert g.grade(key, wrong_mode)[0] == 0.5
+    extra = g.MemoryView({"/app/out/a.txt": (b"A", 0o644), "/app/out/d/b.txt": (b"B", 0o600), "/app/out/c.txt": (b"C", 0o644)})
+    assert g.grade(key, extra)[0] == pytest.approx(2 / 3)
+    assert g.grade(key, g.MemoryView({}))[0] == 0.0
+
+
+def test_tree_on_disk_sees_links_and_modes_without_following(tmp_path):
+    out = tmp_path / "app" / "out"
+    (out / "d").mkdir(parents=True)
+    (out / "a.txt").write_bytes(b"A")
+    (out / "d" / "b.txt").write_bytes(b"B")
+    (out / "d" / "b.txt").chmod(0o600)
+    (tmp_path / "secret").write_bytes(b"A")
+    (out / "link").symlink_to(tmp_path / "secret")
+    tree = g.DiskView(str(tmp_path)).tree("/app/out")
+    assert tree["a.txt"] == ("F", _sha(b"A"), 0o644) and tree["d/b.txt"] == ("F", _sha(b"B"), 0o600)
+    assert tree["link"] == ("L", str(tmp_path / "secret"))
+
+
+def test_checks_equal_and_named_exceptions():
+    src = b"def f(x):\n    if x < 0:\n        raise KeyError(x)\n    return [x, str(x)]\n"
+    key = {"kind": "checks", "path": "/app/m.py", "module": "m", "checks": [
+        {"name": "eq", "func": "f", "kind": "equal", "args": [2], "expected": [2, "2"]},
+        {"name": "eq_type", "func": "f", "kind": "equal", "args": [1], "expected": [1.0, "1"]},  # 1 != 1.0 as JSON
+        {"name": "raises", "func": "f", "kind": "raises", "args": [-1], "exception": "KeyError"},
+        {"name": "raises_wrong", "func": "f", "kind": "raises", "args": [-1], "exception": "ValueError"},
+    ]}
+    reward, log = g.grade(key, reader({"/app/m.py": src}), trusted=True)
+    assert reward == 0.5 and "PASS eq" in log and "PASS raises" in log
+
+
+def test_commands_compare_stdout_exit_and_output_files():
+    script = b"import sys\ndata = open(sys.argv[1]).read()\nopen('out.txt', 'w').write(data.upper())\nprint(len(data))\nsys.exit(3 if 'x' in data else 0)\n"
+    key = {"kind": "commands", "files": ["/app/tool.py"], "workdir": "/app", "timeout_sec": 10, "checks": [
+        {"name": "ok", "argv": ["python3", "tool.py", "in.txt"], "inputs": {"in.txt": "ab"}, "stdout": "2\n", "exit": 0, "outputs": {"out.txt": "AB"}},
+        {"name": "exit", "argv": ["python3", "tool.py", "in.txt"], "inputs": {"in.txt": "x"}, "exit": 3},
+        {"name": "wrong", "argv": ["python3", "tool.py", "in.txt"], "inputs": {"in.txt": "ab"}, "stdout": "3"},
+        {"name": "slow", "argv": ["python3", "-c", "import time; time.sleep(5)"], "exit": 0},
+    ]}
+    key["timeout_sec"] = 2
+    reward, log = g.grade(key, reader({"/app/tool.py": script}), trusted=True)
+    assert reward == 0.5, log
+    assert any(ln.startswith("FAIL slow") and "timed out" in ln for ln in log)
+    assert g.grade(key, reader({}), trusted=True)[0] == 0.0  # no program: every check fails

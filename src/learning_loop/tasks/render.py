@@ -34,7 +34,7 @@ from typing import Any
 from .generate import Generated, describe, generate_spec
 from .runtime.grade import TESTS_DIGEST_ENV, tests_digest
 from .runtime.probe import tree_digest
-from .spec import PROFILES, WORKDIR, Family, Profile
+from .spec import LOCAL_FIXTURE_GRADERS, PROFILES, WORKDIR, Family, Profile
 
 FIXED_MTIME = 1767225600  # 2026-01-01T00:00:00Z
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
@@ -172,8 +172,8 @@ def render_generated(family: Family, difficulty: str, seed: int, gen: Generated,
     out_dir = Path(out_dir)
     if out_dir.exists() and any(out_dir.iterdir()):
         raise FileExistsError(f"refusing to render into non-empty {out_dir}")
-    if family.local_fixture and gen.spec.grader.key()["kind"] == "checks":
-        raise ValueError(f"{family.name}: the local fixture backend cannot run the checks grader (it needs root to sandbox)")
+    if family.local_fixture and not isinstance(gen.spec.grader, LOCAL_FIXTURE_GRADERS):
+        raise ValueError(f"{family.name}: the local fixture backend only copies single regular files and cannot sandbox agent code; it cannot use {type(gen.spec.grader).__name__}")
     profile = PROFILES[family.profile]
     spec = gen.spec
     header = _header(family, difficulty, seed)
@@ -184,7 +184,7 @@ def render_generated(family: Family, difficulty: str, seed: int, gen: Generated,
     for rel, content in sorted(spec.files.items()):
         if rel.startswith("/") or ".." in Path(rel).parts:
             raise ValueError(f"{family.name}: file path {rel!r} must be relative to {WORKDIR}")
-        _write(env / "files" / rel, content, 0o755 if rel in spec.executables else 0o644)
+        _write(env / "files" / rel, content, spec.modes.get(rel, 0o644))
     _write(env / "Dockerfile", f"# {header}\nFROM {profile.base_image}\n{_env_lines(profile)}WORKDIR {WORKDIR}\nCOPY files/ {WORKDIR}/\n")
     _write(env / "docker-compose.yaml", _compose(profile))
 
