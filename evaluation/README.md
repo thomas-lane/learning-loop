@@ -51,25 +51,58 @@ mode, below).
 ## Task families
 
 A **family** is a kind of task whose instances are drawn from a seed. Each instance is the
-directory `render(family, difficulty, seed)` writes. fix-stats scores the fraction of hidden
-checks passed (partial credit); the others score 1 if `/app/answer.txt` is right, else 0. The
-**shortcuts** are the known wrong methods, each declared as a runnable solution that must fail on
-every instance (see [Checks](#checks-every-instance-and-every-family)).
+directory `render(family, difficulty, seed)` writes. The **shortcuts** are the known wrong
+methods, each declared as a runnable solution that must fail on every instance (see
+[Checks](#checks-every-instance-and-every-family)). Each family module's docstring states the
+task, how the data is built, and every trap and shortcut; this table is the index.
 
-| family | cluster | the agent must | easy / medium / hard | shortcuts (must fail) |
-|---|---|---|---|---|
-| `log-triage` | text-analytics | name the client IP with the most HTTP 5xx responses in `/app/logs/` | 2 / 3 / 4 log files, some gzipped; hard adds `archive/` | `plain-only` (skip `.gz`), `all-4xx`; medium/hard `any-5xx-field`; hard `top-level-only` |
-| `count-errors` | text-analytics | count lines containing `ERROR` in the `.log` files under `/app/data/` | 2 / 3 / 4 files; hard adds a subdirectory | `case-insensitive`, `all-files` (counts the `.txt` decoy); hard `non-recursive` |
-| `csv-revenue` | tabular-data | name the region with the highest completed-order revenue in `/app/data/*.csv` | 1 / 2 / 3 files; medium adds quoted commas; hard reorders one file's columns | `no-status-filter`, `quantity-sum`, `row-count`; medium/hard `naive-split`; hard `fixed-columns` |
-| `fix-stats` | fix-code | fix the bugs in `/app/stats.py` | 4 / 5 / 6 functions, 1 / 2 / 4 bugs; visible tests cover all / half / a quarter of the bugs | medium/hard `visible-bugs-only` (fixes only the bugs the visible tests show) |
+Families are grouped into seven **clusters** of related skills (`Family.cluster`), five each,
+so held-out sets can leave out single families (near) or whole clusters (far). Difficulties
+are `easy`, `medium` and `hard`: more files, more traps and fewer hints.
 
-Beyond the declared shortcuts, the log-triage and csv-revenue families redraw until every proper
-subset of the files gives a different answer, so skipping any file fails. That also catches
-`cat a b | zcat c.gz`, which reads only `c.gz` because zcat ignores stdin. fix-stats redraws
-until its hidden checks catch every injected bug. The checks use inputs other than the visible
-tests', so hard-coding the visible expectations fails. count-errors also runs on the local
-fixture backend (`[metadata.local_fixture]`), which runs commands as host subprocesses with no
-sandbox; `LocalFixtureBackend` therefore refuses any policy other than a scripted one.
+| cluster | family | the agent must | grader |
+|---|---|---|---|
+| text-analytics | `log-triage` | name the client IP with the most HTTP 5xx responses across rotated, gzipped and archived logs | `ExactAnswer` |
+| | `count-errors` | count lines containing `ERROR` in the `.log` files under `/app/data/` | `ExactAnswer` |
+| | `latency-p95` | name the endpoint with the highest nearest-rank p95 latency across logs in two formats | `ExactAnswer` |
+| | `session-count` | count user sessions (30-minute inactivity rule, per user) across event logs | `NumericAnswer` |
+| | `error-burst` | name the UTC minute with the most ERROR lines across logs written in different time zones | `ExactAnswer` |
+| tabular-data | `csv-revenue` | name the region with the highest completed-order revenue across CSV files | `ExactAnswer` |
+| | `join-orders` | total each customer's quantity, joining on IDs the order system formats inconsistently | `ParsedAnswer` (json) |
+| | `sqlite-query` | compute a month's net revenue for a region from a SQLite file (Python's `sqlite3`; no CLI) | `NumericAnswer` |
+| | `json-aggregate` | per-site count and mean of valid readings in nested JSON Lines | `ParsedAnswer` (json) |
+| | `dedupe-contacts` | count distinct people after normalizing emails and phone numbers | `NumericAnswer` |
+| filesystem | `organize-files` | move tickets into queue folders chosen by their header fields | `FileTree` |
+| | `dedupe-files` | delete duplicate files across dated snapshots, keeping the oldest copy | `FileTree` |
+| | `bulk-rename` | standardize file names, resolving collisions by rule | `FileTree` |
+| | `extract-subset` | extract only the `.conf` files from nested tar.gz archives, keeping paths | `FileTree` |
+| | `permissions-fix` | set file modes from a glob-to-mode policy (last matching rule wins) | `FileTree` (with modes) |
+| fix-code | `fix-stats` | fix the bugs in a small statistics library | `Checks` |
+| | `fix-parser` | fix the bugs in a small INI reader/writer | `Checks` |
+| | `fix-pagination` | fix off-by-one and boundary bugs in pagination helpers | `Checks` |
+| | `fix-dates` | fix date-arithmetic bugs (leap years, month ends, ISO weeks, business days) | `Checks` |
+| | `fix-shell-script` | make a bash script correct under `set -euo pipefail` | `Commands` |
+| write-code | `implement-function` | implement functions from their docstrings and a few examples | `Checks` |
+| | `format-converter` | write a converter between two text formats | `Commands` |
+| | `write-validator` | write a validator for a stated schema | `Checks` |
+| | `refactor-preserve` | extract duplicated parsing into one helper, keep behavior, then extend it | `Checks` |
+| | `cli-flags` | add options to an argparse script as specified | `Commands` |
+| config-repair | `fix-json-config` | repair a hand-edited JSON config so its validator accepts it, keeping every value | `ParsedAnswer` (json) |
+| | `resolve-conflicts` | resolve merge-conflict blocks by per-section rules | `ExactAnswer` / `FileTree` |
+| | `env-reconcile` | rewrite a `.env` from a template, the current file and overrides | `ParsedAnswer` (dotenv) |
+| | `cron-translate` | translate schedule descriptions into crontab lines | `ParsedAnswer` (crontab) |
+| | `toml-migrate` | migrate a TOML config between schemas by following a changelog | `ParsedAnswer` (toml) |
+| diagnosis | `traceback-locate` | name the line that set the bad value behind a traceback, not the line that raised | `ParsedAnswer` (json) |
+| | `slow-query` | name the costliest query that cannot use an index | `ExactAnswer` |
+| | `broken-symlinks` | map each broken symlink to the file it should point to, following a rename log | `ParsedAnswer` (json) |
+| | `import-cycle` | report the package's one import cycle among decoy imports | `ParsedAnswer` (json) |
+| | `config-drift` | report which hosts' configs differ from the baseline, ignoring order and formatting | `ParsedAnswer` (json) |
+
+Several families also redraw until every proper subset of their input files gives a different
+answer, so skipping any file fails (this also catches `cat a b | zcat c.gz`, which reads only
+`c.gz` because zcat ignores stdin). count-errors also runs on the local fixture backend
+(`[metadata.local_fixture]`), which runs commands as host subprocesses with no sandbox;
+`LocalFixtureBackend` therefore refuses any policy other than a scripted one.
 
 ## How a family defines a task
 
@@ -90,7 +123,7 @@ A family module defines `FAMILY = Family(name, version, cluster, skills, difficu
 |---|---|
 | `ExactAnswer(path, expected)` | 1 if the stripped text of `path` equals `expected` |
 | `NumericAnswer(path, expected, abs_tol, rel_tol)` | 1 if the number in `path` is within tolerance |
-| `ParsedAnswer(path, format, expected)` | 1 if `path` parsed as `json`, `toml`, `dotenv` (KEY=VALUE, duplicates fail), `lines` or `line-set` equals `expected` |
+| `ParsedAnswer(path, format, expected)` | 1 if `path` parsed as `json`, `toml`, `dotenv` (KEY=VALUE, duplicates fail), `lines`, `line-set` or `crontab` equals `expected`. `crontab` compares each job by the times it runs (every field expanded to its values, 7 = Sunday, whether day-of-month and day-of-week were `*` kept because cron's matching depends on it), so any equivalent cron syntax is correct |
 | `FileTree(root, expected)` | the regular files under `root` against `{relative path: tree_entry(content, mode)}`: correct entries / (expected + unexpected entries) |
 | `Checks(path, module, checks)` | fraction of calls into the agent's Python module that pass: `value` (a number), `equal` (JSON-equal), `raises` (optionally a named exception), `no_mutation` |
 | `Commands(files, checks)` | fraction of commands run against the agent's programs (copied from `files` into a scratch directory with each check's input files) whose stdout, exit code and output files match |
@@ -115,7 +148,9 @@ versions the random stream separately, for changes that leave the draws alone.
 ## Checks: every instance and every family
 
 **Every instance, at generation** (`tasks/generate.py`). The shared grader that runs in the
-verifier also grades, in-process, the artifacts each `Solution.model` predicts:
+verifier also grades, in-process, the artifacts each `Solution.model` predicts, using the
+answer key exactly as the verifier will read it from `tests/key.json` (serialized with sorted
+keys, so a dict passed to a check reaches the solution in the same order in both places):
 
 - the oracle must reach the success threshold, otherwise the family is wrong and generation fails
   (`GenerationError`);
@@ -123,7 +158,9 @@ verifier also grades, in-process, the artifacts each `Solution.model` predicts:
 
 A draw that fails the second check, or for which `build` or a model raises `Reject`, is replaced
 by the next draw from the same random stream (up to 100). Families raise `Reject`, for example,
-when the answer is tied. The predicted rewards are recorded in `params_json` (`oracle_reward`,
+when the answer is tied. A draw is also rejected when two of its paths differ only in case,
+because a case-insensitive file system (macOS's default) would merge them when rendering or
+copying artifacts. The predicted rewards are recorded in `params_json` (`oracle_reward`,
 `nop_reward`, `shortcut_rewards`). An instance therefore cannot exist unless it passed these
 checks, on every seed and at no Docker cost.
 
@@ -161,6 +198,7 @@ construction for every task. Its unit tests check each one on the rendered files
 | No network in either container | `environment/docker-compose.yaml` and `tests/docker-compose.yaml` set `network_mode: "none"`; Harbor appends a task's compose file after its own, for the agent container (context `environment/`) and for the separate verifier (context `tests/`) | outputs, replays and grades cannot depend on anything outside the task. Harbor's own `network_mode = "no-network"` needs nftables support in the Docker host's kernel, which Docker Desktop for Mac lacks; the compose setting works on every Docker host |
 | Pinned images, nothing installed | each Dockerfile is `FROM` the profile's digest-pinned base, `ENV`, `WORKDIR`, `COPY`; no `RUN` | a build cannot change with package mirrors, and the build-context hash (which contains the pinned `FROM`) identifies the image exactly, which is what replay compares (`image_identity`) |
 | Fixed process environment | the profile's `ENV`: `TZ=UTC`, `LANG`/`LC_ALL=C.UTF-8`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, `HOME=/root`; compose sets the hostname `task` | time zone, sort collation and Python set/dict-of-str order would otherwise make the same command print different output in a replay; bytecode caches embed source mtimes and would change the fingerprinted state |
+| Host-independent bytes | gzip files are written by `spec.gzip_bytes` (deflate stored blocks, mtime 0), not `gzip.compress`, whose output depends on the zlib version; families that build other binary formats pin what differs between library versions (sqlite-query fixes the SQLite header's writer version and zeroes unused page space). `tests/integration/test_tasks_render_portability.py` renders every family and difficulty on the host and inside the profile image and requires identical bytes, modes, times and links | an instance has one content hash on every machine, so runs on different hosts measure the same tasks |
 | Fixed file times | every rendered file and directory gets the mtime 2026-01-01T00:00:00Z plus a sub-second part derived from its content; Docker's `COPY` keeps it | `ls -l` and `stat` show the same times on every host and re-render. The sub-second part differs between files with different content because BuildKit sends a build context incrementally and skips a file whose path, size and mtime match a copy it already holds, even from another task's build; with one constant mtime, two same-sized answer keys were built from the stale copy. BuildKit keys that copy by the context directory's name, not its path, and Harbor names every context `environment/` or `tests/`; this is intended upstream behavior ([docker/buildx#3232](https://github.com/docker/buildx/issues/3232)) and `--no-cache` does not affect it |
 | The answer stays hidden | the answer key (`tests/key.json`), grader and probe are only in the verifier's build context; the agent's context is `environment/` | the learner cannot read the answer |
 | The verifier grades its own files | `task.toml`'s `[verifier] env` carries `LL_TESTS_SHA256`, a digest of `grade.py`, `probe.py` and `key.json`; `grade.py` recomputes it and refuses to grade on a mismatch | `task.toml` reaches the container without passing through the image build, so even a stale build (above) cannot grade with another task's key |
@@ -178,8 +216,12 @@ CLI, make, patch, jq or curl.
 1. Harbor builds `environment/Dockerfile` and starts the agent container (no network).
 2. `ToolAgent.run()` runs **on the host** (so `localhost` in `api_base` is the host) and acts on
    the container only through Harbor's `exec` and `upload_file`.
-3. When the agent stops, Harbor copies only the task's declared **artifacts** (e.g.
-   `/app/answer.txt`) out of the agent container.
+3. When the agent stops, it gives the owner `rwx` on every directory under `/app` that lacks it
+   (recorded as `dir_modes_restored` in the trial's agent metadata): Harbor copies directory
+   artifacts with `docker cp`, which silently drops the files inside a directory without the
+   owner's execute bit, so a `chmod -R 644` would otherwise hide files from the grader.
+   Directory modes are never graded. Harbor then copies only the task's declared **artifacts**
+   (e.g. `/app/answer.txt`) out of the agent container.
 4. A **separate verifier container**, built from `tests/Dockerfile` (context `tests/`, no network),
    receives the artifacts at the same paths, empties `/logs/verifier/` and runs `tests/test.sh`.
    It checks the digest, runs the probe and grades with `tests/grade.py`, which writes
@@ -359,10 +401,13 @@ is later trained on or evaluated. In `pilot.yaml`,
 1. Write `families/<family>.py` with `build(ctx) -> TaskSpec` and `FAMILY = Family(...)`, and add
    the module to `FAMILIES` in `families/__init__.py`. Declare every wrong method you know of as
    a shortcut, with a shell form an agent would plausibly write and a model that predicts its
-   output exactly.
+   output exactly. Write gzip data with `spec.gzip_bytes`, and keep other binary formats
+   independent of library versions.
 2. `uv run pytest tests/unit` checks determinism, the randomness lint and that generation
-   succeeds; add a test in `tests/unit/test_tasks_families.py` that re-derives the family's traps
-   from the rendered files.
+   succeeds; add tests in the family's cluster file (`tests/unit/test_tasks_family_<cluster>.py`)
+   that re-derive the family's answer and traps from the rendered files without its own models.
 3. `uv run pytest -m docker tests/integration/test_tasks_families_docker.py -k <family>` checks
-   every model against Docker and the oracle replay.
+   every model against Docker and the oracle replay, and
+   `tests/integration/test_tasks_render_portability.py` checks that it renders the same bytes
+   inside the profile image.
 4. Reference instances from a split file.

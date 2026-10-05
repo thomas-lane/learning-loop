@@ -57,8 +57,9 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 tests/unit/          default suite (`uv run pytest`): no Docker, no model downloads, seconds
   test_core_*        contracts: seeds, config validation, storage, usage arithmetic
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
-  test_tasks_*       families (determinism, traps), split validation, generation checks, rendering, shared
-                     grader, environment probe, family lint (fixture families in tests/fixtures/tasks/)
+  test_tasks_*       families (determinism, lint; traps per cluster in test_tasks_family_<cluster>.py), split
+                     validation, generation checks, rendering, shared grader, environment probe (fixture
+                     families in tests/fixtures/tasks/)
   test_editor_*      editor view, answer tools, validation, grounding
   test_verify_*      branch specs, costs, acceptance, end-to-end on the local fixture environment
   test_prefs_*       preference construction, exports, buffer
@@ -76,7 +77,8 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_docs_server   doc viewer rendering, path safety, and that every doc is in the index and navigation
 tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading; rendered
                      tasks: shell solutions score what their models predicted, a networked verifier or stale
-                     files refuse to grade or run; the Docker-host preflight)
+                     files refuse to grade or run; every family's models against Docker; rendering identical
+                     on the host and in the profile image; the Docker-host preflight)
 tests/train/         `-m train`: real LoRA DPO on Qwen3-0.6B + serving the adapter
 tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/),
                      fixture task families (tasks/)

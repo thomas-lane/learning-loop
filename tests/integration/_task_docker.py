@@ -29,7 +29,7 @@ def verifier_stdout(result) -> str:
 
 
 def _with_solution(task_dir: Path, script: Path, dest: Path) -> Path:
-    shutil.copytree(task_dir, dest)
+    shutil.copytree(task_dir, dest, symlinks=True)
     shutil.copy(script, dest / "solution" / "solve.sh")
     return dest
 

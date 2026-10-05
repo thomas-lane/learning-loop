@@ -18,6 +18,7 @@ random stream, up to `MAX_DRAWS` times, so the result is still a pure function o
 
 from __future__ import annotations
 
+import json
 import posixpath
 import random
 from dataclasses import dataclass
@@ -68,15 +69,38 @@ def container_view(spec: TaskSpec, files: Files, artifacts: Artifacts | None) ->
     return grade_runtime.MemoryView(state)
 
 
+def verifier_key(spec: TaskSpec) -> dict:
+    """The answer key exactly as the verifier reads it from tests/key.json (written with sorted
+    keys), so check inputs such as dicts reach a solution in the same order at generation."""
+    return json.loads(json.dumps(spec.grader.key(), sort_keys=True))
+
+
 def grade_in_process(spec: TaskSpec, files: Files, artifacts: Artifacts | None) -> float:
-    reward, _ = grade_runtime.grade(spec.grader.key(), container_view(spec, files, artifacts), trusted=True)
+    reward, _ = grade_runtime.grade(verifier_key(spec), container_view(spec, files, artifacts), trusted=True)
     return reward
+
+
+def case_collisions(paths: list[str]) -> list[tuple[str, str]]:
+    """Pairs of paths (or path prefixes) that differ only in case. A case-insensitive file
+    system (the default on macOS) would merge them when rendering or copying artifacts."""
+    seen: dict[str, str] = {}
+    out = []
+    for path in sorted(paths):
+        parts = path.split("/")
+        for i in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:i])
+            other = seen.setdefault(prefix.casefold(), prefix)
+            if other != prefix:
+                out.append((other, prefix))
+    return sorted(set(out))
 
 
 def check_spec(family: Family, spec: TaskSpec) -> tuple[float, float, dict[str, float]]:
     """(oracle reward, nop reward, shortcut rewards). Raises Reject for a bad draw, GenerationError for a bad family."""
     files = file_bytes(spec)
     threshold = family.success_threshold
+    if collisions := case_collisions(list(spec.files) + list(spec.symlinks)):
+        raise Reject(f"paths differ only in case: {collisions[0]}")
     for path in spec.grader.artifacts:
         if not path.startswith(WORKDIR + "/"):
             raise GenerationError(f"{family.name}: artifact {path!r} is outside {WORKDIR}")

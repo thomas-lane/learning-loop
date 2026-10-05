@@ -49,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -229,8 +230,24 @@ class ToolAgent(BaseAgent):
 
         try:
             await run_episode(plan, session, policy, log, on_turn=flush, on_end=finish)
+            context.metadata = (context.metadata or {}) | {"dir_modes_restored": await self._restore_dir_modes(environment, plan.workdir)}
         finally:
             await asyncio.shield(policy.aclose())
+
+    @staticmethod
+    async def _restore_dir_modes(environment: BaseEnvironment, workdir: str) -> list[str] | str:
+        """Give the owner rwx on every directory under the workdir that lacks it. Harbor copies
+        directory artifacts out with `docker cp`, which silently drops the files inside a
+        directory without the owner's execute bit (e.g. after `chmod -R 644`), so the verifier
+        would grade an incomplete copy. Graders never read directory modes, and this runs after
+        the episode's last fingerprint, so nothing graded or replayed changes. Returns the
+        directories changed."""
+        cmd = f"find {shlex.quote(workdir)} -type d ! -perm -u=rwx -print -exec chmod u+rwx {{}} + 2>/dev/null; true"
+        try:
+            r = await environment.exec(cmd, cwd="/", timeout_sec=60)
+        except Exception as e:  # recorded; grading then sees whatever Harbor can copy
+            return f"failed: {type(e).__name__}: {e}"
+        return (r.stdout or "").split()[:100]
 
     # -- ATIF ------------------------------------------------------------------ #
 

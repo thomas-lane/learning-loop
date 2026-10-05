@@ -20,7 +20,8 @@ Grader kinds (the `kind` field of the key):
     numeric   number in `path` is within max(abs_tol, rel_tol * |expected|) of `expected`
     parsed    `path` parsed as `format` equals `expected`: json, toml (object key order
               ignored), dotenv (KEY=VALUE lines; duplicate keys fail), lines (non-empty
-              stripped lines, in order) or line-set (the same, order ignored)
+              stripped lines, in order), line-set (the same, order ignored) or crontab (each
+              job as the times it runs, so equivalent cron syntax compares equal)
     tree      the regular files under the directory `root` are exactly `expected`
               ({relative path: {"sha256", optional "mode"}}); reward = correct entries /
               (expected entries + unexpected entries)
@@ -188,6 +189,70 @@ def _reject_constant(name):
     raise ValueError("non-finite JSON constant " + name)
 
 
+_CRON_FIELDS = (
+    ("minute", 0, 59, {}),
+    ("hour", 0, 23, {}),
+    ("day-of-month", 1, 31, {}),
+    ("month", 1, 12, {m: i + 1 for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())}),
+    ("day-of-week", 0, 7, {d: i for i, d in enumerate("sun mon tue wed thu fri sat".split())}),
+)
+_CRON_ALIASES = {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *", "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *"}
+
+
+def _cron_value(token, lo, hi, names):
+    v = names.get(token.lower()) if not token.isdigit() else int(token)
+    if v is None or not lo <= v <= hi:
+        raise ValueError("bad value %r" % token)
+    return v
+
+
+def _cron_field(text, lo, hi, names):
+    values = set()
+    for item in text.split(","):
+        body, _, step = item.partition("/")
+        step = int(step) if step else 1
+        if step < 1:
+            raise ValueError("bad step in %r" % item)
+        if body == "*":
+            start, end = lo, hi
+        elif "-" in body:
+            a, b = body.split("-", 1)
+            start, end = _cron_value(a, lo, hi, names), _cron_value(b, lo, hi, names)
+            if start > end:
+                raise ValueError("bad range %r" % item)
+        else:
+            start = _cron_value(body, lo, hi, names)
+            end = hi if _ else start
+        values.update(range(start, end + 1, step))
+    return values
+
+
+def parse_crontab(text):
+    """Sorted [[minutes, hours, days-of-month, months, days-of-week, dom_star, dow_star, command]]
+    for the job lines of a crontab (comments, blank lines and VAR=value lines ignored). Each field
+    becomes the sorted values it matches; day-of-week 7 is Sunday (0). Whether day-of-month and
+    day-of-week were written starting with `*` is kept, because cron runs a job when either
+    matches if both are restricted, and only on the restricted one otherwise."""
+    jobs = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or ("=" in line.split()[0] and not line.startswith("@")):
+            continue
+        if line.startswith("@"):
+            alias, _, command = line.partition(" ")
+            if alias not in _CRON_ALIASES:
+                raise ValueError("unsupported %r" % alias)
+            parts = _CRON_ALIASES[alias].split() + [command.strip()]
+        else:
+            parts = line.split(None, 5)
+        if len(parts) != 6 or not parts[5]:
+            raise ValueError("not a cron line: %r" % line[:100])
+        fields = [sorted(_cron_field(parts[i], lo, hi, names)) for i, (_, lo, hi, names) in enumerate(_CRON_FIELDS)]
+        fields[4] = sorted({0 if d == 7 else d for d in fields[4]})
+        jobs.append(fields + [parts[2].startswith("*"), parts[4].startswith("*"), parts[5].strip()])
+    return sorted(jobs, key=_canon)
+
+
 def parse_text(text, fmt):
     """`text` parsed as `fmt`; raises ValueError when it does not parse."""
     if fmt == "json":
@@ -214,6 +279,8 @@ def parse_text(text, fmt):
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
     if fmt == "line-set":
         return sorted(ln.strip() for ln in text.splitlines() if ln.strip())
+    if fmt == "crontab":
+        return parse_crontab(text)
     raise GraderError("unknown parsed format %r" % (fmt,))
 
 

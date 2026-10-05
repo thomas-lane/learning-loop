@@ -72,3 +72,24 @@ async def test_an_agent_image_with_other_files_stops_before_turn_0(tmp_path):
     s = res.summary
     assert s.stop_reason == "infra:env_probe:app_content" and s.stop_category == StopCategory.INFRA
     assert s.n_requests == 0
+
+
+async def test_files_under_a_directory_left_without_execute_are_still_graded(tmp_path):
+    import yaml
+
+    from _env_helpers import scripted_spec
+
+    task = tmp_path / "copy-private__easy__s1__dir-mode"  # unique: Harbor names the image after the directory
+    render(fixture_family("copy_private"), "easy", 1, task)
+    rules = [
+        {"name": "solve-then-break-dir", "when": {"turn": 0}, "respond": {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "mkdir -p /app/out/keep && cp /app/in/* /app/out/ && chmod 600 /app/out/*.txt && echo x > /app/out/keep/extra && chmod 644 /app/out/keep /app/out"}}]}},
+        {"name": "done", "when": {"min_turn": 1}, "respond": {"content": "done"}},
+    ]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump({"schema": "scripted_policy/v1", "label": "fixture", "rules": rules}))
+    inst = TaskInstance(instance_id="copy-private/easy/s1", family="copy-private", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "dir-mode", scripted_spec(policy)), tmp_path / "ep")
+    # 3 correct copies + 1 unexpected file. Without restoring the directory's execute bit, Harbor's copy
+    # silently drops keep/extra and the stray file goes unseen (reward 1.0 instead of 0.75).
+    assert res.summary.stop_reason == "model_finished" and res.summary.reward == {"reward": 0.75}, res.summary

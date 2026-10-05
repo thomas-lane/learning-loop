@@ -16,7 +16,7 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta
 
-from learning_loop.tasks.spec import ExactAnswer, Family, Reject, Solution, TaskSpec
+from learning_loop.tasks.spec import ExactAnswer, Family, gzip_bytes, Reject, Solution, TaskSpec
 
 PATHS = ["/", "/api/users", "/api/orders", "/login", "/static/app.js", "/api/search?q=x"]
 
@@ -139,7 +139,7 @@ def build(ctx):
         for subset in itertools.combinations(names, k):
             if _unique_top([ln for n in subset for ln in texts[n].splitlines()], _is_5xx) == target:
                 raise Reject(f"reading only {subset} gives the right answer")
-    files = {f"logs/{n}": gzip.compress(t.encode(), mtime=0) if n.endswith(".gz") else t for n, t in texts.items()}
+    files = {f"logs/{n}": gzip_bytes(t.encode()) if n.endswith(".gz") else t for n, t in texts.items()}
     shortcuts = {
         "plain-only": _solution(PLAIN_ONLY, lambda n: not n.endswith(".gz"), _is_5xx),
         "all-4xx": _solution(ALL_4XX, lambda n: True, lambda ln: _status(ln) >= 400),
@@ -161,7 +161,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="log-triage",
-    version=3,
+    version=4,  # v4: portable gzip bytes (stored blocks)
     cluster="text-analytics",
     category="shell",
     skills=("shell", "logs", "gzip", "aggregation"),

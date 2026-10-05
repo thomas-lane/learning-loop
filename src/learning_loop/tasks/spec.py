@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -84,6 +85,20 @@ PROFILES: dict[str, Profile] = {
 }
 
 
+def gzip_bytes(data: bytes) -> bytes:
+    """`data` as a gzip file that is byte-identical on every host: deflate *stored* blocks (no
+    compression), mtime 0, no file name. `gzip.compress` output depends on the zlib version,
+    so the same instance would otherwise render different bytes on different machines. Any
+    gunzip reads stored blocks; task files are small enough that compression doesn't matter."""
+    out = bytearray(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")  # magic, deflate, no flags, mtime 0, OS unknown
+    chunks = [data[i : i + 0xFFFF] for i in range(0, len(data), 0xFFFF)] or [b""]
+    for i, chunk in enumerate(chunks):
+        n = len(chunk)
+        out += bytes([1 if i == len(chunks) - 1 else 0]) + n.to_bytes(2, "little") + (n ^ 0xFFFF).to_bytes(2, "little") + chunk
+    out += (zlib.crc32(data) & 0xFFFFFFFF).to_bytes(4, "little") + (len(data) & 0xFFFFFFFF).to_bytes(4, "little")
+    return bytes(out)
+
+
 class Reject(Exception):
     """Raised by a family's `build` (or its solution models) when this draw is unusable,
     e.g. the answer is tied or a shortcut happens to give the right answer. Generation
@@ -131,7 +146,9 @@ class NumericAnswer:
 class ParsedAnswer:
     """`path` parsed as `format` equals `expected`: "json", "toml" (object key order ignored),
     "dotenv" (KEY=VALUE lines into a dict; duplicate keys fail), "lines" (non-empty stripped
-    lines, in order) or "line-set" (the same, sorted)."""
+    lines, in order), "line-set" (the same, sorted) or "crontab" (each job as the times it
+    runs, so equivalent cron syntax compares equal; build `expected` with
+    `runtime.grade.parse_crontab`)."""
 
     path: str
     format: str
