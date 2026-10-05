@@ -96,7 +96,7 @@ docs/                         this documentation (contents: docs/index.md)
 experiments/                  experiment YAML (scientific choices); ablations/ overrides pilot.yaml
 configs/models/               model identity, serving and training profiles (pinned revisions)
 configs/machines/             deployment profiles: examples/ (committed), local/ (git-ignored)
-prompts/editor/v2.md          editor prompt (its hash is part of the editor identity)
+prompts/editor/v1.md          editor prompt (its hash is part of the editor identity)
 scripts/                      GPU host setup (setup_gpu_host.sh), pod idle watchdog (pod_watchdog.py)
 .env.example                  template for the git-ignored .env
 evaluation/                   everything Harbor-facing (see evaluation/README.md)

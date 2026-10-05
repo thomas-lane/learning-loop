@@ -308,7 +308,7 @@ class EditorConfig(Strict):
     mode: Literal["initial_policy", "current_learner", "external", "scripted"] = Field(description="`initial_policy` (the learner's initial checkpoint, fixed for the whole run), `current_learner` (the learner of each cycle, so it changes every cycle), `external` (a fixed separate model) or `scripted` (fixture).")
     model_profile: str | None = Field(default=None, description="`external` only: the editor's model profile.")
     checkpoint: str | None = Field(default=None, description="`external` only: `base` or a checkpoint directory (default `base`).")
-    prompt: str = Field(default="prompts/editor/v2.md", description="Editor prompt; its SHA-256 is part of the editor identity.")
+    prompt: str = Field(default="prompts/editor/v1.md", description="Editor prompt; its SHA-256 is part of the editor identity.")
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig(temperature=0.0, max_output_tokens=2048), description="Editor decoding.")
     include_outcome_metrics: bool = Field(default=True, description="Show the editor scalar outcomes of the source episode (success, token totals).")
     include_later_observations: bool = Field(default=True, description="Show the editor observations after each turn (hindsight is still filtered at validation).")

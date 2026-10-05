@@ -150,7 +150,7 @@ replay contract, stop reasons and known gaps are in [evaluation/README.md](../ev
 
 ## Editing
 
-The editor (`src/learning_loop/editing/editor.py`, prompt `prompts/editor/v2.md`) sees only what
+The editor (`src/learning_loop/editing/editor.py`, prompt `prompts/editor/v1.md`) sees only what
 the learner saw: the instruction, system prompt, tool schemas, the learner's turns and their tool
 outputs (including later ones), which turns are editable, and optionally scalar outcomes such as
 success and token totals. A trajectory with no editable turn is not sent to the editor; it is

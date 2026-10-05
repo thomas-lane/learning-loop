@@ -62,7 +62,7 @@ from ..episodes.events import load_turns, read_events
 if TYPE_CHECKING:
     from ..core.config import EditorConfig
 
-VIEW_VERSION = 2
+VIEW_VERSION = 1
 EDIT_TOOL_PREFIX = "replace_with_"
 ABSTAIN_TOOL = "abstain"
 EDIT_TURN = "edit_turn"

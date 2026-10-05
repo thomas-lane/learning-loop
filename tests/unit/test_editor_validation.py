@@ -28,7 +28,7 @@ from learning_loop.editing.editor import (  # noqa: E402
 from learning_loop.episodes.events import load_turns  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
-PROMPT = REPO / "prompts" / "editor" / "v2.md"
+PROMPT = REPO / "prompts" / "editor" / "v1.md"
 GOOD_CMD = vb.PIPELINE + " | awk '{print $2}' > /app/answer.txt"
 
 
@@ -271,7 +271,7 @@ async def test_llm_editor_valid_proposal_and_identity(tmp_path):
     assert "one pipeline" not in json.dumps(messages)  # nothing editor-generated is fed back
     # identity: stable, and independent of the learner checkpoint that produced the source
     assert _editor(FakePolicy(resp)).editor_id == ed.editor_id
-    p2 = tmp_path / "v2.md"
+    p2 = tmp_path / "variant.md"
     p2.write_text(PROMPT.read_text() + "\nextra")
     assert LLMEditor(FakePolicy(resp), mode="initial_policy", checkpoint_id="base", prompt_path=p2, root_seed=5).editor_id != ed.editor_id
     assert LLMEditor(FakePolicy(resp), mode="current_learner", checkpoint_id="c1", prompt_path=PROMPT, root_seed=5).editor_id != ed.editor_id
