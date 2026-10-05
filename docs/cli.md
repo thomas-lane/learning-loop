@@ -1,59 +1,71 @@
 # `loop` command reference
 
-`loop` is the single entry point (`uv run loop ...`). This page has a hand-written part
-(conventions and workflows) and a generated part (every command, argument and exit code),
-produced from the argument parser by `uv run loop docs-gen`. The same text is shown by
-`uv run loop <command> --help`, and `uv run loop docs` serves all documentation in the browser. Configuration files are described in
-[configuration.md](configuration.md); run directories in [run-layout.md](run-layout.md).
+Run commands as `uv run loop <command>` from the repository root. The reference below is
+generated from the argument parser and matches `--help`. See also
+[configuration.md](configuration.md), [run-layout.md](run-layout.md) and
+[operations.md](operations.md) (procedures, troubleshooting).
 
 ## Conventions
 
-- **Paths** in experiments, machine profiles and `--set` values are relative to the repository
-  root unless absolute. Run from the repository root.
-- **`--set key.path=value`** overrides one experiment value after `base:` inheritance; the value
-  is parsed as YAML (`--set cycles=1`, `--set evaluation.dev_panels=[dev]`,
-  `--set editor.scripted_path=null`). Overrides are validated like the file and recorded in
-  `run.json`. Machine profiles have no overrides: copy the example into `configs/machines/local/`.
-- **Side effects.** `validate`, `status`, `report`, `compare` and `docs --check` never start
-  anything; `docs` and `dashboard` only serve pages from a local web server and never write to a
-  run (the dashboard does not take the run lock either). `run`, `resume`, `stage`, `evaluate`, `edit-replay` and the `smoke` levels start
-  Docker containers and, with managed inference, model servers that they stop again; only
-  processes the run started are ever stopped.
-- **Locking.** Commands that mutate a run hold its lock (`runs/<id>/.lock`); a second
-  coordinator on the same run fails immediately with "locked by another coordinator".
-- **Nothing is overwritten.** Re-running a command on an existing run resumes it: completed work
-  is skipped and earlier attempts are kept (see [run-layout.md](run-layout.md)).
+- **Paths** given as command arguments are relative to the current directory, and most paths in
+  configs are relative to the repository root ([details](configuration.md#loading-rules)), so
+  run from the repository root.
+- **`--set key.path=value`** overrides one experiment value after `base:` inheritance, parsed as
+  YAML and recorded in `run.json`, e.g. `--set cycles=1`, `--set evaluation.dev_panels=[dev]`.
+  Machine profiles have no overrides: copy an example from `configs/machines/examples/` into the
+  git-ignored `configs/machines/local/` and edit it.
+- **One coordinator per run.** `run`, `resume`, `stage`, `evaluate` and `edit-replay` hold an
+  exclusive `flock` on `runs/<id>/.lock` while they work, because two processes on one run would
+  execute the same work items twice. A second one fails at once with "locked by another
+  coordinator".
+- **Nothing is overwritten.** `resume` skips completed work items and keeps interrupted attempts
+  as `*.interrupted-N` ([run-layout.md](run-layout.md)). `run` with an existing `--run-id`
+  continues that run only if the new `run.json` would be identical, and fails otherwise.
+
+| Commands | Effect |
+|---|---|
+| `validate`, `status`, `compare`, `remote-status`, `pod status`, `preflight` | Read only; `compare --out DIR` writes the comparison files to `DIR` |
+| `report`, `docs-gen` | Rewrite `runs/<id>/reports/`, or the generated sections of this page and `configuration.md` |
+| `dashboard`, `docs` | Serve pages from a local web server; never write to or lock a run |
+| `run`, `resume`, `stage`, `evaluate`, `edit-replay`, `smoke` | Start the Docker task containers, model servers (managed inference) and training jobs the work needs, and stop them again |
+| `external-eval` | Writes a Harbor job under `--out`; with `--execute`, runs it |
+| `submit`, `sync-hosts`, `fetch` | rsync over SSH; `submit` starts a remote `loop run`, `sync-hosts` runs `uv sync` on each host |
+| `pod start`, `pod stop`, `pod cleanup` | Start, stop or terminate Runpod pods |
+
+`run`, `resume`, `stage`, `evaluate`, `edit-replay` and `sync-hosts` also start or create the
+profile's Runpod pods and stop or terminate them when they end ([runpod.md](runpod.md)).
 
 ## Common workflows
 
 ```bash
-# Check an experiment before spending anything
-uv run loop validate experiments/pilot.yaml --machines configs/machines/local/lab.yaml
+M=configs/machines/local/lab.yaml   # your copy of a profile from configs/machines/examples/
 
-# Run, watch, report
-uv run loop run experiments/pilot.yaml --machines configs/machines/local/lab.yaml --run-id pilot-s0
-uv run loop dashboard runs/pilot-s0 --open        # live read-only page; --log FILE tails a saved console log
+uv run loop validate experiments/pilot.yaml --machines $M   # starts nothing
+
+uv run loop run experiments/pilot.yaml --machines $M --run-id pilot-s0
+uv run loop dashboard runs/pilot-s0 --open   # in a second terminal while the run works
 uv run loop status runs/pilot-s0
 uv run loop report runs/pilot-s0
 
-# After an interruption (crash, Ctrl-C, reboot)
+uv run loop resume runs/pilot-s0   # after a crash, Ctrl-C or reboot
+
+uv run loop stage runs/pilot-s0 --cycle 1 --stage verify   # only this stage's unfinished items
 uv run loop resume runs/pilot-s0
 
-# Re-do a single stage by hand, then let the loop continue
-uv run loop stage runs/pilot-s0 --cycle 1 --stage verify
-uv run loop resume runs/pilot-s0
-
-# Controls and comparisons (same seeds.root => paired evaluation)
-uv run loop run experiments/frozen-baseline.yaml --machines M --run-id base-s0
+# Control and paired comparison (same seeds.root)
+uv run loop run experiments/frozen-baseline.yaml --machines $M --run-id base-s0
 uv run loop compare runs/base-s0 runs/pilot-s0
-uv run loop compare runs/base-s0 --vs runs/pilot-s0 runs/pilot-s1 runs/pilot-s2   # loop seeds
 
-# Final evaluation, only after method and selection decisions are frozen
-uv run loop evaluate --experiment experiments/pilot.yaml --machines M \
-    --checkpoint runs/pilot-s0/checkpoints/<ckpt> --panels final-same-family final-held-out-family --final
+# Two conditions over several loop seeds; compare matches runs by seeds.loop_seed
+uv run loop run experiments/pilot.yaml --machines $M --run-id pilot-s1 --set seeds.loop_seed=1
+uv run loop run experiments/ablations/verify-three-continuations.yaml --machines $M --run-id v3-s0   # and v3-s1
+uv run loop compare runs/pilot-s0 runs/pilot-s1 --vs runs/v3-s0 runs/v3-s1
+
+# Final evaluation, only once method and selection are frozen
+uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
+    --checkpoint runs/pilot-s0/checkpoints/<ckpt> \
+    --panels final-same-family final-held-out-family --final
 ```
-
-A longer, ordered protocol and a troubleshooting guide are in [operations.md](operations.md).
 
 <!-- BEGIN GENERATED by `loop docs-gen`: do not edit by hand -->
 

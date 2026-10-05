@@ -150,8 +150,9 @@ update that file instead of repeating the information elsewhere:
 
 Rules:
 
-- Describe what the code does now. Remove statements that became false; do not keep history,
-  alternatives that were not built, or plans. Mark anything implemented but not run as untested.
+- Describe what the code does now (see [Writing documentation](#writing-documentation)). Remove
+  statements that became false. Track whether a component has been run or tested only in the
+  `README.md` status table, marking anything implemented but not run as untested there.
 - Examples must work: every documented `loop` command and config must run as shown. When you add
   or change an experiment/machine example, keep `tests/unit/test_cli_examples.py` covering it.
 - Never edit between the `BEGIN GENERATED` / `END GENERATED` markers by hand. Every new CLI
@@ -162,3 +163,41 @@ Rules:
 - Keep parameter values in configs, not prose, and keep generated-run facts (provenance, metrics)
   in run outputs, not docs.
 - Never present fixture or smoke outputs as research results in any document.
+
+### Writing documentation
+
+Write for a competent engineer or researcher who is new to this repository and to its methods.
+They read to understand what the system does and why, then to run it. Each rule below follows
+from serving that reader. Before writing, check every claim against the code.
+
+1. **Document the system, not its making.** State what the code does and why. Leave out how the
+   system or the document came to be: history, what was tried or tested, plans, and commentary
+   on the document itself. If an option or feature cannot be used, change or remove the code (or
+   ask the user) instead of documenting that it does not work.
+2. **State what happens, not what does not.** Describe behavior positively. Mention that
+   something does not happen only when a reasonable reader would otherwise expect it, and then
+   say why.
+3. **Give every rule its reason.** When the system imposes a constraint or behaves in a way that
+   could look arbitrary, explain in a sentence what problem that solves. A reason is never the
+   absence of some other feature.
+4. **Answer the obvious "why not?"** When the reader will think of a simpler or more natural
+   approach, say briefly why it is not used. Address only alternatives a reader would actually
+   consider.
+5. **Say how each guarantee is enforced.** When the text claims something is checked, prevented
+   or guaranteed, describe the mechanism precisely enough that the reader can trust the claim.
+   When a list is the rule, give the complete list.
+6. **Define terms where they are used.** Any term with a meaning specific to this project or
+   field gets a plain definition at first use or a link to `docs/glossary.md`. A definition must
+   let the reader tell what is and is not an instance of the term. Definitions agree everywhere;
+   the glossary is the reference.
+7. **Name concrete things concretely.** Refer to anything the reader may need to find by what it
+   is and where it lives, not by a label they have to decode.
+8. **Explain borrowed techniques as far as the text depends on them.** When a section only makes
+   sense if the reader knows how an external method works, give the minimal explanation needed.
+9. **Shorten by removing, not by compressing.** Cut repetition, asides, and content another
+   document owns (link to it instead). Never cut the explanation a reader needs: a terse sentence
+   the reader cannot interpret is a defect, not brevity. Use one idea per sentence, and lists or
+   tables for parallel items.
+10. **Review the draft as the reader before finishing.** Fix only the places where that reader
+    would be stuck, with the smallest change that resolves it, whether that adds, rewords or
+    deletes text. The fixes go into the document; the review's own notes do not.

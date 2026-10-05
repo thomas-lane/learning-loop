@@ -1,6 +1,6 @@
 # Configuration reference
 
-Three kinds of YAML file, each with one responsibility:
+A run is defined by three kinds of YAML file:
 
 | File | Holds | Location |
 |---|---|---|
@@ -9,76 +9,75 @@ Three kinds of YAML file, each with one responsibility:
 | Model profile | identity of a model: pinned revision, chat template, serving backends, training defaults | `configs/models/<name>.yaml` |
 
 Task instances and panels come from split files (`evaluation/splits/*.yaml`), described in
-[../evaluation/README.md](../evaluation/README.md#generators-and-splits).
+[../evaluation/README.md](../evaluation/README.md#generators-and-splits). Terms are defined in
+[glossary.md](glossary.md).
 
 ## Loading rules
 
-- **Strict.** Unknown keys are errors in every file, at every level.
-- **Inheritance.** An experiment may name one `base:` file (relative to itself). The child is
-  deep-merged over it: mappings merge, lists and scalars replace. A base cannot have its own
-  `base:`.
+- **Strict.** Unknown keys are errors at every level, so a misspelled key fails instead of
+  silently leaving the default in place.
+- **Inheritance.** An experiment may name one `base:` file, relative to the experiment file; the
+  base cannot have its own `base:`. Mappings merge key by key; lists and scalars replace.
+- **Paths.** Other paths in configs are relative to the repository root unless absolute, except
+  `learner.initial_checkpoint` and `editor.checkpoint`, which are relative to the current
+  directory.
 - **Overrides.** `--set key.path=value` applies after inheritance and is recorded in `run.json`.
-- **No secrets.** A key ending in `api_key`, `token`, `secret` or `password` with a value is
-  rejected anywhere. Use `*_env` keys naming environment variables (values go in the git-ignored
-  `.env`, loaded automatically by `loop`; template: `.env.example`) and SSH aliases from
-  `~/.ssh/config`.
-- **Resolved copy.** Every run saves the fully resolved experiment, machine profile, model
-  profiles and serving record in `run.json`; `resume` uses that copy (or a validated, recorded
-  `--machines` override).
+- **No secrets.** A key ending in `api_key`, `token`, `secret` or `password` (any case) with a
+  value is rejected, because configs are committed and copied into `run.json`. Put the value in
+  the git-ignored `.env` (template: `.env.example`), which `loop` loads at start, and name the
+  variable in the matching `*_env` key, e.g. `runpod.api_key_env: RUNPOD_API_KEY`.
+- **Resolved copy.** `run.json` stores the resolved experiment, machine and model profiles and
+  serving record, and `resume` reads them from there, so a run keeps its configuration when the
+  files change. `resume --machines` replaces the machine profile after validating it and records
+  it in `machine-overrides.jsonl`.
 
 ## Cross-field rules
 
-`loop validate` (and every command that creates a run) enforces these beyond the per-field types
-below. A violation prints `error: ...` and exits 2 before anything starts.
+Each field's row in the reference below states that field's own constraints. The rules here are
+the remaining ones, which involve several fields or files. A violation prints `error: ...` and
+exits 2 before anything starts.
 
-**Within an experiment**
-- `name` is lowercase `[a-z0-9._-]`.
-- `condition: fixed_dataset` requires `training.fixed_dataset`, and only that condition may set it.
-- `condition: frozen_baseline` requires `cycles: 0`.
-- `editor.mode: external` requires `editor.model_profile`; `editor.model_profile`/`checkpoint` are
-  only valid with `external`; `editor.mode: scripted` requires `editor.scripted_path`.
-- `editor.proposals_per_source` must be 1 (several proposals would need fresh-seed confirmation,
-  which is not implemented).
-- `verification.mode: local` is refused: no environment backend provides the session it needs.
+**Within one file** (checked whenever the file is loaded)
 
-**Tasks and panels**
-- Every referenced panel exists in the split file; the collection panel is a `train` panel,
-  `evaluation.dev_panels` are `dev` panels and `evaluation.final_panels` are `final`/`external`.
-- Exposure-schedule families appear in the collection panel.
-- Split validation: no instance in two splits, no panel mixing splits, held-out families never in
-  a train panel, no identical learner-visible content across splits.
+- `condition: fixed_dataset` requires `training.fixed_dataset`.
+- `editor.mode: external` requires `editor.model_profile`; `scripted` requires
+  `editor.scripted_path`.
+- `kind: ssh` hosts need `ssh_alias`, using only `[A-Za-z0-9_.@-]`. `kind: runpod` hosts need
+  exactly one of `pod_id` or `pod`.
+- The coordinator cannot be a Runpod pod, because task containers need Docker, which pods lack.
+- `scripted` inference needs `backend: scripted`.
 
-**Experiment x machine x model**
-- A scripted learner (`learner.scripted_policy`) and `inference.mode: scripted` go together.
-- Learning or fixed-dataset runs with cycles cannot use `external` inference (it cannot serve new
-  checkpoints).
-- With `trainer: trl_dpo` and managed inference, the model profile must declare the chosen
-  backend with `adapter_formats` containing `peft_lora`; a backend not marked `tested` produces a
-  warning note.
-- With `trainer: trl_dpo`, an explicit `training.device` must be one of the model profile's
-  `supported_train_devices` (when it declares any).
-- An `external` endpoint's `served_checkpoint_id` must equal the checkpoint the run needs
-  (`base:<profile>@<rev12>` for a base model).
-- A separate external editor endpoint must serve exactly the editor's checkpoint, and cannot be
-  combined with `editor.mode: current_learner`. A model editor with a scripted learner needs
-  `editor_inference`.
-- `learner.initial_checkpoint` must have been trained for the same model profile.
-- `training.fixed_dataset` must contain `preferences.jsonl`; an export labeled `fixture` is refused
-  for a real learner unless `labels.allow_fixture_data: 'true'`.
+**Across files** (checked by `validate` and `run`)
 
-**Machine and model files**
-- `ssh` hosts need `ssh_alias` and `workdir`; aliases are restricted to `[A-Za-z0-9_.@-]`.
-- `runpod` hosts need `pod_id` and `workdir`, and the profile needs a `runpod:` block
-  (`runpod: {}` for the defaults); the coordinator cannot be a pod (no Docker there).
-  `ssh_alias` belongs only to `ssh` hosts and `pod_id` only to `runpod` hosts.
-- Managed inference needs `port`; external needs `api_base` and `served_checkpoint_id`; scripted
-  needs `backend: scripted`.
-- `base_revision` is an exact 40-hex commit.
+A *training run* has `condition: learning` or `fixed_dataset` and `cycles` ≥ 1. A *model editor*
+is any `editor.mode` except `scripted`.
 
-Notes that `validate` prints but does not refuse: fixture components in use, an untested serving
-backend, `editor.mode: current_learner`, allowed CPU training, Runpod pods that the command will
-start and stop, and a missing Runpod API key variable (commands that use the pods then fail at
-start).
+- `training.fixed_dataset` must contain `preferences.jsonl`. An export labeled fixture is refused
+  for a non-scripted learner unless `labels.allow_fixture_data: 'true'`.
+- `external` inference must declare the initial checkpoint as `served_checkpoint_id`
+  (`base:<profile>@<rev12>` for a base model). A training run cannot use it, because it cannot
+  serve new checkpoints.
+- In a training run with `trainer: trl_dpo`, an explicit `training.device` must be one of the
+  model profile's `supported_train_devices`, if it lists any. With managed inference, the profile
+  must also list `inference.backend` under `serving` with `peft_lora` in `adapter_formats`.
+- In a learning run with a model editor, an `external` `editor_inference` must serve the
+  editor's checkpoint and cannot be used with `editor.mode: current_learner`; a scripted learner
+  needs `editor_inference`.
+- Every named panel exists in the split file; `evaluation.final_panels` are `final` or
+  `external` panels. The split file passes the checks in
+  [../evaluation/README.md](../evaluation/README.md#generators-and-splits).
+
+`loop run` also checks, when it creates the run, that `learner.initial_checkpoint` was trained
+for the same model profile. `loop evaluate` checks only the per-file rules, the panel rules and
+that `--checkpoint` was trained for the learner's model profile. `loop edit-replay` checks the
+rules as for a `frozen_baseline` experiment, which skips the training-run and model-editor rules.
+`resume --machines` on a learning run checks the new profile against all but the panel rules.
+
+**Warnings, not errors.** `validate` prints `note:` lines for fixture components (scripted
+learner or editor, fixture trainer, fixture dataset), serving backends not marked `tested`,
+`editor.mode: current_learner`, allowed CPU training, final panels (run only by `loop evaluate`),
+the Runpod pods the command will start or create, and a missing Runpod API key variable (pod
+commands then fail at start).
 
 <!-- BEGIN GENERATED by `loop docs-gen`: do not edit by hand -->
 

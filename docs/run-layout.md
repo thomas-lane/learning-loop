@@ -1,221 +1,222 @@
 # Run directory layout
 
-Everything a run produces lives in one directory, `runs/<run-id>/` (the machine profile's
-`runs_dir`). Runs are git-ignored and self-contained: paths inside a run are stored relative to
-it where possible, so a run can be copied between machines (`loop fetch`). This page is the
-reference for what each file is, who writes it, and whether it may change. How the files are
-produced is in [architecture.md](architecture.md).
+Each run writes to one git-ignored directory, `runs/<run-id>/` (`runs/` is the machine profile's
+`runs_dir`). Paths inside are relative where possible, so a run can be copied between machines
+(`loop fetch`). How the files are produced: [architecture.md](architecture.md); terms:
+[glossary.md](glossary.md).
 
-File kinds used below:
-
-- **write-once**: written at creation; rewriting with different content is refused.
-- **atomic**: replaced as a whole (temp file + rename), never seen half-written.
-- **append-only**: JSONL that only grows; a torn last line from a crash is ignored on read.
-- **read-only**: published checkpoint files are `chmod 0444` and never overwritten.
+| Label | Meaning |
+|---|---|
+| **write-once** | rewriting with different content is refused, so the inputs a run started with cannot change under it |
+| **atomic** | replaced whole (temp file + rename), so a crash never leaves a half-written file for a resume to read |
+| **append-only** | JSONL that only grows, one fsynced line per record; a torn last line from a crash is ignored |
+| **read-only** | files are mode `0444` and never overwritten, so data that later records point to cannot change |
 
 ## Learning run
 
+Run id: `<experiment>-<UTC stamp>-s<loop_seed>`, or `--run-id`.
+
 ```text
-runs/<run-id>/                        run id: <experiment>-<UTC stamp>-s<loop_seed> (or --run-id)
-├── .lock                             flock held by the active coordinator (holder pid/host inside)
-├── run.json                          write-once: resolved experiment, machine, model profiles,
-│                                     serving record (backend, concurrency, zero-LoRA serving of base
-│                                     checkpoints), initial checkpoint, panels, splits, instances
-├── provenance.json                   write-once: code identity, packages, uv.lock hash, hardware
-├── invocations.jsonl                 append-only: provenance of every later resume/re-invocation
-├── machine-overrides.jsonl           append-only: `loop resume --machines ...` overrides
-├── seed_schedule.json                evaluation seeds per instance/attempt; stream description
+runs/<run-id>/
+├── .lock                     run lock (see below)
+├── run.json                  write-once: resolved configs and inputs (see below)
+├── provenance.json           write-once: code version, packages, uv.lock hash, hardware, argv
+├── invocations.jsonl         append-only: provenance of each `loop resume`, or repeated command with this `--run-id`
+├── machine-overrides.jsonl   append-only: profiles passed to `loop resume/stage --machines`
+├── seed_schedule.json        evaluation seeds per instance and attempt
 ├── tasks/
-│   ├── instances.json                TaskInstance records (content hashes, params, split data)
-│   └── <family>__<difficulty>__s<seed>/   materialized Harbor task dir (instance id with / -> __)
-├── cycles/
-│   └── cycle-NNN/
-│       ├── cycle.json                atomic: status, learner_in, learner_out, reference,
-│       │                             update (trained | no_update | final_evaluation_only),
-│       │                             dataset manifest, training_data (exported vs trained pairs,
-│       │                             drops with reasons and pair ids, trained token lengths),
-│       │                             checkpoint record
-│       ├── eval/                     unassisted evaluation on the dev panels
-│       ├── collect/                  training-panel experience
-│       ├── edit/                     one proposal per successful source
-│       ├── verify/                   branch comparisons for valid proposals
-│       ├── audit/                    optional re-verification of accepted edits (report only)
-│       ├── dataset/                  preference exports (see below)
-│       └── train/                    training stage work files (see below)
-├── checkpoints/
-│   └── cNNN-<hash12>/                read-only published checkpoint (see below)
-├── cache/ref_logps/                  reference log-prob cache shared across cycles (trl_dpo)
+│   ├── instances.json        task instance records, including content hashes
+│   └── <instance-dir>/       task directory: instance id with `/` -> `__` (e.g. `count-errors__easy__s1`)
+├── cycles/cycle-NNN/
+│   ├── cycle.json            atomic: what the cycle did (see below)
+│   ├── eval/                 evaluation episodes on the dev panels (every cycle, or first and last)
+│   ├── collect/              training-panel episodes (the editor's sources)    ┐
+│   ├── edit/                 edit proposals                                    │ `learning`
+│   ├── verify/               branch comparisons                                │ condition
+│   ├── audit/                re-verification of a sample of accepted edits     │ only
+│   │                         (when `verification.audit.fraction` > 0)          ┘
+│   ├── dataset/              preference pairs
+│   └── train/                training stage files
+├── checkpoints/cNNN-<hash12>/   read-only published checkpoints
+├── cache/ref_logps/          DPO reference log-probs, reused on resume (trl_dpo; remote training keeps them in its work dir)
 ├── logs/
-│   ├── <role>-server-<ckpt>-<ts>.log model server output (managed inference; copied back from
-│   │                                 remote hosts when each server stops)
-│   ├── serving-lifecycle.jsonl       append-only: server start/ready/stop events with PIDs
-│   └── pod-lifecycle.jsonl           append-only: Runpod pod create/start/ready/prepared/watchdog/
-│                                     stop/terminate events (`kind: runpod` hosts only)
-└── reports/                          regenerated by `loop report` (see below)
+│   ├── <role>-server-<checkpoint>-<unix time>.log   model server output (copied back from remote hosts)
+│   ├── serving-lifecycle.jsonl  append-only: model server start/ready/stop events
+│   └── pod-lifecycle.jsonl   append-only: Runpod pod events
+└── reports/                  CSV and markdown reports (see below)
 ```
 
-The last cycle (`cycle-<cycles>`) contains only `eval/` and `cycle.json`: it evaluates the final
-checkpoint. A no-update cycle has `dataset/` with `n_examples: 0` and no `train/`.
+- `.lock`: every command that runs stages holds an exclusive `flock` on it, so two coordinators
+  never write one run. The file stays after the command ends and names the last holder (`pid`,
+  `host`, `since`); a leftover file does not block the next command.
+- `run.json`: experiment (with `--set` overrides), machine and model profiles, serving setup
+  (including whether base checkpoints are served through a [zero LoRA](glossary.md)), initial
+  checkpoint, panels, splits, held-out families and instances.
+- `cycle.json`: `status`, `learner_in`, `learner_out`, `reference` (the DPO reference), `update`
+  (`trained`, `no_update`, `final_evaluation_only`), `dataset` (the dataset manifest),
+  `training_data` (exported, trained and dropped pairs with reasons) and `checkpoint_record`.
+- The last cycle (`cycle-<cycles>`) has only `eval/` and `cycle.json`. A
+  [no-update cycle](glossary.md) has `dataset/`, and `train/` only when pairs were exported but the
+  trainer dropped all of them.
 
 ## Stage directories
 
-Every stage directory (`eval/`, `collect/`, `edit/`, `verify/`, `audit/`) has the same shape:
+`eval/`, `collect/`, `edit/`, `verify/` and `audit/` share one shape:
 
 ```text
 <stage>/
-├── manifest.json                     atomic StageManifest
+├── manifest.json                  atomic: stage status and per-item status
 └── items/
-    ├── <item-id>/                    output of the successful (or last) execution
-    └── <item-id>.interrupted-N/      earlier interrupted or infra-failed executions, kept as-is
+    ├── <item-id>/                 output of the successful (or latest) execution
+    └── <item-id>.interrupted-N/   earlier interrupted or infra-failed execution, kept as-is
 ```
 
-`manifest.json` holds the stage status, `active_intervals` (start/end of every execution, so
-durations exclude time between an interruption and a resume), a summary of counts, and per item:
-`status` (`pending`, `running`, `done`, `failed`, `infra_failed`), `attempts`, `infra_failures`,
-`output` (item path), `error`, `interrupted_dirs` and `meta` (instance, attempt, panel, source
-paths, editor id...). Items marked `done`, `failed` or `infra_failed` are never re-executed.
+Each manifest item has a `status` (`pending`, `running`, `done`, `failed`, `infra_failed`),
+`attempts`, `infra_failures`, `output`, `interrupted_dirs` and `meta`. A resume never reruns
+`done`, `failed` or `infra_failed` items, so counts that later stages used stay fixed
+([reopening failed items](operations.md#reopening-failed-items)). Earlier executions are renamed
+rather than deleted, so their token spend still counts in the report. `active_intervals` records
+each execution's start and end, so durations exclude time spent interrupted.
 
-### Episode item (eval, collect)
+### Episode item (`eval/`, `collect/`)
 
 ```text
 items/ep-<hash>/
-├── plan.json                         the EpisodePlan (policy spec, seed, budgets, prompts, tools,
-│                                     state contract, replay spec for branches)
-├── summary.json                      EpisodeSummary: success, partial reward, stop reason/category,
-│                                     usage, counts, timing, image identity (+ `extra`)
-├── agent_plan.json                   plan as handed to the Harbor agent        (Docker backend)
-├── episode/                          authoritative, host-only record
-│   ├── events.jsonl                  append-only lossless event log (read via events.load_turns)
-│   ├── episode.json                  episode core written by the agent loop
-│   ├── summary.json                  summary with the grading result
-│   ├── messages.json                 final request's {tools, messages} (a view, not the record)
-│   ├── trajectory.json               ATIF view for `harbor view`
-│   └── grading.json                  local grader output                       (local fixture backend)
-└── harbor/<trial>/                   Harbor's own trial directory              (Docker backend)
+├── plan.json              inputs: policy, seed, budgets, prompts, tools, task state spec
+├── summary.json           outcome: success, reward, stop reason, token usage, timing (the copy the loop reads)
+├── agent_plan.json        plan handed to the Harbor agent (Docker)
+├── episode/               authoritative record, on the host and never mounted into the container
+│   ├── events.jsonl       append-only complete event log
+│   ├── episode.json       episode as written by the agent loop
+│   ├── summary.json       the same summary, written by the backend
+│   ├── messages.json      final message history and tool schemas (a view, not the record)
+│   ├── trajectory.json    Harbor ATIF view for `harbor view` (Docker)
+│   └── grading.json       local grader output (local fixture backend)
+└── harbor/<trial>/        Harbor's trial directory (Docker)
     ├── result.json, config.json, trial.log, lock.json
-    ├── agent/                        copies of the episode files (for Harbor tooling)
-    ├── artifacts/                    declared artifacts transferred to the verifier
-    └── verifier/                     reward.json|reward.txt, test-stdout.txt
+    ├── agent/             copies of episode files; the container can write here, so the loop never reads it
+    ├── artifacts/         declared artifacts copied to the verifier
+    └── verifier/          reward.json or reward.txt, test-stdout.txt
 ```
 
-The copies under `harbor/<trial>/agent/` exist for Harbor's viewers; the learner container can
-write to that mount, so the loop never reads them.
+### Edit item (`edit/`)
 
-### Edit item
+`items/prop-<hash>/proposal.json`: `status` (`proposed`, `abstained`, `invalid`), `turn_index`,
+`replacement` (the proposed call), `rejection_reasons`, `raw_response`, `usage`, and the editor's
+`justification` (never used for training).
 
-```text
-items/prop-<hash>/proposal.json       EditProposal: status (proposed | abstained | invalid),
-                                      turn, tool-call id, replacement, justification (editor-only),
-                                      rejection reasons, raw editor response, editor usage
-```
-
-### Verify / audit item
+### Verify and audit items (`verify/`, `audit/`)
 
 ```text
 items/ver-<hash>/
-├── verification.json                 VerificationRecord: per-branch results and costs,
-│                                     accepted, every rejection reason, evidence label,
-│                                     operational usage, purpose (acceptance | audit)
-├── original-r00/                     branch episode (same layout as an episode item's files:
-├── edited-r00/                       agent_plan.json, episode/, harbor/)
-└── ...-rNN/                          one pair per continuation repetition
+├── verification.json      per-branch results and costs, accepted, reasons,
+│                          evidence label, purpose (acceptance or audit)
+├── original-r00/          branch episode: `episode/`, plus `agent_plan.json` and `harbor/` on Docker
+├── edited-r00/
+└── ...-rNN/               one pair per continuation repetition
 ```
 
-## Dataset exports
+A proposal rejected before any branch runs has only `verification.json`.
+
+## Dataset
 
 ```text
-dataset/
-├── manifest.json                     written last: n_examples, dataset_sha256 (of
-│                                     preferences.jsonl), composition by family/difficulty,
-│                                     verification modes, kinds (verified | fixture), cycle
-├── preferences.jsonl                 training rows only: {pair_id, prompt, chosen, rejected, tools}
-├── provenance.jsonl                  companion rows keyed by pair_id (instance, split, source
-│                                     episode, proposal, verification, learner, editor, saving)
-└── current/                          same three files: only this cycle's accepted pairs
+dataset/                   read-only files; re-exporting different content is refused
+├── manifest.json          written last: n_examples, dataset_sha256, composition, kinds (`verified` | `fixture`)
+├── preferences.jsonl      training rows only: {pair_id, prompt, chosen, rejected, tools}
+├── provenance.jsonl       evidence per pair_id: instance, source episode, proposal, verification, saving
+└── current/               same three files, this cycle's accepted pairs only
 ```
 
-`dataset/` is what the trainer uses (current pairs plus the sampled history buffer); earlier
-cycles' `current/` directories are the history pool. Exports are sealed (read-only files) and a
-re-export with different content is refused. For `fixed_dataset` runs, `dataset/` is a byte copy
-of the frozen export.
+The trainer reads `dataset/` (this cycle's pairs plus sampled history from earlier cycles'
+`current/`; see [experiment.md](experiment.md)). In a `fixed_dataset` run, `preferences.jsonl`
+and `provenance.jsonl` are byte copies of the frozen export, the manifest records its source, and
+there is no `current/`.
 
 ## Training stage and checkpoints
 
 ```text
 train/
-├── request.json                      write-once TrainRequest (dataset, incoming checkpoint,
-│                                     training config, seed, device)
-├── train.log                         trainer stderr
-├── checkpoint_path.txt               written after the checkpoint is verified (marks the stage done)
-├── remote_request.json, remote_launch.json   remote training only (host paths, remote PID)
-├── remote-train.log                  remote training only: the trainer's log, copied back
-├── relaunches.jsonl                  remote training only: append-only record of each relaunch
-│                                     after the trainer was lost (e.g. the pod stopped)
-└── work/                             the trainer's work dir (resume state)
-    ├── .trainer.lock                 one trainer per work dir
-    ├── request.json, result.json     status: published | no_trainable_examples | invalid_request | failed
-    ├── render_report.json            kept/dropped examples with reasons (e.g. oversize), trained lengths
-    ├── train_logs.jsonl              per-step metrics
-    └── trainer/checkpoint-N/         latest optimizer/scheduler/RNG state for resuming the stage
+├── request.json           write-once: dataset, incoming checkpoint, training config, seed
+├── train.log              trainer stderr (local training)
+├── checkpoint_path.txt    published checkpoint's directory, written after the lineage check;
+│                          marks the stage done
+├── remote_request.json    request with remote paths      ┐
+├── remote_launch.json     remote trainer PID and host    │ remote training only
+├── remote-train.log       trainer log, copied back       │
+├── relaunches.jsonl       append-only: relaunches after  │
+│                          the trainer was lost           ┘
+└── work/                  trainer working directory (resume state)
+    ├── .trainer.lock      one trainer per work directory
+    ├── request.json, result.json   result status: published | no_trainable_examples | invalid_request | failed
+    ├── render_report.json kept and dropped examples, with reasons (trl_dpo)
+    ├── train_logs.jsonl   per-step metrics (trl_dpo)
+    ├── trainer/checkpoint-N/   optimizer, scheduler and RNG state (trl_dpo)
+    └── fixture_state.json resume state (fixture trainer)
 
-checkpoints/cNNN-<hash12>/            read-only, published by atomic rename
-├── adapter_model.safetensors         PEFT LoRA weights                        (trl_dpo)
-├── adapter_config.json
-├── README.md
-├── fixture_adapter.json              labeled pseudo-adapter                   (fixture trainer)
-└── checkpoint.json                   CheckpointRecord: checkpoint ref (parent, adapter path and
-                                      hash, base revision), reference id, dataset hash, config,
-                                      optimizer steps, seeds, metrics, reload check
+checkpoints/cNNN-<hash12>/   read-only, published by atomic rename
+├── adapter_model.safetensors, adapter_config.json, README.md   LoRA adapter (trl_dpo)
+├── fixture_adapter.json   labeled stand-in adapter (fixture trainer)
+└── checkpoint.json        lineage, adapter hash, dataset hash, config, steps, seeds, reload check
 ```
 
 ## Reports
 
-`reports/` is regenerated from the files above and can be deleted at any time:
+`reports/` is written when `loop run`, `resume`, `evaluate` or `edit-replay` finishes, and by
+`loop report`. It is regenerated from the run and can be deleted at any time.
 
 | File | Content |
 |---|---|
-| `report.md` | readable summary: lineage, evaluation by checkpoint/panel/family/difficulty/skill, stop reasons, stage effort, proposals and verification, datasets, paired first-vs-last comparison |
-| `episodes.csv` | one row per episode (eval and collect; branches are not evaluations) |
-| `summary_by_*.csv` | grouped summaries (checkpoint/cycle/panel, family, difficulty, skill, role/cycle) |
+| `report.md` | readable summary of everything below, plus lineage and a first-vs-last comparison |
+| `episodes.csv` | one row per eval or collect episode (not branches) |
+| `summary_by_*.csv` | grouped by checkpoint/cycle/panel, family, difficulty, skill, role/cycle |
 | `stage_effort.csv` | usage, active time, optimizer steps, retries per stage |
 | `proposals.csv`, `verifications.csv`, `branch_costs.csv` | editing and verification detail |
-| `training_data.csv` | per cycle: exported pairs, pairs trained on, dropped pairs with reasons and ids, `max_length`, trained token lengths |
+| `training_data.csv` | per cycle: exported, trained and dropped pairs, `max_length`, token lengths |
 
-`loop compare` writes its comparison to `--out` (or prints it); it never writes into either run.
+`loop compare` prints or writes to `--out`; it never writes into either run.
 
 ## Other run kinds
 
-`run.json` has a `kind`; `loop resume` re-enters the stages of that kind only.
+`run.json` `kind` decides which stages `loop resume` re-enters.
 
-| Kind | Created by | Contents |
-|---|---|---|
-| `learning` (default) | `loop run` | the layout above |
-| `evaluation` | `loop evaluate` | `cycles/cycle-000/eval/` only; `run.json` names the evaluated checkpoint and panels and whether they are final-test panels |
-| `edit_replay` | `loop edit-replay` | `cycles/cycle-000/{edit,verify,dataset}/`; `run.json.imported_sources` points at the source run/cycle, whose episodes are read in place |
+| Kind | Created by | Default run id | Contents |
+|---|---|---|---|
+| `learning` (no `kind` field) | `loop run` | see above | the layout above |
+| `evaluation` | `loop evaluate` | `<experiment>-eval-<stamp>` | `cycles/cycle-000/eval/` only (no `cycle.json`); `run.json` names the checkpoint and panels |
+| `edit_replay` | `loop edit-replay` | `<experiment>-editreplay-<stamp>` | `cycles/cycle-000/{edit,verify,dataset}/`; `imported_sources` in `run.json` names the source run, read in place |
 
-Other directories under `runs/`:
+## Other files
+
+On the machine running `loop` (paths relative to the repository root, independent of `runs_dir`):
 
 | Path | Content |
 |---|---|
-| `runs/_smoke/<level>-<stamp>/` | `loop smoke` outputs (fixture runs are deleted on success unless `--keep`) |
-| `runs/_submissions/<run-id>.json` | laptop-side record of `loop submit` (host, workdir, remote PID) |
-| `runs/_pods/pod-lifecycle.jsonl` | pod lifecycle events of commands without a run directory (`loop sync-hosts`) |
-| `runs/external/<dataset>-<version>-<ckpt>/` | `job.yaml`, `protocol.json` and Harbor `jobs/` for external benchmarks |
+| `runs/_smoke/` | `loop smoke` output: `fixture-<stamp>/` (deleted on success unless `--keep`), `train-<stamp>/`, `live-<stamp>/` |
+| `runs/_submissions/<run-id>.json` | `loop submit` record: host, work directory, remote PID |
+| `runs/_pods/pod-lifecycle.jsonl` | pod events from `loop sync-hosts` (no run directory) |
+| `runs/external/<dataset>-<version>-<checkpoint>/` | `loop external-eval` (default `--out`): `job.yaml`, `protocol.json`, Harbor `jobs/` |
+| `artifacts/runpod/<pod>.known_hosts` | pod SSH host key, reset each time a command reaches the pod |
+| `artifacts/runpod/created.jsonl` | append-only ledger of created pods; the only pods `loop` may terminate |
 
-On a remote training host the same run id is used: `runs/<run-id>/remote-train/cNNN/` (request,
-dataset copy, work dir, `train.log`) and `runs/<run-id>/checkpoints/`. Remote model servers log to
-`runs/_servers/` on that host; a Runpod pod also keeps `runs/_pod/` (heartbeat, watchdog log and
-PID). Everything on a remote host is a copy or scratch space: losing it never loses results.
-Outside `runs/`, `artifacts/runpod/<pod>.known_hosts` holds a pod's SSH host key (reset on every
-command, since pods get new host keys on each start), and `artifacts/runpod/created.jsonl` is the
-append-only ledger of pods `loop` created and terminated (the only pods it may terminate).
+On a remote training or inference host (same run id; copies or scratch, so losing them loses no
+results):
+
+| Path | Content |
+|---|---|
+| `runs/<run-id>/remote-train/cNNN/` | request, dataset copy, work directory, `train.log` |
+| `runs/<run-id>/checkpoints/` | incoming checkpoints pushed there and new ones published there |
+| `runs/_servers/` | model server logs |
+| `runs/_pod/` | Runpod only: heartbeat, watchdog log and PID |
+
+On a coordinator host used through `loop submit`, `runs/<run-id>/` is the run directory itself,
+plus `submitted-machine.yaml` and `coordinator.log`; `loop fetch` copies it back.
 
 ## Finding things
 
 ```bash
-loop status runs/<id>                                   # per-cycle stage status, attempts, infra failures
-jq . runs/<id>/cycles/cycle-000/cycle.json              # what the cycle did and which checkpoint it produced
+uv run loop status runs/<id>
+jq . runs/<id>/cycles/cycle-000/cycle.json
 jq '.items[] | {item_id, status, meta}' runs/<id>/cycles/cycle-000/collect/manifest.json
-jq -c 'select(.kind=="response") | .data.history_message' runs/<id>/cycles/cycle-000/collect/items/<ep>/episode/events.jsonl
 jq '{accepted, reasons, evidence_label}' runs/<id>/cycles/cycle-000/verify/items/*/verification.json
 ```

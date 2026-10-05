@@ -1,87 +1,95 @@
 # Glossary
 
-Terms as this repository uses them. Several are easy to confuse; the "not to be confused with"
-notes are the point of this page.
-
 ## Tasks and data
 
 | Term | Meaning |
 |---|---|
-| **Family** | A kind of task with one generator, e.g. `log-triage`, `fix-stats`, `csv-revenue`, `count-errors`. |
-| **Task instance** | One concrete Harbor task directory, id `family/difficulty/sSEED` (or `family/static` for the hand-written tasks). Content-hashed. Not to be confused with an *attempt* at it. |
-| **Difficulty** | `easy` / `medium` / `hard`: a generator parameter set within a family. |
-| **Skill** | A tag on a family (e.g. `gzip`, `debugging`), used only to group reports. |
-| **Split** | Which purpose an instance serves: `train`, `dev`, `final` or `external`. Every instance has exactly one. |
-| **Panel** | A named list of instances of one split, declared in a split file (`evaluation/splits/*.yaml`), e.g. `train-easy-only`, `dev-medium-hard`. Experiments refer to panels, not splits. |
-| **Held-out family** | A family that may never appear in a train panel; evaluated only on final panels. |
-| **Artifact** | A file the task declares in `task.toml` (e.g. `/app/answer.txt`); the only thing copied from the agent container to the verifier container. |
-| **Complete success** | `reward >= success_threshold` (1.0 for all shipped tasks). The gate for editing, acceptance and success rates. |
-| **Partial reward** | The verifier's `reward` value, e.g. 0.33 when fix-stats' no-op passes 3 of 9 checks. Reported separately; never counted as success. |
-| **Oracle / nop** | Harbor's reference-solution agent and do-nothing agent; they check that a task is solvable and what a no-op scores. |
+| **Harbor** | The external framework that runs a task: it starts the task's container, lets an agent act in it, then grades the declared artifacts in a separate verifier container ([evaluation/README.md](../evaluation/README.md)). |
+| **Family** | A kind of task with its own generator in `evaluation/generators/`, e.g. `log-triage`. |
+| **Difficulty** | One of a generator's parameter sets: `easy`, `medium` or `hard`. |
+| **Task instance** | One concrete Harbor task, id `family/difficulty/sSEED` (generated) or `family/static` (hand-written). |
+| **Skill** | A family tag (e.g. `gzip`) used only to group reports. |
+| **Split** | An instance's single purpose, set in its split file: `train` (training data), `dev` (evaluated every cycle), or `final`/`external` (evaluated only with `loop evaluate --final`, once method choices are frozen). |
+| **Panel** | A named list of same-split instances in a split file (`evaluation/splits/*.yaml`). Experiments name panels (`tasks.collection_panel`, `evaluation.dev_panels`, `evaluation.final_panels`), not splits. |
+| **Held-out family** | A family in a split file's `held_out_families`: it may have no train-split instance, so it measures transfer to families never trained on. |
+| **Exposure schedule** | `tasks.exposure_schedule`: which families collection uses from which cycle on, for studying retention of earlier families. |
+| **Artifact** | A file listed in `task.toml` `artifacts` (e.g. `/app/answer.txt`); the only thing copied from the learner's container to the verifier container. |
+| **Complete success** | `reward >= success_threshold` (in `task.toml`; 1.0 for all shipped tasks). Only this counts as success, makes an episode editable, or passes acceptance. |
+| **Partial reward** | The verifier's `reward` value from 0 to 1, e.g. 0.33 when a third of fix-stats' hidden checks pass. Reported next to success; a value below the threshold is not success. |
+| **Oracle / nop** | Harbor agents that run the reference solution (must score 1.0) / do nothing (the baseline score). |
 
 ## Episodes and runs
 
 | Term | Meaning |
 |---|---|
-| **Episode** | One learner interaction with one fresh task environment, from the first request to a stop, plus grading. Has an `ep-...` id. |
-| **Harbor trial** | Harbor's unit of execution (environment + agent + verifier) that runs one episode on the Docker backend. Its directory sits inside the episode's item directory. |
-| **Attempt** | The n-th independently seeded episode of one instance within a stage (`attempt_index`). Evaluation attempt seeds are identical across checkpoints. |
-| **Role** | Why an episode ran: `eval` (unassisted evaluation), `collect` (training experience), `branch` (verification continuation; never counted as an evaluation). |
-| **Turn** | One assistant message in an episode (0-based `turn_index`), usually with tool calls. |
-| **Stop reason / category** | Why an episode ended, e.g. `budget:max_turns` in category `budget`. Categories: `model`, `budget` (experimental limits), `safety` (wall clock), `model_error`, `infra`, `replay`. |
-| **Run** | One directory under `runs/` created by one command: a learning run, an evaluation run or an edit-replay run (`run.json` `kind`). One learning run has one loop seed. |
-| **Cycle** | One pass of eval -> collect -> edit -> verify -> dataset -> train with a frozen learner. `cycles: N` runs N training stages (some may be no-updates) and evaluates the learner N+1 times. |
-| **Stage** | One step of a cycle (`eval`, `collect`, `edit`, `verify`, `audit`, `dataset`, `train`), with its own directory and manifest. |
-| **Work item** | One unit of stage work with a stable id (`ep-`, `prop-`, `ver-`), tracked in the stage manifest. An item can have several *executions* after interruptions or infra retries. |
-| **Condition** | The experimental arm: `learning`, `frozen_baseline`, `fixed_dataset`. Editor and verification variants are configuration, not conditions. |
-| **Loop seed** | `seeds.loop_seed`: the independent replicate of a learning run. Method comparisons use several loop seeds; evaluation seeds do not depend on it. |
+| **Learner** | The model being trained: a base model plus, once trained, a LoRA adapter. |
+| **Episode** | One learner attempt at one instance in a fresh environment, then grading (id `ep-...`). Verification branches are episodes too (*role* `branch`). |
+| **Trajectory** | The recorded turns, tool calls and observations of one episode. |
+| **Harbor trial** | Harbor's unit of execution; with `environment_backend: harbor_docker` each episode runs as one trial. |
+| **Attempt** | The n-th seeded episode on one instance in a stage (`attempt_index`); evaluation seeds are the same for every checkpoint. |
+| **Role** | Why an episode ran: `eval` (unassisted evaluation), `collect` (training experience) or `branch` (verification; never counted as evaluation). |
+| **Turn** | One request to the learner and its reply, plus running the reply's tool calls; the tool outputs go into the next request (`turn_index`, from 0). |
+| **Stop reason / category** | Why an episode ended, e.g. `budget:max_turns` (full list in [evaluation/README.md](../evaluation/README.md)). Categories: `model` (replied without a tool call), `budget` (turn, token or output limits), `safety` (wall clock), `model_error` (request rejected, or no tool call parsed), `infra` (environment or endpoint failure; retried), `replay` (restored state differs from the source). |
+| **Usage source** | Where an episode's token counts come from (`usage.source`): `provider` (reported by the model server), `fixture_estimate` (a fixture's character-based estimate), `none` (no usage measured) or `mixed` (several sources summed). |
+| **Run** | One directory under `runs/` made by one command; `run.json` `kind` is `learning` (`loop run`), `evaluation` (`loop evaluate`) or `edit_replay` (`loop edit-replay`). |
+| **Smoke run** | A short engineering check made by `loop smoke <level>` under `runs/_smoke/` ([README](../README.md)); it never supports research claims. |
+| **Cycle** | One pass of eval → collect → edit → verify → dataset → train with a fixed learner; `cycles: N` trains N times and evaluates N+1 checkpoints, and the last cycle only evaluates. |
+| **No-update cycle** | A cycle with no pair to train on (none accepted, or none fits `training.dpo.max_length`); the learner carries over unchanged. The last, evaluation-only cycle is not one. |
+| **Stage** | One step of a cycle with its own directory under `cycles/cycle-NNN/`: `eval`, `collect`, `edit`, `verify`, `audit` (optional), `dataset`, `train`. |
+| **Manifest** | The `manifest.json` of an `eval`, `collect`, `edit`, `verify` or `audit` stage: its work items and their status. Resuming skips finished items. |
+| **Work item** | One unit of stage work with a stable id: an episode (`ep-`), proposal (`prop-`) or verification (`ver-`). Each rerun after an interruption or infra failure is a new *execution*; earlier ones are kept as `<id>.interrupted-N`. |
+| **Condition** | One way of running the experiment that results compare: the `condition` setting (`learning`, or a **control**: `frozen_baseline`, never trained, or `fixed_dataset`, training only on one frozen export) or a variant such as another `editor.mode` ([experiment.md](experiment.md#conditions-and-controls)). Runs differing only in loop seed are repeats of one condition. |
+| **Loop seed** | `seeds.loop_seed`: picks one independent repeat of a learning run (its collection, editing and training draws); evaluation seeds do not depend on it. |
 
 ## Editing and verification
 
 | Term | Meaning |
 |---|---|
-| **Source (trajectory)** | A completely successful collection episode given to the editor. |
-| **Editor** | The component (and the model behind it) that proposes one replacement tool call for one turn of a source. Default: the fixed initial checkpoint (`initial_policy`). |
-| **Proposal** | The editor's output: `proposed`, `abstained` or `invalid` (with rejection reasons). |
-| **Eligible turn** | A model turn with exactly one well-formed, unrepaired tool call and no assistant text or reasoning. |
-| **Grounding** | The heuristic that rejects hindsight constants in a replacement (`ungrounded_constant:<value>`). A filter, not a proof. |
-| **Intervention** | The fixed action at the branch point: the original call (`original` branch) or the replacement (`edited` branch). |
-| **Replay** | Rebuilding the decision state in a fresh environment by re-executing the source's earlier actions without calling any model, checking observations and fingerprints. Fails closed. |
-| **Fingerprint** | A hash of the task's declared state (file content, types, permissions, owners, symlinks, working directory). |
-| **Branch** | One side of a verification: replay -> intervention -> fresh continuation of the learner. |
-| **Continuation** | The learner's own turns after the intervention in a branch. Original and edited branches use the same continuation seed. |
-| **Counterfactual episode token cost** | Branch cost = source prefix tokens + request-*k* input + learner-tokenizer length of the intervention turn + continuation tokens. |
-| **Saving** | Mean original cost minus mean edited cost across repetitions. |
-| **Acceptance rule** | Named criteria for turning a verification into a preference pair; currently only `strict_all_success_v1`. |
-| **Evidence label** | Strength of an accepted record, e.g. `one_observed_successful_preference` with one continuation per branch. |
-| **Audit** | Re-verification of a random share of accepted edits with fresh seeds; reported, never changes datasets. |
+| **Source (trajectory)** | A collected episode with complete success, given to the editor. |
+| **Editor** | The model that proposes one replacement tool call for one turn of a source; by default the fixed initial checkpoint (`editor.mode: initial_policy`). |
+| **Proposal** | The editor's output for one source: `proposed`, `abstained` (the editor declined) or `invalid` (unusable response or failed the code checks, with rejection reasons). |
+| **Eligible turn** | A turn the editor may replace: generated by the learner (not replayed), with exactly one tool call that parsed cleanly, was not repaired by the parser and ran, and no assistant text or reasoning ([why](experiment.md#editing)). |
+| **Hindsight constant** | A value in a replacement (IP address, number of 3+ digits, quoted string, file path, or any number it writes or prints) that appears in the episode after the edited turn but not before it. The grounding check rejects it as `ungrounded_constant:<value>` ([details](experiment.md#editing)). |
+| **Intervention** | The fixed action at the edited turn of a branch: the original call (`original` branch) or the replacement (`edited` branch). |
+| **Replay** | Rebuilding the state before the edited turn in a fresh environment by re-running the source's earlier tool calls without a model; any observation or fingerprint mismatch stops the branch (it *fails closed*). |
+| **Normalizer** | A regex replacement declared in `task.toml` (`observation_normalizers`) that removes run-to-run noise (e.g. `ls -l` times) before replay compares observations; replay applies no others. |
+| **Fingerprint** | A hash of the files under the task's `fingerprint_paths` (content, type, permissions, owner, symlink target) and the working directory; modification times are not included. |
+| **Branch** | One side of a verification: replay, intervention, then a fresh learner continuation. Each proposal gets an `original` and an `edited` branch. |
+| **Continuation** | The learner's own turns after the intervention. Both branches of a repetition use the same seed; `verification.continuations_per_branch` sets the repetitions. |
+| **Counterfactual episode token cost** | A branch's cost as if it were a whole episode: the source's tokens before the edited turn, the edited turn's request input, the fixed turn's rendered length, and the continuation's usage ([details](experiment.md#verification-and-acceptance)). |
+| **Saving** | Mean original-branch cost minus mean edited-branch cost over repetitions. |
+| **Acceptance rule** | The criteria for a preference pair; only `strict_all_success_v1` ([experiment.md](experiment.md#verification-and-acceptance)). |
+| **Evidence label** | How much evidence backs an accepted edit: `one_observed_successful_preference` with one continuation per branch, `all_<N>_continuation_pairs_successful` with N. |
+| **Audit** | Re-verifying a random share of accepted edits with fresh seeds; reported only, never changes a dataset. |
 
 ## Training and models
 
 | Term | Meaning |
 |---|---|
-| **Preference pair** | `{prompt, chosen, rejected, tools}`: the history before turn *k*, the edited turn, the original turn. Its evidence lives in the companion provenance record. |
-| **Export / dataset** | An immutable directory of pairs (`preferences.jsonl`, `provenance.jsonl`, `manifest.json`). `dataset/current/` holds one cycle's new pairs; `dataset/` the selected training set. |
-| **History buffer** | Earlier cycles' pairs sampled into the training set (`current_and_history`). Old pairs keep their original provenance; they are not re-verified. |
-| **Fixture** | A labeled stand-in used for engineering checks: scripted policy/editor, the fixture trainer, hand-written preference data. Pairs from scripted runs are labeled `fixture`, never `verified`. |
-| **No-update cycle** | A cycle with no trainable pairs: the learner carries over unchanged. |
-| **Base model / revision** | The trainable source checkpoint (HF repo) at an exact commit, from the model profile. |
-| **Serving artifact** | What a backend actually serves, e.g. a Q8_0 GGUF of the base model. Not a trainable source and not bit-identical to it. |
-| **Adapter** | LoRA weights (PEFT) on top of the base model. |
-| **Checkpoint** | An immutable learner identity: base (`base:<profile>@<rev12>`) or base + adapter (`cNNN-<hash12>`, published under `runs/<id>/checkpoints/`). |
-| **Incoming checkpoint** | The learner frozen at the start of a cycle. Its adapter is continued, and it is the DPO reference. |
-| **Reference** | The frozen policy DPO compares against; here always the incoming checkpoint *including* its adapter (precomputed log-probs). |
-| **Lineage** | Parent and reference ids recorded in each `checkpoint.json` and `cycle.json`. |
+| **Preference pair** | One training example `{prompt, chosen, rejected, tools}`: the conversation before the edited turn, the edited turn, the original turn and the learner's tool schemas. |
+| **Provenance record** | The companion to a preference pair holding its origin and verification evidence; never training input. |
+| **Export / dataset** | A read-only directory of pairs (`preferences.jsonl`, `provenance.jsonl`, `manifest.json`): `dataset/current/` is the cycle's new pairs, `dataset/` the training set. |
+| **History buffer** | The pool of earlier cycles' pairs (at most `training.data.buffer_capacity`) that `selection: current_and_history` samples into each training set; its pairs are not re-verified. |
+| **Dropped pair** | An exported pair the trainer skipped (e.g. longer than `training.dpo.max_length`), counted with its reason. |
+| **Fixture** | A labeled stand-in for testing the plumbing without a model: scripted policy or editor, fixture trainer, hand-written pairs. Its pairs are labeled `fixture`, never `verified`. |
+| **Base model / revision** | `base_model` and `base_revision` in the model profile: the trainable Hugging Face model at an exact commit. |
+| **Serving artifact** | Weights a serving backend loads instead of the base model (`artifact`, e.g. a Q8_0 GGUF); not trainable and not bit-identical to the base model. |
+| **LoRA adapter** | Small trained matrices added to chosen weight matrices of the frozen base model (each becomes W + B·A, scaled), stored in PEFT format. Training changes only the adapter. |
+| **Checkpoint** | A read-only learner identity: `base:<profile>@<rev12>`, or base plus adapter `cNNN-<hash12>` under `runs/<id>/checkpoints/`. |
+| **Incoming checkpoint** | The learner *L_c* at the start of cycle *c*; training continues its adapter, and it is the DPO reference. |
+| **Reference** | The fixed model DPO measures change against ([experiment.md](experiment.md#preference-data-and-training)): always the incoming checkpoint including its adapter. |
+| **Reload check** | Before publishing, the adapter is reloaded from its files onto a fresh base model and must reproduce the trained weights and log-probabilities within tolerance. |
+| **Zero LoRA** | An adapter of the experiment's LoRA shape whose B matrices are all zero, so it adds nothing to the weights. With `training.trainer: trl_dpo`, base checkpoints are served through it, so they pay the same adapter overhead as trained ones. |
+| **Lineage** | Parent and reference checkpoint ids, in `checkpoint.json` and `cycle.json`. |
 
-## Machines
+## Machines and configuration
 
 | Term | Meaning |
 |---|---|
-| **Coordinator** | The process running `loop run`: it owns the run directory, Docker work and serving swaps. |
-| **Pod lifecycle** | For `kind: runpod` hosts: each command starts an existing pod (`pod_id`) or creates one from a spec (`pod:`), prepares it, keeps a heartbeat, and stops (existing) or terminates (created) it at the end. |
-| **Created pod** | A pod `loop` created from a `runpod.create` spec for one command, named `lfe-<spec>-<stamp>` and recorded in the ledger `artifacts/runpod/created.jsonl`; the only kind of pod `loop` terminates. |
-| **Zero LoRA** | An adapter of the experiment's LoRA shape whose B matrices are exactly zero; base checkpoints are served through it so that every cycle pays the same adapter overhead while producing the base model's exact outputs. |
-| **Watchdog** | A process on a pod that stops the pod (a created pod: terminates it) when the coordinator's heartbeat is older than `idle_stop_minutes`, so a sleeping or crashed laptop cannot leave it running. |
-| **Dropped pair** | An exported preference pair the trainer did not train on (e.g. longer than `dpo.max_length`); counted with its reason in `cycle.json`, `loop status` and the report. |
-| **Managed / external / scripted inference** | The run starts and stops its own model server / uses an existing endpoint for one declared checkpoint / uses a fixture policy. |
-| **Model profile / machine profile / experiment** | Model identity / deployment / scientific choices (see [configuration.md](configuration.md)). |
+| **Coordinator** | The `loop` process driving a run (`loop run`, `loop resume`, ...); it owns the run directory, Docker work and model-server swaps. |
+| **Environment / serving backend** | Where episodes run (`environment_backend`: `harbor_docker` or `local_fixture`) / the software serving the model (`inference.backend`: `hf_transformers`, `vllm`, `llama_cpp` or `scripted`). |
+| **Managed / external / scripted inference** | `inference.mode`: the run starts its own model server / uses a running endpoint serving one declared checkpoint / uses a fixture policy. |
+| **Pod lifecycle** | For each command using a `kind: runpod` host: start the existing pod (`pod_id`) or create one (`pod:`, a spec in `runpod.create`), keep its heartbeat fresh, and at the end stop the existing pod (unless `stop_when_done: false`) or terminate the created one. |
+| **Created pod** | A pod `loop` created, named `lfe-<spec>-<stamp>` and recorded in the *ledger* `artifacts/runpod/created.jsonl`; the only kind of pod `loop` terminates. |
+| **Watchdog** | A process on the pod that stops it (terminates a created pod) when the coordinator's heartbeat is older than `idle_stop_minutes`. |
+| **Model profile / machine profile / experiment** | YAML for model identity (`configs/models/`) / deployment (`configs/machines/`) / scientific choices (`experiments/`) ([configuration.md](configuration.md)). |

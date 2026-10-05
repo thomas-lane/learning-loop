@@ -1,16 +1,15 @@
 # Documentation index
 
-All documentation for this repository, by what you want to do. Browse it locally with
-`uv run loop docs --open` (rendered pages, working links, diagrams), or read the Markdown
-directly.
+Every document in this repository, by what you want to do. Read the Markdown directly, or browse it
+rendered, with working links and diagrams, with `uv run loop docs --open`.
 
 ## Start here
 
 | I want to... | Read |
 |---|---|
-| understand what the project does and run it | [README](../README.md): purpose, status, setup, running, smoke tests |
-| understand how the pieces fit together | [Architecture](architecture.md): components, machine roles, module map, data flow, who sees what |
-| understand the research method | [Method](experiment.md): cycle protocol, controls, editing rules, acceptance, cost accounting, training, metrics |
+| know what the project does, its status, and how to set it up and run it | [README](../README.md) |
+| see how the pieces fit together: components, machines, module map, data flow, who sees what | [Architecture](architecture.md) |
+| understand the research method: cycle protocol, controls, editing, acceptance, cost accounting, training, metrics | [Method](experiment.md) |
 | look up a term | [Glossary](glossary.md) |
 
 ## Running experiments
@@ -18,38 +17,20 @@ directly.
 | I want to... | Read |
 |---|---|
 | know what a `loop` command does and its flags | [CLI reference](cli.md) (generated from the parser) |
-| write or change an experiment, machine or model profile | [Configuration reference](configuration.md) (generated from the schemas) + cross-field rules |
-| run a real experiment end to end, or recover from an error | [Operations](operations.md): ordered protocol, smoke path, troubleshooting |
-| use a Runpod (or other SSH) GPU pod for serving and training | [Runpod deployment](runpod.md): pod choice, setup, running, costs, troubleshooting |
-| find a file in a run directory or know what it contains | [Run layout](run-layout.md) |
+| write or change an experiment, machine or model profile | [Configuration reference](configuration.md) (generated from the schemas, plus rules that span several fields) |
+| run a real experiment step by step, or recover from an error | [Operations](operations.md) |
+| use a Runpod (or other SSH) GPU pod for serving and training | [Runpod deployment](runpod.md) |
+| find a file in a run directory and know what it contains | [Run layout](run-layout.md) |
 
 ## Tasks and the agent
 
 | I want to... | Read |
 |---|---|
-| add or change a task, generator or split | [Tasks and agent](../evaluation/README.md): task contract, replay contract, generators, splits |
-| know exactly what the learner sees and how grading is isolated | [Tasks and agent](../evaluation/README.md): the agent, outputs, how a trial runs |
+| add or change a task, generator or split; see what the learner sees and how grading is kept hidden from it | [Tasks and agent](../evaluation/README.md) |
 
 ## Developing
 
 | I want to... | Read |
 |---|---|
-| change code: commands, tests, invariants, where things live | [Developer guide (AGENTS.md)](../AGENTS.md) |
-| keep the documentation current | [Developer guide: Keeping documentation current](../AGENTS.md#keeping-documentation-current) |
-
-## All documents
-
-| Document | Owns |
-|---|---|
-| [README.md](../README.md) | setup, operation, component status |
-| [docs/index.md](index.md) | this index |
-| [docs/architecture.md](architecture.md) | components, roles, repository and module layout, data flow, isolation, identities, extension points |
-| [docs/experiment.md](experiment.md) | method, protocol, controls, acceptance, cost accounting, metrics |
-| [docs/run-layout.md](run-layout.md) | run directory contents and mutability |
-| [docs/cli.md](cli.md) | `loop` commands, arguments, exit codes, workflows |
-| [docs/configuration.md](configuration.md) | YAML keys, loading rules, cross-field rules |
-| [docs/operations.md](operations.md) | experiment protocol, smoke path, troubleshooting |
-| [docs/runpod.md](runpod.md) | Runpod / SSH GPU host deployment |
-| [docs/glossary.md](glossary.md) | terms |
-| [evaluation/README.md](../evaluation/README.md) | tasks, generators, splits, agent, grading, replay contract |
-| [AGENTS.md](../AGENTS.md) | development commands, tests, integrity invariants, documentation policy |
+| change code: commands, tests, integrity invariants, where things live | [Developer guide (AGENTS.md)](../AGENTS.md) |
+| know which document to update when the code changes | [Developer guide: Keeping documentation current](../AGENTS.md#keeping-documentation-current) |

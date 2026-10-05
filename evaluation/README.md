@@ -1,27 +1,32 @@
 # evaluation/: Harbor tasks, generators, splits and the learner agent
 
-Harbor **0.23.0** tasks, the tool-calling learner agent, deterministic task generators and the
-explicit split/panel files used by the learning loop.
+Everything that runs inside Harbor **0.23.0** (the framework that builds a task's container,
+runs an agent in it and grades the result): the tasks, the tool-calling learner agent, the task
+generators, and the split files that assign task instances to training or evaluation. Terms
+such as panel, replay, fingerprint and normalizer are defined in the
+[glossary](../docs/glossary.md).
 
 ```
 evaluation/
-├── run.sh                      # wrapper: PYTHONPATH + `harbor run -c configs/local-llama.yaml`
+├── run.sh                      # sets PYTHONPATH (repo root + src/), runs `harbor run -c configs/local-llama.yaml`
 ├── configs/local-llama.yaml    # Harbor job config: agent, model, URL, tasks, attempts
 ├── agents/
-│   ├── tool_agent.py           # ToolAgent(BaseAgent): Harbor adapter around learning_loop.episodes.episode
-│   ├── tools.py                # tool schemas + handlers (bash, read_file, write_file)
+│   ├── tool_agent.py           # ToolAgent: Harbor adapter around learning_loop.episodes.episode
+│   ├── tools.py                # tool schemas and handlers (bash, read_file, write_file)
 │   └── system_prompt.md        # the system prompt, verbatim ({workdir} is filled in)
 ├── tasks/                      # hand-written tasks: log-triage, fix-stats
 ├── generators/                 # versioned generators: log-triage, fix-stats, csv-revenue, count-errors
-├── splits/                     # hand-authored panels: pilot.yaml, smoke.yaml, fixture.yaml
+├── splits/                     # pilot.yaml (experiments/pilot.yaml), smoke.yaml (Docker smoke), fixture.yaml (local fixture backend)
 ├── scripts/gen_log_triage_data.py   # regenerates tasks/log-triage/environment/logs
 └── jobs/                       # Harbor outputs (gitignored)
 ```
 
 ## Quick start
 
+Docker must be running. CLI flags override the config file.
+
 ```bash
-# Reference/no-op checks (no model): oracle must score 1.0; nop is the baseline
+# No model: oracle (reference solution) must score 1.0; nop (does nothing) is the baseline
 uv run harbor run -p evaluation/tasks -a oracle -o evaluation/jobs
 uv run harbor run -p evaluation/tasks -a nop -o evaluation/jobs      # log-triage 0.0, fix-stats 0.33
 
@@ -33,62 +38,84 @@ evaluation/run.sh -m my-model --ak api_base=http://gpu-box:8000/v1
 uv run harbor view evaluation/jobs                         # browse trajectories
 ```
 
-Docker must be running. CLI flags override the config file. The learning loop does not use
-`run.sh`: it runs single trials programmatically (`learning_loop.episodes.backends.HarborDockerBackend`).
+The learning loop starts trials from Python instead, through `HarborDockerBackend` in
+`src/learning_loop/episodes/backends.py`, which passes each episode's plan to the agent (plan
+mode, below).
+
+## Task families
+
+Every family has a generator; log-triage and fix-stats also have a hand-written instance in
+`tasks/`. fix-stats scores the fraction of hidden checks passed (partial credit); the others
+score 1 if `/app/answer.txt` is right, else 0.
+
+| family | the agent must | easy / medium / hard | wrong methods that fail |
+|---|---|---|---|
+| `log-triage` | name the client IP with the most HTTP 5xx responses in `/app/logs/` | 2 / 3 / 4 log files, some gzipped; hard adds `archive/` | skipping any file; counting all >= 400; (medium/hard) matching any ` 5xx ` field |
+| `fix-stats` | fix the bugs in `/app/stats.py` | 4 / 5 / 6 functions, 1 / 2 / 4 bugs; visible tests cover all / half / a quarter of the bugs | hard-coding visible test values (hidden checks use other inputs) |
+| `csv-revenue` | name the region with the highest completed-order revenue in `/app/data/*.csv` | 1 / 2 / 3 files; medium adds quoted commas; hard reorders one file's columns | ignoring status, summing quantities, counting rows; (medium/hard) skipping a file, naive `,` splitting; (hard) fixed column positions |
+| `count-errors` | count lines containing `ERROR` in the `.log` files under `/app/data/` | 2 / 3 / 4 files; hard adds a subdirectory | case-insensitive grep, counting the `.txt` decoy, (hard) non-recursive glob |
+
+The log-triage and csv-revenue generators compute each wrong method's answer for every instance
+and draw new data until all of them fail. The fix-stats generator draws hidden checks until the
+reference scores 1.0 and every bug fails at least one, and records the no-op score as
+`nop_reward`. count-errors' traps hold by construction: every `.log` file has a lowercase
+`error` line, and the `.txt` decoy and the hard subdirectory file both contain `ERROR` lines.
 
 ## How a trial runs
 
-1. Harbor builds `tasks/<t>/environment/Dockerfile` and starts the agent container.
-2. `ToolAgent.run()` executes **on the host** and acts on the container only through Harbor's
-   `exec` / `upload_file`. `localhost` in `api_base` is the host.
-3. After the agent stops, Harbor copies only the task's declared `artifacts` (e.g.
-   `/app/answer.txt`) out of the agent container, stops it, and builds a **separate verifier
-   container** from `tests/Dockerfile` (build context `tests/`). The artifacts are uploaded to
-   the same paths, `/logs/verifier/` is emptied, and `tests/test.sh` runs there. It must write
-   `/logs/verifier/reward.txt` (one number) or `reward.json` (`{"reward": x, ...}`).
+1. Harbor builds `environment/Dockerfile` and starts the agent container.
+2. `ToolAgent.run()` runs **on the host** (so `localhost` in `api_base` is the host) and acts on
+   the container only through Harbor's `exec` and `upload_file`.
+3. When the agent stops, Harbor copies only the task's declared **artifacts** (e.g.
+   `/app/answer.txt`) out of the agent container.
+4. A **separate verifier container**, built from `tests/Dockerfile` (context `tests/`), receives
+   the artifacts at the same paths, empties `/logs/verifier/` and runs `tests/test.sh`, which
+   writes `/logs/verifier/reward.txt` (one number) or `reward.json` (`{"reward": x, ...}`).
 
-So the hidden tests and the reference solution never enter the agent's container, and a reward
-file planted by the agent is discarded. (With the previous shared mode, a scripted trial that
-wrote a wrong answer and planted `/logs/verifier/reward.json` scored 1.0 on log-triage: the agent
-container has `/logs/verifier` mounted and `reward.json` takes precedence over the `reward.txt`
-that `test.sh` writes. `tests/integration/test_harbor_tasks.py` now checks this scores 0.) The agent container still has network access (see gotchas), and `/logs/agent` is
-mounted (writable) in it, which is why the loop's authoritative records live in a host-only
-directory: the agent writes its per-turn views there and copies them into `agent/` only at the
-end, with a helper that never follows a symlink the container may have planted.
+### Hidden grading
 
-A grader that *executes* an artifact must not run it where the reward is written. fix-stats
-(hand-written and generated) runs `/app/stats.py` in a child `python3 -I -B` process as
-`nobody`, after making `/tests` 0700; the child gets only the check inputs and prints raw
-observations (numbers, exception types, the list after the call) as one marker line. The
-grading process never imports the artifact, accepts only plain JSON numbers / literal booleans
-for known checks (anything else, or more than one observation line, fails), kills every
-leftover `nobody` process, removes planted reward files and only then writes `reward.json`.
-An artifact that overwrites the reward from an `atexit` hook or a forked daemon, or returns
-`__eq__`-always-true objects, scores 0 (`test_forged_fix_stats_artifact_does_not_score`).
+- Hidden tests and the reference solution never enter the agent's container, and a reward file
+  the agent plants there is discarded (checked in `tests/integration/test_harbor_tasks.py`).
+- `/logs/agent` is writable from the container, so a planted symlink there could redirect the
+  host's writes. The agent therefore keeps its records in a host-only directory and copies them
+  into `agent/` at the end with `copy_into_untrusted_dir()`, which writes a temp file opened
+  with `O_NOFOLLOW` and renames it over the target.
+- **The agent container has public network access**: Harbor 0.23.0 rejects
+  `network_mode = "no-network"` on Docker Desktop for Mac (its nftables egress probe fails).
+  Grading is protected by the separate verifier, not by network isolation.
+
+Agent-written code never runs in the process that writes the reward. The fix-stats grader
+(`tests/test_hidden.py`):
+
+- makes `/tests` mode 0700 and runs `/app/stats.py` in a child `python3 -I -B` process as
+  `nobody`, which therefore cannot read the expected values;
+- has the child print raw observations as JSON on one marker line, and accepts only plain JSON
+  numbers and literal booleans, so an object whose `__eq__` is always true fails its check (a
+  second observation line fails all checks);
+- kills every `nobody` process and deletes any existing reward file before writing
+  `reward.json`, so a reward from an `atexit` hook or forked daemon never counts
+  (`test_forged_fix_stats_artifact_does_not_score`).
 
 ## The agent (`agents/tool_agent.py`)
 
-**What the model sees, every request, and nothing else:** the system prompt
-(`system_prompt.md`), the task's `instruction.md` verbatim as the user message, the tool
-schemas from `tools.py` as `tools=[...]` (the server's chat template renders them), and every
-earlier assistant message and tool result. Assistant `reasoning_content` is sent back verbatim
-when the server returned it; the chat template decides whether it becomes tokens (Gemma 4's keeps
-it after the last user message; Qwen3's strips it). Tool outputs are truncated head+tail to
-`max_output_chars`.
+**The model sees only:** the system prompt, the task's `instruction.md` as the user message, the
+tool schemas from `tools.py` (as `tools=[...]`, rendered by the server's chat template), and every
+earlier assistant message and tool result. Tool output over `max_output_chars` keeps its head and
+tail. Returned `reasoning_content` is sent back verbatim; the chat template decides whether it
+becomes tokens (Gemma 4's and Qwen3's keep it for every turn after the last user message).
 
-**Tools:** `bash` (fresh `bash -c` per call, cwd `/app`, 60 s default timeout; inside Docker the
-command runs under coreutils `timeout` so a timed-out command cannot linger), `read_file`
-(numbered lines, paged) and `write_file` (uploads the content; no shell escaping). Unknown tools,
-missing arguments and bad argument values come back as `[error] ...` observations with
-`executed=false`. A requested `timeout_sec` is clamped to the per-call budget
-(`min(requested, budgets.tool_timeout_sec)`); the effective value and whether the command timed
-out are recorded in the tool result (`timeout_sec`, `timed_out`). Command-level failures
-(non-zero exit, exit 124 on timeout) are observations; failures of the environment transport
-(a Harbor exec/upload exception, Harbor's backstop exec timeout) raise `EnvInfraError` and stop
-the episode as `infra:...`, also during replay, without showing the learner anything.
+**Tools:** `bash` (fresh `bash -c` per call in `/app`), `read_file` (numbered lines, 200 per
+page) and `write_file` (uploads the content). A requested `timeout_sec` is capped at the budget
+(`episode.tool_timeout_sec` in plan mode, `command_timeout_sec` in CLI mode, both 60 s by
+default); the result records the effective `timeout_sec` and `timed_out`. In Docker each command
+runs under coreutils `timeout` when the image has it, so a timed-out command does not keep
+running and change the state that replay compares. Failing commands, unknown tools and bad
+arguments come back as `[error] ...` observations. An environment failure (Harbor exec/upload
+exception or backstop timeout) raises `EnvInfraError` and stops the episode as `infra:...`,
+also during replay.
 
-**Loop and stop reasons** (implemented in `learning_loop/episodes/episode.py`): request -> response ->
-execute each tool call in order -> append observations -> repeat.
+**Stop reasons** (`learning_loop/episodes/episode.py`; [what to do about
+them](../docs/operations.md#episodes-and-stages)):
 
 | stop reason | category | meaning |
 |---|---|---|
@@ -96,73 +123,68 @@ execute each tool call in order -> append observations -> repeat.
 | `budget:max_turns`, `budget:max_episode_tokens` | budget | experimental budgets |
 | `budget:usage_unavailable` | budget | `max_episode_tokens` is set but a response reported no usage |
 | `budget:output_truncated` | budget | `finish_reason=length` and no valid tool call |
-| `safety:agent_timeout`, `safety:cancelled` | safety | wall-clock limits |
-| `model_error:<msg>` | model_error | endpoint rejected the request (4xx, e.g. context overflow) |
-| `infra:<msg>` | infra | connection errors, timeouts, 5xx, environment failures |
-| `replay:<mismatch>` | replay | restored state differs from the source (branch episodes), incl. `replay:image_mismatch` |
+| `safety:agent_timeout` | safety | the plan's wall-clock limit (`agent_timeout_sec`) |
+| `safety:cancelled` | safety | cancelled from outside, e.g. by Harbor's `[agent].timeout_sec` in CLI mode |
+| `model_error:<msg>` | model_error | the endpoint rejected the request (4xx other than 408/429, e.g. context overflow) |
+| `infra:<msg>` | infra | connection errors, timeouts, 408/429, 5xx, environment failures |
+| `replay:<mismatch>` | replay | branch episodes only: the restored state differs from the source ([replay contract](#replay-contract-metadatalearning_loop)) |
 
-**Malformed tool calls.** Arguments that are not a JSON object are a `parse_error`, the call is
-not executed, and the model sees `[error] could not parse arguments as JSON: ...` (or, after
-`finish_reason=length`, a "cut off by max_tokens" message). Because llama.cpp re-parses the
-arguments of *past* tool calls when rendering the chat template (invalid JSON there made every
-later request fail with a 500), such arguments are replaced by `"{}"` in the history. That
-replacement is recorded as an explicit `repair` event with the original text; the turn is marked
-malformed/repaired and cannot be used as a clean training example. A tool-call block the server
-could not parse (reported as `unparsed_tool_call`) is a `parse_error` too and marks the turn
-malformed even when other calls in the same turn were valid; a turn with only such blocks stops
-as `model_error:unparsed_tool_call`.
+**Malformed tool calls** (arguments that are not a JSON object, or a block the server reports as
+`unparsed_tool_call`) are not executed; the model gets an `[error] ...` observation and the turn
+is marked malformed. The editor rejects a malformed turn (`malformed_turn`), so it never becomes
+the rejected side of a preference pair. Invalid arguments are replaced by `"{}"` in the history,
+because llama.cpp re-parses past arguments to render the chat template and would fail every later
+request; the original is kept in a `repair` event. A turn with only unparsed blocks stops as
+`model_error:unparsed_tool_call`.
 
-**Two modes.** CLI mode (the options in `configs/local-llama.yaml`: `api_base`, `api_key`,
-`max_turns`, `temperature`, `max_tokens`, `workdir`, `command_timeout_sec`, `max_output_chars`,
-`system_prompt_path`, `extra_body`) sends no request seed and relies on Harbor's
-`[agent].timeout_sec`. Plan mode (`episode_plan_path=<EpisodePlan JSON>`, plus `record_dir`) is
-used by the loop: the plan fixes the policy (endpoint or scripted fixture), seeds, budgets,
-prompts, tools, the replay prefix and the task's state contract. List options with
+**Modes.** *CLI mode* takes the options in `configs/local-llama.yaml` (`max_tokens` covers
+reasoning plus the tool call, hence 8192), sends no request seed and relies on Harbor's
+`[agent].timeout_sec`. *Plan mode* (`episode_plan_path=<EpisodePlan JSON>`, plus `record_dir`)
+is what the loop uses: the plan (`EpisodePlan` in `src/learning_loop/core/interfaces.py`) fixes
+policy, seeds, budgets, prompts, tools, replay prefix and the task's state contract. List
+options with
 `PYTHONPATH=.:src uv run harbor agent schema evaluation.agents.tool_agent:ToolAgent`.
 
-**Outputs.**
+**Outputs**, written to the host-only `record_dir` (default `<trial>/learning_loop/`) and copied
+into the trial's `agent/` at the end:
 
-| file | where | content |
-|---|---|---|
-| `events.jsonl` | record dir (host-only; default `<trial>/learning_loop/`), copied to `agent/` at the end | append-only lossless record: each request as sent, raw provider response, parse errors, repairs, tool calls with requested vs executed arguments, raw tool output and the exact truncated observation, fingerprints, replay checks |
-| `episode.json` | same | stop reason/category, usage (provider-reported; missing = null), counts, timing, tool CPU (container cgroup delta) |
-| `trajectory.json` | record dir (every turn), copied to `agent/` at the end | ATIF view for `harbor view` / `harbor analyze` |
-| `messages.json` | same | the final request's `{tools, messages}`. Convenient, but **not** a complete record |
-| `result.json`, `verifier/` | trial dir | Harbor's result (reward, timings, exceptions) and verifier output |
+| file | content |
+|---|---|
+| `events.jsonl` | append-only, lossless record: requests as sent, raw responses, parse errors, repairs, requested vs executed tool arguments, raw and truncated tool output, fingerprints, replay checks |
+| `episode.json` | stop reason and category, provider-reported usage (missing = null), counts, timing, tool CPU time |
+| `trajectory.json` | ATIF view for `harbor view` / `harbor analyze` |
+| `messages.json` | the final message history and tool schemas (a view; `events.jsonl` is the record) |
 
-Harbor's `agent_result.n_input_tokens` / `n_output_tokens` are filled from provider usage, or
-left null when the endpoint does not report it.
+Harbor's `result.json` and `verifier/` sit in the trial dir; its token counts come from provider
+usage, or are null.
 
 ## Task contract
 
-A task is a Harbor task directory:
-
 ```
 task.toml         Harbor config; top-level `artifacts = [...]`; [verifier] environment_mode = "separate"
-instruction.md    the learner-visible instruction
-environment/      Dockerfile + learner-visible files (the only build context of the agent image)
+instruction.md    the instruction the learner sees
+environment/      Dockerfile + learner-visible files (the agent image's only build context)
 tests/            Dockerfile + test.sh (+ hidden helpers): the separate verifier image
 solution/solve.sh reference solution (the `oracle` agent)
 ```
 
-Rules that keep grading honest:
+Rules:
 
-- Put everything the grader needs from the agent into `artifacts`; nothing else is transferred.
-- Keep reward keys uniform across tasks (`reward` only): Harbor averages per key and counts a
-  missing key as 0.
-- Preserve partial credit where it is meaningful (fix-stats), and keep complete success
-  (`reward >= success_threshold`) separate from partial reward.
-- Make shortcuts fail: design data so plausible wrong methods give a different answer, and read
-  successful trajectories too (a first log-triage version let `cat a b | zcat c.gz`, which
-  ignores stdin, pass by accident).
-- Never run agent-written code in the grading process: run it isolated (see fix-stats above).
-- Pin base images by digest (`FROM python:3.12-slim@sha256:...`): the environment's image
-  identity is a hash of its build context, recorded in `episode_start` / `extra.image_identity`
-  (with the local image id when reachable, informational only because rebuilds get new ids), and
-  a branch whose identity differs from its source stops as `replay:image_mismatch`. (log-triage
-  still `apt-get install`s python3 unpinned on top of the pinned base; the identity does not
-  cover that.)
-- Check `oracle` = 1.0 and `nop` = the documented baseline after every change
+- Everything the grader needs goes in `artifacts`; nothing else is transferred.
+- Write only the `reward` key: Harbor averages each key across trials and counts a key missing
+  from a trial as 0.
+- Keep complete success (`reward >= success_threshold`) separate from partial credit: only
+  complete success counts as success or can be edited.
+- Make shortcuts fail, and read successful trajectories for answers that pass by luck. For
+  example, `cat a b | zcat c.gz` reads only `c.gz` (zcat ignores stdin), which is why log-triage
+  generators make every proper subset of the files give a different answer.
+- Never run agent-written code in the grading process (see fix-stats above).
+- Pin base images by digest. Each episode records an **image identity** (a hash of the build
+  context) in `episode_start`, and a branch whose identity differs from its source stops as
+  `replay:image_mismatch`. An unpinned tag could change the image without changing that hash.
+  Packages installed at build time are outside the hash too (log-triage `apt-get install`s
+  python3 unpinned).
+- After every change, check `oracle` = 1.0 and `nop` = the documented baseline
   (`uv run pytest -m docker tests/integration`).
 
 ### Replay contract: `[metadata.learning_loop]`
@@ -170,93 +192,57 @@ Rules that keep grading honest:
 ```toml
 [metadata.learning_loop]
 restore = "deterministic_replay"      # or "none" (no branching from this task)
-fingerprint_paths = ["/app"]          # declared task state
-fingerprint_exclude = ["*/__pycache__"]   # narrow fnmatch globs on absolute paths, with a reason
+fingerprint_paths = ["/app"]          # the task's declared state
+fingerprint_exclude = ["*/__pycache__"]   # narrow fnmatch globs on absolute paths; explain each in a comment
 success_threshold = 1.0
 reward_key = "reward"
 observation_normalizers = [{ pattern = "...", replacement = "<mtime>", reason = "..." }]
 ```
 
-Branch episodes restore a decision state by a **fresh environment + deterministic replay**, not
-by Harbor's trajectory loading (which restores a conversation, not files). Before branching at
-assistant turn *k*:
+A branch at assistant turn *k* rebuilds that state in a fresh environment by deterministic
+replay (Harbor's trajectory loading restores only the conversation, not the files):
 
 1. The conversation starts from the exact historical request messages of turn *k*.
-2. Each earlier turn's *executed* arguments are re-run in order, without calling the model.
-3. Every replayed observation must equal the source observation after applying **only** the
-   task's declared normalizers (recorded in the `replay_check` event).
-4. The fingerprint of the declared state must equal the source fingerprint before each replayed
-   turn (when recorded) and before turn *k*.
-5. Any mismatch stops the episode as `replay:<mismatch>` before the intervention is executed or
-   the model is called (fail closed).
+2. Earlier turns' *executed* arguments are re-run in order, without calling the model.
+3. Each replayed observation must equal the source's after applying **only** the task's declared
+   normalizers (recorded in a `replay_check` event).
+4. The fingerprint of the declared state must match the source's before each replayed turn (when
+   recorded) and before turn *k*.
+5. Any mismatch stops the episode as `replay:<mismatch>` before the intervention or model call,
+   e.g. `replay:observation:turn=2:call=0` or `replay:fingerprint:before_intervention`
+   (all names: `_Episode.replay()` in `episode.py`).
 
-The fingerprint (`src/learning_loop/episodes/fingerprint.py`, shipped into the container and run with
-`python3 -I -B` from `/`) covers, for each declared path recursively: file content hashes, file
-type, permissions, owner, symlink targets (not followed), missing paths, and the tool working
-directory. It does **not** cover modification times, processes, network or clock state. Tasks
-declaring deterministic replay must therefore:
-
-- ship `python3` in the agent image;
-- not depend on network access, background processes, persistent shells, wall-clock time or
-  randomness outside the declared state;
-- be insensitive to inference waiting time (tested with inserted delays, locally and in Docker).
-
-Normalizers must be narrow and justified; the shipped tasks declare one, for `ls -l`
-modification times of files written during the episode.
+The fingerprint (`src/learning_loop/episodes/fingerprint.py`, run in the container with
+`python3 -I -B`) covers content hashes, file types, permissions, owners, symlink targets, missing
+paths and the working directory. It leaves out modification times, which depend on wall-clock
+time and would make every replay differ, and processes, network and clock. A replayable task
+must therefore ship `python3` in its image, must not depend on network, background processes,
+persistent shells, wall-clock time or undeclared randomness, and must not be affected by
+inference delays. Because containers have network access, `load_state_spec` adds the caveat
+`network: public (unmodeled)` to every such task without `no-network`. Each normalizer needs
+exactly `pattern`, `replacement` and `reason`; the shipped tasks declare one, for `ls -l`
+modification times.
 
 ## Generators and splits
 
-`generators/` holds versioned, byte-deterministic generators keyed by family
-(`evaluation.generators.generate(family, difficulty, seed, out_dir)`); each writes a complete
-task directory in the layout above and self-checks its shortcut resistance:
+`generate(family, difficulty, seed, out_dir)` in `evaluation.generators` writes a complete task
+directory, byte-identical for the same inputs. `count-errors` also runs on the local fixture
+backend (`[metadata.local_fixture]`), which runs commands as host subprocesses with no sandbox.
+`LocalFixtureBackend` therefore refuses any policy other than a scripted one.
 
-| family | difficulties vary | traps checked at generation |
-|---|---|---|
-| `log-triage` | 2/3/4 log files, gzip, archive subdirectory | every proper file subset gives a different top IP; counting >=400 fails; counting any `5xx` field fails (medium/hard) |
-| `fix-stats` | 4-6 functions, 1/2/4 injected bugs (several variants each), fewer visible tests on hard | reference scores 1.0; every bug fails a hidden check; hidden inputs differ from visible tests; `nop_reward` recorded in params |
-| `csv-revenue` | 1-3 CSV files, quoted commas, a reordered header | ignoring the status filter, summing quantities, counting rows, file subsets, naive comma splitting and fixed column positions all give a different region |
-| `count-errors` | 2-4 `.log` files, nested directory on hard | lowercase `error` lines, `ERROR` in a `.txt` decoy |
+A **split file** declares every instance once (family, difficulty, generator seed or static task
+dir, and split `train`, `dev`, `final` or `external`) and groups instances into **panels** of one
+split. `learning_loop.tasks.instances` materializes them as content-hashed `TaskInstance` records
+and rejects duplicate ids, panels mixing splits, held-out families in train panels or the train
+split, the same generator coordinates under two ids, and identical learner-visible content
+(`instruction.md` plus `environment/`) in different splits. The content check exists because
+different seeds can still produce the same task. In `pilot.yaml`, `csv-revenue` is held out and
+appears only in the `final-held-out-family` panel.
 
-`csv-revenue` is the held-out family in `splits/pilot.yaml`. `count-errors` also runs on the
-local fixture backend (`[metadata.local_fixture]`: `environment/files/` becomes the work
-directory, `tests/grade.py` grades a copy of the artifacts). That backend runs host
-subprocesses: it is not a sandbox and accepts scripted policies only.
-
-Split files list every instance once (family, difficulty, generator seed or static task dir,
-split) and group them into panels of one split (`train`, `dev`, `final`). `learning_loop.tasks.instances`
-materializes instances (content-hashed `TaskInstance` records, plus a hash of learner-visible
-content) and rejects: duplicate ids, panels mixing splits, held-out families in train panels,
-the same generator coordinates under two ids, and identical learner-visible content in different
-splits (disjoint seeds alone are not treated as proof of disjoint content). `pilot.yaml`
-includes an easy-only training panel with medium/hard dev panels, and per-family dev panels for
-family-exposure schedules.
-
-To add a family: write `generators/<family>.py` (FAMILY, VERSION, SKILLS, DIFFICULTIES,
-`generate()`), register it in `generators/__init__.py`, check `oracle`/`nop` in Docker, then
-reference instances from a split file. Bump VERSION whenever output for an existing seed changes;
-`RNG_VERSION` versions the random stream separately (v2 only pinned the base images, so every
-instance kept its v1 content).
-
-## Gotchas
-
-- In the smoke runs, gemma-4-E4B showed exactly the tool misuse worth training away: writing
-  `read_file`'s line-number prefixes back into the file, piping into a command that ignores
-  stdin, and re-running an identical failing command 5 times.
-- `max_tokens` covers reasoning *plus* the tool call (e.g. a whole file for `write_file`), so the
-  CLI default is 8192.
-- `network_mode = "no-network"` is still rejected by Harbor 0.23.0's Docker backend on this Mac
-  (re-tested 2026-09-29 with a fix-stats oracle trial): `ValueError: network_mode='no-network' is
-  not supported by EnvironmentType.DOCKER environment. Environment providers must enforce the
-  requested network policy or reject the task.` Harbor enables `disable_internet` only when its
-  egress-control kernel probe (nftables fib rules) succeeds, and it fails on this Docker Desktop
-  VM. So tasks use the default (public) network; hidden grading material is protected by the
-  separate verifier, not by network isolation, and `load_state_spec` adds the caveat
-  `network: public (unmodeled)` to the state spec of every deterministic-replay task without
-  `no-network` (it travels with each plan into `episode_start`). A replayed prefix that uses the
-  network can therefore change state outside the fingerprint.
-- `-i <task>` only works together with `-p`. To run one task, use `-p evaluation/tasks/<task>`.
-- Custom agents are imported by module path: `PYTHONPATH` must include the repo root and `src/`
-  (`run.sh` does this and prefers the project's `.venv/bin/harbor`).
-- After editing a task's `environment/` or `tests/`, pass `--force-build` to rebuild images.
-- Harbor's Terminus-2 agent uses no native tool calling (JSON keystrokes into tmux, context
-  summarization); this repository keeps its own agent so the tool protocol is fixed and recorded.
+To add a family: write `generators/<family>.py` (`FAMILY`, `VERSION`, `RNG_VERSION`, `SKILLS`,
+`DIFFICULTIES`, `generate()`), register it in `generators/__init__.py`, check `oracle`/`nop` in
+Docker, and reference instances from a split file. Bump `VERSION` whenever output for an existing
+seed changes: materialization rejects a task directory whose recorded `generator`
+(`family@vN`) is not current, so stale directories are never reused. `RNG_VERSION` versions the
+random stream separately, so changes that leave the random draws alone (such as pinning base
+images) keep the same generated data and answers.
