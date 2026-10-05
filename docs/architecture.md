@@ -147,6 +147,7 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | | `managed.py` | HTTP and port helpers; `ManagedHFServer`, a local `hf_server` that the `-m train` tests start and stop |
 | | `lifecycle.py` | which checkpoint is served where; starts and stops the run's own servers, locally or over SSH (with the SSH tunnel to a pod); policy specs |
 | `orchestration/` | `coordinator.py` | runs, cycles, stages, retries, lineage, resume |
+| | `preflight.py` | Docker-host preflight: one oracle trial per family before a run's first episode, during the first server start |
 | | `smoke.py` | smoke levels |
 | | `external_eval.py` | pinned external Harbor benchmark configs |
 | `hosts/` | `remote.py`, `remote_jobs.py` | SSH/rsync; submit/fetch/status; `sync-hosts` |

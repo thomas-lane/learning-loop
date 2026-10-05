@@ -158,6 +158,7 @@ class EventKind(str, Enum):
     TOOL_CALL = "tool_call"  # requested + actually executed arguments
     TOOL_RESULT = "tool_result"  # stdout/stderr/exit, raw output, truncated observation
     FINGERPRINT = "fingerprint"  # declared task-state fingerprint at a decision point
+    ENV_PROBE = "env_probe"  # the environment probe before turn 0 (tasks/runtime/probe.py)
     REPLAY_ACTION = "replay_action"  # a fixed (non-model) action executed during replay
     REPLAY_CHECK = "replay_check"  # comparison of replayed obs/fingerprint to source
     INTERVENTION = "intervention"  # the fixed original/edited action at the branch point

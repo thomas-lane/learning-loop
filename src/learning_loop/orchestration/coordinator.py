@@ -1220,6 +1220,8 @@ async def run_single_stage(ctx: RunContext, cycle: int, stage: str) -> None:
     `loop resume` skips whatever was completed here.
     """
     learner = learner_for_cycle(ctx, cycle)
+    if stage in ("eval", "collect", "verify"):  # the stages that run episodes
+        await preflight(ctx, print, learner if stage != "verify" else None)
     if stage == "eval":
         await stage_eval(ctx, cycle, learner, ctx.exp.evaluation.dev_panels)
     elif stage == "collect":
@@ -1305,6 +1307,7 @@ async def _run_evaluation(ctx: RunContext, ckpt: CheckpointRef, panels: list[str
     with run_lock(ctx.run_dir):
         with ctx.pods():
             try:
+                await preflight(ctx, print, ckpt)
                 await stage_eval(ctx, 0, ckpt, panels)
             finally:
                 ctx.stop_serving()
@@ -1364,6 +1367,7 @@ async def _run_edit_replay(ctx: RunContext, src: RunContext, cycle: int, src_lea
     with run_lock(ctx.run_dir):
         with ctx.pods():
             try:
+                await preflight(ctx, print)
                 edit = await stage_edit(ctx, 0, src_learner, sources)
                 proposals = load_proposals(ctx, edit)
                 ver = await stage_verify(ctx, 0, src_learner, proposals)
@@ -1396,6 +1400,23 @@ def resume_run(run_dir: Path, machine_path: str | Path | None = None) -> None:
         raise PlanError(f"unknown run kind {kind!r}")
 
 
+def first_open_cycle(ctx: RunContext) -> int | None:
+    for c in range(ctx.exp.cycles + 1):
+        p = cycle_state_path(ctx, c)
+        if not p.exists() or read_json(p).get("status") != "done":
+            return c
+    return None
+
+
+async def preflight(ctx: RunContext, log: Callable[[str], None], first_server: CheckpointRef | None = None) -> None:
+    """The Docker-host preflight (orchestration/preflight.py), while the learner's server for
+    `first_server` starts; raises PreflightError before any episode when the host fails it."""
+    from .preflight import preflight_while_serving
+
+    warm = (lambda: ctx.manager("learner").ensure(first_server)) if first_server is not None else None
+    await preflight_while_serving(ctx, log, warm)
+
+
 async def run_all(ctx: RunContext, log: Callable[[str], None] | None = None) -> None:
     log = log or (lambda m: print(m, flush=True))
     kind = read_json(ctx.run_dir / "run.json").get("kind", "learning")
@@ -1404,6 +1425,9 @@ async def run_all(ctx: RunContext, log: Callable[[str], None] | None = None) -> 
     with run_lock(ctx.run_dir):
         with ctx.pods(log):
             try:
+                first = first_open_cycle(ctx)
+                if first is not None:
+                    await preflight(ctx, log, learner_for_cycle(ctx, first))
                 for c in range(ctx.exp.cycles + 1):
                     await run_cycle(ctx, c, log)
             finally:

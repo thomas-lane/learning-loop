@@ -124,6 +124,22 @@ that writes and runs the oracle is branched at the oracle's run. The branch re-e
 earlier turn in a fresh container, and every fingerprint and the oracle's output must match.
 Run it after changing a family.
 
+**Every run, on its Docker host** (`src/learning_loop/orchestration/preflight.py`). The two
+checks above prove the instances and the families, but on whichever machine ran them. A run
+uses its own Docker host, whose Docker version, kernel and build cache can behave differently,
+and a difference there would show up as failed episodes or, worse, as episodes graded wrongly.
+So before a run's first episode, the oracle of one instance per family in the run's panels runs
+as a Harbor trial on that host and must score its predicted `oracle_reward`, graded by the
+separate verifier after its probe and digest check. One trial per family is enough because
+the oracle exercises everything the host contributes (image build, the agent container, the
+artifact transfer, the verifier); which instance or difficulty only changes the data, which the
+per-instance checks cover. The trials run while the first model server starts, so they add no
+wall time when a server has to start. A failure stops the run before any episode (exit code 1),
+and every coordinator start that runs episodes, including `loop resume` (which may run on
+another host) and `loop stage` for an episode stage, records one line in the run's
+`logs/preflight.jsonl`. Local-fixture runs record a skip, since they
+start no containers.
+
 ## Environment guarantees
 
 The renderer (`tasks/render.py`) is the only code that writes task directories, so these hold by
@@ -134,10 +150,10 @@ construction for every task. Its unit tests check each one on the rendered files
 | No network in either container | `environment/docker-compose.yaml` and `tests/docker-compose.yaml` set `network_mode: "none"`; Harbor appends a task's compose file after its own, for the agent container (context `environment/`) and for the separate verifier (context `tests/`) | outputs, replays and grades cannot depend on anything outside the task. Harbor's own `network_mode = "no-network"` needs nftables support in the Docker host's kernel, which Docker Desktop for Mac lacks; the compose setting works on every Docker host |
 | Pinned images, nothing installed | each Dockerfile is `FROM` the profile's digest-pinned base, `ENV`, `WORKDIR`, `COPY`; no `RUN` | a build cannot change with package mirrors, and the build-context hash (which contains the pinned `FROM`) identifies the image exactly, which is what replay compares (`image_identity`) |
 | Fixed process environment | the profile's `ENV`: `TZ=UTC`, `LANG`/`LC_ALL=C.UTF-8`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, `HOME=/root`; compose sets the hostname `task` | time zone, sort collation and Python set/dict-of-str order would otherwise make the same command print different output in a replay; bytecode caches embed source mtimes and would change the fingerprinted state |
-| Fixed file times | every rendered file and directory gets the mtime 2026-01-01T00:00:00Z plus a sub-second part derived from its content; Docker's `COPY` keeps it | `ls -l` and `stat` show the same times on every host and re-render. The sub-second part differs between files with different content because BuildKit sends a build context incrementally and skips a file whose path, size and mtime match a copy it already holds, even from another task's build; with one constant mtime, two same-sized answer keys were built from the stale copy |
+| Fixed file times | every rendered file and directory gets the mtime 2026-01-01T00:00:00Z plus a sub-second part derived from its content; Docker's `COPY` keeps it | `ls -l` and `stat` show the same times on every host and re-render. The sub-second part differs between files with different content because BuildKit sends a build context incrementally and skips a file whose path, size and mtime match a copy it already holds, even from another task's build; with one constant mtime, two same-sized answer keys were built from the stale copy. BuildKit keys that copy by the context directory's name, not its path, and Harbor names every context `environment/` or `tests/`; this is intended upstream behavior ([docker/buildx#3232](https://github.com/docker/buildx/issues/3232)) and `--no-cache` does not affect it |
 | The answer stays hidden | the answer key (`tests/key.json`), grader and probe are only in the verifier's build context; the agent's context is `environment/` | the learner cannot read the answer |
 | The verifier grades its own files | `task.toml`'s `[verifier] env` carries `LL_TESTS_SHA256`, a digest of `grade.py`, `probe.py` and `key.json`; `grade.py` recomputes it and refuses to grade on a mismatch | `task.toml` reaches the container without passing through the image build, so even a stale build (above) cannot grade with another task's key |
-| The verifier checks its environment | `tests/test.sh` runs `grade.py --probe '<profile expectation>'`; `runtime/probe.py` checks that DNS and a TCP connection to a public address fail, the `ENV` values, the hostname, the required tools and that only Harbor's `sh -c "sleep infinity"` is running | a grade is only written from a container that matches the profile |
+| Both containers check their environment | `runtime/probe.py` checks that DNS and a TCP connection to a public address fail, the `ENV` values, the hostname, the required tools and that only Harbor's `sh -c "sleep infinity"` is running. The verifier runs it from `tests/test.sh` (`grade.py --probe '<profile expectation>'`) and writes no reward on a failure. Every episode runs it in the agent container before turn 0 (and before a branch's replay) with the task's `env_probe` from `[metadata.learning_loop]`, which adds `app_digest`: the digest of `environment/files/` that `/app` must match; a failure stops the episode as `infra:env_probe:<checks>` before the model is called | an episode runs and a grade is written only in a container that matches the profile and holds exactly the rendered files, so a stale image build (above) stops the episode instead of running on another task's data |
 | Fixed resource limits | the profile's `cpus` and `memory_mb` in `[environment]` | every container gets the same CPU and memory limits, whatever the host has |
 
 A **profile** (`PROFILES` in `spec.py`) is one container environment: base image, `ENV`,
@@ -220,6 +236,7 @@ them](../docs/operations.md#episodes-and-stages)):
 | `safety:cancelled` | safety | cancelled from outside, e.g. by Harbor's `[agent].timeout_sec` in CLI mode |
 | `model_error:<msg>` | model_error | the endpoint rejected the request (4xx other than 408/429, e.g. context overflow) |
 | `infra:<msg>` | infra | connection errors, timeouts, 408/429, 5xx, environment failures |
+| `infra:env_probe:<checks>` | infra | before turn 0 the agent container did not match the task's `env_probe` (see [environment guarantees](#environment-guarantees)); nothing was executed or requested |
 | `replay:<mismatch>` | replay | branch episodes only: the restored state differs from the source ([replay contract](#replay-contract-metadatalearning_loop)) |
 
 **Malformed tool calls** (arguments that are not a JSON object, or a block the server reports as

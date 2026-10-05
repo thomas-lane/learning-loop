@@ -45,3 +45,26 @@ def test_run_observes_the_local_environment(monkeypatch):
     assert probe.run({"env": {"LL_PROBE_TEST": "2"}})["violations"] == ["env:LL_PROBE_TEST"]
     if os.path.isdir("/proc"):
         assert all(pid != os.getpid() for pid, _ in r["observed"]["processes"])
+
+
+def test_tree_digest_covers_content_and_paths_not_times_or_modes(tmp_path):
+    a = tmp_path / "a"
+    (a / "data").mkdir(parents=True)
+    (a / "data" / "x.txt").write_text("1\n")
+    d1 = probe.tree_digest(str(a))
+    os.utime(a / "data" / "x.txt", (0, 0))
+    os.chmod(a / "data" / "x.txt", 0o600)
+    assert probe.tree_digest(str(a)) == d1
+    (a / "data" / "x.txt").write_text("2\n")
+    assert probe.tree_digest(str(a)) != d1
+    (a / "data" / "x.txt").write_text("1\n")
+    (a / "data" / "extra").mkdir()
+    assert probe.tree_digest(str(a)) != d1
+
+
+def test_app_content_mismatch_is_a_violation(tmp_path):
+    (tmp_path / "f").write_text("x")
+    expect = {"app_digest": {"path": str(tmp_path), "sha256": probe.tree_digest(str(tmp_path))}}
+    assert probe.run(expect)["violations"] == []
+    (tmp_path / "f").write_text("y")
+    assert probe.run(expect)["violations"] == ["app_content"]

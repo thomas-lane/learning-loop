@@ -47,6 +47,7 @@ class StateSpec(BaseModel):
     success_threshold: float = 1.0  # complete success: reward["reward"] >= threshold
     reward_key: str = "reward"
     caveats: list[str] = Field(default_factory=list)  # unmodeled aspects, e.g. "network: public (unmodeled)"
+    env_probe: dict[str, Any] | None = None  # rendered tasks: what the agent container must match before turn 0 (tasks/runtime/probe.py)
 
 
 @dataclass

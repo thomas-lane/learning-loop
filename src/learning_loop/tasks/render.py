@@ -33,6 +33,7 @@ from typing import Any
 
 from .generate import Generated, describe, generate_spec
 from .runtime.grade import TESTS_DIGEST_ENV, tests_digest
+from .runtime.probe import tree_digest
 from .spec import PROFILES, WORKDIR, Family, Profile
 
 FIXED_MTIME = 1767225600  # 2026-01-01T00:00:00Z
@@ -84,7 +85,7 @@ def _compose(profile: Profile) -> str:
     )
 
 
-def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profile: Profile, tests_sha256: str) -> str:
+def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profile: Profile, tests_sha256: str, app_sha256: str) -> str:
     params = dict(gen.spec.params) | describe(gen)
     lines = [
         f"# {_header(family, difficulty, seed)}",
@@ -113,6 +114,9 @@ def task_toml(family: Family, difficulty: str, seed: int, gen: Generated, profil
         f"success_threshold = {family.success_threshold}",
         'reward_key = "reward"',
         f"observation_normalizers = {_toml([LS_MTIME_NORMALIZER])}",
+        "# Checked in the agent container before turn 0 (tasks/runtime/probe.py); app_digest is the",
+        "# digest of environment/files/, so a stale image build stops the episode instead of running.",
+        f"env_probe = {_toml(profile.probe_expectation() | {'app_digest': {'path': WORKDIR, 'sha256': app_sha256}})}",
     ]
     if family.local_fixture:
         lines += [
@@ -201,7 +205,7 @@ def render_generated(family: Family, difficulty: str, seed: int, gen: Generated,
     for name, sol in sorted(spec.shortcuts.items()):
         _write(out_dir / "solution" / "shortcuts" / f"{name}.sh", "#!/bin/bash\n" + sol.shell, 0o755)
     _write(out_dir / "instruction.md", spec.instruction)
-    _write(out_dir / "task.toml", task_toml(family, difficulty, seed, gen, profile, tests_digest(str(tests))))
+    _write(out_dir / "task.toml", task_toml(family, difficulty, seed, gen, profile, tests_digest(str(tests)), tree_digest(str(env / "files"))))
     _fix_mtimes(out_dir)
     return dict(spec.params) | describe(gen)
 

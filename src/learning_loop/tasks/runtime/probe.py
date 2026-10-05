@@ -5,7 +5,8 @@ Standard-library only: the renderer copies this file into every task's `tests/` 
 container before turn 0. The expectation comes from the task's profile:
 
     {"network": "none", "env": {"TZ": "UTC", ...}, "tools": ["python3", "timeout"],
-     "hostname": "task", "allowed_processes": ["sleep"]}
+     "hostname": "task", "allowed_processes": ["sh", "sleep"],
+     "app_digest": {"path": "/app", "sha256": "..."}}            # agent container only
 
     python3 -I -B probe.py '<expectation json>'   # prints {"ok", "violations", "observed"}
 
@@ -18,8 +19,11 @@ Checks, each reported as one violation string when it fails:
     hostname                 the container hostname is the expected one
     process:<comm>           every process other than this probe and its ancestors (the exec
                              chain) has an allowed command name; `/proc` is required
+    app_content              `tree_digest(path)` equals the digest the renderer computed over
+                             the task's files, i.e. the image holds exactly the rendered files
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -54,6 +58,29 @@ def _tcp_open():
         return True
     except OSError:
         return False
+
+
+def tree_digest(root):
+    """sha256 over every entry under `root` (relative path, kind, and content hash or link
+    target), in sorted order. The renderer computes it over `environment/files/`, the probe over
+    `/app` before turn 0; modes, owners and times are left out because only content can differ
+    between a correct and a stale build."""
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        rel_dir = os.path.relpath(dirpath, root)
+        for name in sorted(filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]):
+            path = os.path.join(dirpath, name)
+            rel = os.path.normpath(os.path.join(rel_dir, name))
+            if os.path.islink(path):
+                h.update(("L %s %s\n" % (rel, os.readlink(path))).encode("utf-8", "surrogateescape"))
+            elif os.path.isfile(path):
+                with open(path, "rb") as f:
+                    h.update(("F %s %s\n" % (rel, hashlib.sha256(f.read()).hexdigest())).encode("utf-8", "surrogateescape"))
+        for d in dirnames:
+            if not os.path.islink(os.path.join(dirpath, d)):
+                h.update(("D %s\n" % os.path.normpath(os.path.join(rel_dir, d))).encode("utf-8", "surrogateescape"))
+    return h.hexdigest()
 
 
 def _proc_stat(pid):
@@ -95,6 +122,7 @@ def observe(expect):
         "tools": {t: shutil.which(t) for t in expect.get("tools", [])},
         "hostname": socket.gethostname(),
         "processes": _processes(),
+        "app_digest": tree_digest(expect["app_digest"]["path"]) if "app_digest" in expect else None,
     }
 
 
@@ -116,6 +144,8 @@ def check(observed, expect):
         else:
             allowed = set(expect["allowed_processes"])
             v += sorted({"process:" + comm for _, comm in procs if comm not in allowed})
+    if "app_digest" in expect and observed.get("app_digest") != expect["app_digest"]["sha256"]:
+        v.append("app_content")
     return v
 
 

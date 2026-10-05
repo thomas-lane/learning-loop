@@ -167,3 +167,11 @@ def test_same_size_files_with_different_content_get_different_mtimes(tmp_path):
     if ka.read_bytes() != kb.read_bytes():
         assert ka.stat().st_mtime_ns != kb.stat().st_mtime_ns
     assert int(ka.stat().st_mtime) == FIXED_MTIME
+
+
+def test_replay_contract_carries_the_agent_probe_with_the_app_digest(rendered):
+    from learning_loop.tasks.runtime.probe import tree_digest
+
+    fam, d = rendered
+    probe = load_state_spec(d).env_probe
+    assert probe == PROFILES[fam.profile].probe_expectation() | {"app_digest": {"path": "/app", "sha256": tree_digest(str(d / "environment" / "files"))}}

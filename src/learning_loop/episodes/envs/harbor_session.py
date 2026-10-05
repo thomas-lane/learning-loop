@@ -40,6 +40,8 @@ from .base import EnvInfraError, FingerprintError, ToolSession, build_inputs_ide
 
 _FINGERPRINT_SOURCE = (Path(__file__).resolve().parents[1] / "fingerprint.py").read_text()
 _FINGERPRINT_B64 = base64.b64encode(_FINGERPRINT_SOURCE.encode()).decode()
+_PROBE_SOURCE = (Path(__file__).resolve().parents[2] / "tasks" / "runtime" / "probe.py").read_text()
+_PROBE_B64 = base64.b64encode(_PROBE_SOURCE.encode()).decode()
 _TIMEOUT_GRACE_SEC = 5
 _BACKSTOP_EXTRA_SEC = 30
 
@@ -125,6 +127,19 @@ class HarborSession(ToolSession):
         self._cpu_ok = False
         self.capabilities.measures_cpu = False
         return None
+
+    async def probe(self, expect: dict[str, Any]) -> dict[str, Any]:
+        """Run tasks/runtime/probe.py in the container: {"ok", "violations", "observed"}."""
+        cmd = f"echo {_PROBE_B64} | base64 -d | python3 -I -B - {shlex.quote(json.dumps(expect, sort_keys=True))}"
+        try:
+            r = await self.environment.exec(cmd, cwd="/", timeout_sec=60)
+        except Exception as e:
+            raise EnvInfraError(f"harbor exec failed (env probe): {type(e).__name__}: {e}") from e
+        try:
+            result = json.loads(r.stdout or "")
+        except json.JSONDecodeError:
+            return {"ok": False, "violations": [f"probe_unavailable:exit_{r.return_code}"], "observed": {"stderr": (r.stderr or "")[-500:]}}
+        return result
 
     async def fingerprint_with_detail(self, spec: StateSpec) -> tuple[str, list[str]]:
         arg = json.dumps({"paths": spec.fingerprint_paths, "exclude": spec.fingerprint_exclude, "cwd": self.tool_cfg.workdir})

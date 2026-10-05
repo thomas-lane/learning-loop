@@ -237,7 +237,7 @@ SET_HELP = "override an experiment value, e.g. --set cycles=1 (YAML-parsed; repe
 # Exit codes shared by every command (documented in docs/cli.md).
 EXIT_CODES = {
     0: "success",
-    1: "unexpected error (traceback printed), a failed smoke/preflight check, or a failed stage item",
+    1: "unexpected error (traceback printed), a failed smoke or `loop preflight` check, a failed Docker-host preflight at the start of a run, or a failed stage item",
     2: "invalid usage, configuration or plan (message printed as `error: ...`); nothing was started",
 }
 
@@ -491,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     from .core.storage import RunLockedError
     from .hosts.pods import RunpodError
     from .orchestration.coordinator import PlanError
+    from .orchestration.preflight import PreflightError
 
     from .core.envfile import load_env
 
@@ -501,6 +502,9 @@ def main(argv: list[str] | None = None) -> int:
     except (PlanError, ValidationError, FileNotFoundError, FileExistsError, ValueError, RunpodError, RunLockedError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except PreflightError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ class _FakeHarborEnv:
 
 async def test_plan_mode_writes_records_and_atif(tmp_path):
     inst = count_errors_instance(tmp_path / "tasks")
-    plan = make_plan(inst, "ep-agent")
+    plan = make_plan(inst, "ep-agent", env_probe=False)
     plan_path = tmp_path / "plan.json"
     atomic_write_json(plan_path, plan)
     trial = tmp_path / "trial"
@@ -82,7 +82,7 @@ async def test_plan_mode_writes_records_and_atif(tmp_path):
 async def test_plan_instruction_mismatch_refused(tmp_path):
     inst = count_errors_instance(tmp_path / "tasks")
     plan_path = tmp_path / "plan.json"
-    atomic_write_json(plan_path, make_plan(inst, "ep"))
+    atomic_write_json(plan_path, make_plan(inst, "ep", env_probe=False))
     agent = ToolAgent(logs_dir=tmp_path, model_name="x", episode_plan_path=str(plan_path), record_dir=str(tmp_path / "r"))
     try:
         await agent.run("a different instruction", object(), AgentContext())

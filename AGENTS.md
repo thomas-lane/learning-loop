@@ -75,7 +75,8 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_docs_generated generated docs are current; every config field and CLI argument is described
   test_docs_server   doc viewer rendering, path safety, and that every doc is in the index and navigation
 tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading; rendered
-                     tasks: shell solutions score what their models predicted, a networked verifier refuses to grade)
+                     tasks: shell solutions score what their models predicted, a networked verifier or stale
+                     files refuse to grade or run; the Docker-host preflight)
 tests/train/         `-m train`: real LoRA DPO on Qwen3-0.6B + serving the adapter
 tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/),
                      fixture task families (tasks/)
@@ -104,8 +105,11 @@ have failed before it.
   times, `network_mode: none` for agent and verifier, answer key only in `tests/`); generation
   grades each instance's oracle, shortcut and no-op models with the shared grader and redraws
   until the oracle passes and the rest fail; the verifier grades only after its probe and its
-  `LL_TESTS_SHA256` digest check pass; families draw randomness only from `ctx.rng`; the
-  per-family Docker test checks every model against the real scripts.
+  `LL_TESTS_SHA256` digest check pass; every episode first probes the agent container (network,
+  env, tools, processes, `/app` content against the rendered digest) and stops as
+  `infra:env_probe:*` on a mismatch; every run starts with the Docker-host preflight (one oracle
+  per family must score its predicted reward); families draw randomness only from `ctx.rng`;
+  the per-family Docker test checks every model against the real scripts.
 - **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
   mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
 - **Acceptance** (`strict_all_success_v1`): valid replay, the fixed action ran without tool error or

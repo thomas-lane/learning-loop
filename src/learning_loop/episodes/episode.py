@@ -19,6 +19,9 @@ Loop: [fingerprint] -> request -> response -> execute each tool call in order
     infra:<msg>                   INFRA        endpoint transport/5xx/timeouts, or the environment
                                                transport (EnvInfraError: exec/upload failures,
                                                backstop timeouts); retried by the coordinator
+    infra:env_probe:<checks>      INFRA        before turn 0, the container does not match the task's
+                                               `env_probe` expectation (network, env, tools, processes,
+                                               /app content); nothing has been executed or requested
     replay:<mismatch>             REPLAY       restored state differs from the source (fail closed),
                                                incl. replay:image_mismatch (different environment image)
 
@@ -32,6 +35,12 @@ image identity differs from the source's stops as `replay:image_mismatch`;
 when the source recorded none, the check is skipped and that is recorded in
 `extra["image_identity_check"]`. After the intervention executes,
 `extra["intervention_tool"] = {executed, error, exit_code, timed_out}`.
+
+Environment probe (`plan.state_spec.env_probe`, declared by rendered tasks): before the
+replay or the first request, sessions that can probe (`session.probe`, Harbor) run
+tasks/runtime/probe.py in the container; the result is an `env_probe` event and
+`extra["env_probe"]`. Sessions that cannot (the local fixture backend runs on the host)
+record that the probe was skipped.
 
 Replay (`plan.replay`): no model calls for the prefix. The conversation starts
 from the exact historical `history_prefix`; each prefix turn's *executed*
@@ -230,6 +239,20 @@ class _Episode:
         self.image_identity: dict[str, Any] | None = None
 
     # -- helpers ------------------------------------------------------------ #
+
+    async def check_environment(self) -> None:
+        expect = self.plan.state_spec.env_probe
+        if expect is None:
+            return
+        probe = getattr(self.session, "probe", None)
+        if probe is None:
+            self.extra["env_probe"] = "skipped: this environment cannot be probed"
+            return
+        result = await probe(expect)
+        self.extra["env_probe"] = {"ok": result["ok"], "violations": result["violations"]}
+        self.emit(EventKind.ENV_PROBE, result)
+        if not result["ok"]:
+            raise _StopEpisode("infra:env_probe:" + ",".join(result["violations"]), StopCategory.INFRA)
 
     def emit(self, kind: EventKind, data: dict[str, Any], turn: int | None = None) -> None:
         self.log.emit(kind, data, turn_index=turn)
@@ -596,6 +619,7 @@ async def run_episode(
     try:
         async with asyncio.timeout(plan.budgets.agent_timeout_sec) as cm:
             try:
+                await ep.check_environment()
                 if plan.replay is not None:
                     await ep.replay()
                 await ep.loop()

@@ -37,12 +37,14 @@ runs/<run-id>/
 │   │                         (when `verification.audit.fraction` > 0)          ┘
 │   ├── dataset/              preference pairs
 │   └── train/                training stage files
+├── preflight/<start time>/   Harbor trial directories of each Docker-host preflight
 ├── checkpoints/cNNN-<hash12>/   read-only published checkpoints
 ├── cache/ref_logps/          DPO reference log-probs, reused on resume (trl_dpo; remote training keeps them in its work dir)
 ├── logs/
 │   ├── coordinator.log       console output of a coordinator started by `loop submit`
 │   ├── <role>-server-<checkpoint>-<unix time>.log   model server output, including vLLM's (copied back from remote hosts)
 │   ├── serving-lifecycle.jsonl  append-only: model server start/ready/stop events
+│   ├── preflight.jsonl       append-only: one Docker-host preflight record per coordinator start that runs episodes (passed, failed or skipped, with each family's trial)
 │   └── pod-lifecycle.jsonl   append-only: Runpod pod events
 └── reports/                  CSV and markdown reports (see below)
 ```

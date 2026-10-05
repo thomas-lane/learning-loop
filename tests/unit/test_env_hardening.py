@@ -123,7 +123,7 @@ async def test_environment_transport_failure_is_infra(tmp_path, instance, fail):
     log = EventLog(tmp_path / "events.jsonl", "infra")
     async with LocalSession(_files(instance), _cfg()) as local:
         sess = HarborSession(_FakeHarborEnv(local, fail=fail), _cfg(), measure_cpu=False)
-        plan = make_plan(instance, "infra")
+        plan = make_plan(instance, "infra", env_probe=False)
         plan.record_fingerprints = False
         run = await run_episode(plan, sess, pol, log)
     assert run.core.stop_category == StopCategory.INFRA, run.core.stop_reason
@@ -378,7 +378,7 @@ class _AgentEnv:
 
 
 async def test_tool_agent_never_writes_through_planted_symlinks(tmp_path, instance):
-    plan = make_plan(instance, "ep-agent")
+    plan = make_plan(instance, "ep-agent", env_probe=False)
     plan_path = tmp_path / "plan.json"
     atomic_write_json(plan_path, plan)
     logs = tmp_path / "trial" / "agent"

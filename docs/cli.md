@@ -102,7 +102,7 @@ uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
 | Code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | unexpected error (traceback printed), a failed smoke/preflight check, or a failed stage item |
+| 1 | unexpected error (traceback printed), a failed smoke or `loop preflight` check, a failed Docker-host preflight at the start of a run, or a failed stage item |
 | 2 | invalid usage, configuration or plan (message printed as `error: ...`); nothing was started |
 
 ### loop validate

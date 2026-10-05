@@ -74,6 +74,7 @@ async def test_oracle_episode_replays_identically(tmp_path, family):
     backend = HarborDockerBackend()
     src = await backend.run(inst, make_plan(inst, f"orc-{family}", policy, agent_timeout_sec=120.0), tmp_path / "src")
     assert src.summary.success is True and src.summary.stop_reason == "model_finished", src.summary.stop_reason
+    assert src.summary.extra["env_probe"] == {"ok": True, "violations": []}  # the agent container matched its profile
     ev = src.out_dir / "events.jsonl"
     turns = load_turns(ev)
     assert len(turns) == 3
