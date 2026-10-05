@@ -1,6 +1,6 @@
 # evaluation/: Harbor tasks, generators, splits and the learner agent
 
-Everything that runs inside Harbor **0.23.0** (the framework that builds a task's container,
+Everything that runs inside Harbor (the framework that builds a task's container,
 runs an agent in it and grades the result): the tasks, the tool-calling learner agent, the task
 generators, and the split files that assign task instances to training or evaluation. Terms
 such as panel, replay, fingerprint and normalizer are defined in the
@@ -30,7 +30,7 @@ Docker must be running. CLI flags override the config file.
 uv run harbor run -p evaluation/tasks -a oracle -o evaluation/jobs
 uv run harbor run -p evaluation/tasks -a nop -o evaluation/jobs      # log-triage 0.0, fix-stats 0.33
 
-# The agent against an OpenAI-compatible server (llama.cpp needs --jinja for tool calls)
+# The agent against an OpenAI-compatible server
 evaluation/run.sh                                          # all tasks, config defaults
 evaluation/run.sh -p evaluation/tasks/log-triage -k 5      # one task, 5 attempts
 evaluation/run.sh -m my-model --ak api_base=http://gpu-box:8000/v1
