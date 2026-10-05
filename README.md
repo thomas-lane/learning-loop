@@ -26,9 +26,9 @@ on tasks it never trained on? Method and metrics: [docs/experiment.md](docs/expe
 | LoRA DPO (Qwen3-0.6B), publish and reload, serving through the reference HF server | working on MPS and CUDA |
 | Live small-model loop (`experiments/smoke-mac.yaml`) | runs end to end; Qwen3-0.6B and 1.7B solved none of their 6 attempts per run, so no live cycle has trained yet |
 | Live editor on saved trajectories (`loop edit-replay`) | runs; all small-Qwen proposals so far failed validation |
-| Runpod / SSH GPU host, laptop as coordinator | fixed SSH host: live runs and remote training on an RTX 3090 pod; pod per command: A100 pods created, used and terminated by a test script, not yet by a `loop` command; existing pod and pod watchdog: fake API only |
-| Gemma 4 | E4B: served and LoRA DPO trained on an A100 in probes and a partial pilot run, whose cycle-0 adapter was served in cycle 1; tool-call parser tested; E2B **untested** |
-| vLLM generation engine behind `hf_server` | matches transformers + PEFT for E4B on an A100 (`serving/equivalence.py`: base, trained and random adapters); not yet used in a learning run |
+| Runpod / SSH GPU host, laptop as coordinator | fixed SSH host: live runs and remote training on an RTX 3090 pod; pod per command: used by `loop run` for the Gemma-4-E4B pilot runs on A100 pods; existing pod and pod watchdog: fake API only |
+| Gemma 4 | E4B: two pilot learning runs on A100 pods. With the transformers engine, cycle 0 trained an adapter (on one accepted pair) that was served in cycle 1, where the run stopped. With the vLLM engine, three cycles completed without an accepted edit, so nothing trained. Tool-call parser tested; E2B **untested** |
+| vLLM generation engine behind `hf_server` | matches transformers + PEFT for E4B on an A100 (`serving/equivalence.py`: base, trained and random adapters); used for the vLLM pilot run, which never served a trained adapter |
 | `loop submit` (remote coordinator); `loop external-eval --execute` | **untested** (external-eval: only job generation is tested) |
 
 ## Setup
@@ -125,6 +125,5 @@ To run the live smoke experiment with the 1.7B learner, add
 The [documentation index](docs/index.md) lists every document. `uv run loop docs --open` serves
 them rendered at http://localhost:8000/.
 
-Top-level folders: `experiments/`, `configs/` (model and machine profiles), `evaluation/` (tasks,
-Harbor agent), `src/learning_loop/`, `prompts/`, `tests/`, `docs/`, and the git-ignored outputs
-`runs/` and `artifacts/`.
+What each top-level folder holds is in
+[architecture.md → Repository layout](docs/architecture.md#repository-layout).

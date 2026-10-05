@@ -19,7 +19,7 @@ rendered, with working links and diagrams, with `uv run loop docs --open`.
 | know what a `loop` command does and its flags | [CLI reference](cli.md) (generated from the parser) |
 | write or change an experiment, machine or model profile | [Configuration reference](configuration.md) (generated from the schemas, plus rules that span several fields) |
 | run a real experiment step by step, or recover from an error | [Operations](operations.md) |
-| use a Runpod (or other SSH) GPU pod for serving and training | [Runpod deployment](runpod.md) |
+| use a Runpod (or other SSH) GPU pod for serving and training, or serve with vLLM | [Runpod deployment](runpod.md) |
 | find a file in a run directory and know what it contains | [Run layout](run-layout.md) |
 
 ## Tasks and the agent

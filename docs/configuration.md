@@ -64,13 +64,15 @@ is any `editor.mode` except `scripted`.
   editor's checkpoint and cannot be used with `editor.mode: current_learner`; a scripted learner
   needs `editor_inference`.
 - Every named panel exists in the split file; `evaluation.final_panels` are `final` or
-  `external` panels. The split file passes the checks in
+  `external` panels; every family in `tasks.exposure_schedule` occurs in the collection panel.
+  The split file passes the checks in
   [../evaluation/README.md](../evaluation/README.md#generators-and-splits).
 
 `loop run` also checks, when it creates the run, that `learner.initial_checkpoint` was trained
 for the same model profile. `loop evaluate` checks only the per-file rules, the panel rules and
 that `--checkpoint` was trained for the learner's model profile. `loop edit-replay` checks the
-rules as for a `frozen_baseline` experiment, which skips the training-run and model-editor rules.
+rules as for a `frozen_baseline` experiment, which skips the training-run and model-editor rules;
+it skips the panel rules too, because it reuses the source run's tasks.
 `resume --machines` on a learning run checks the new profile against all but the panel rules.
 
 **Warnings, not errors.** `validate` prints `note:` lines for fixture components (scripted

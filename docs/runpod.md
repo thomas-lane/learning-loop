@@ -228,10 +228,9 @@ stops or watches the machine. Stop it yourself when you are done.
 `experiments/pilot.yaml` uses Gemma-4-E4B (`configs/models/gemma-4-e4b-it.yaml`). The smaller
 Gemma-4-E2B is a fallback: `--set learner.model_profile=gemma-4-e2b-it`.
 
-- **Serving.** `hf_server` serves both with the `gemma4` tool-call parser. With its default
-  transformers engine (`backend: hf_transformers`), base E4B loads in about a minute on an A100
-  and generates 10-15 tokens/s for a single sequence; the vLLM engine is much faster
-  ([below](#faster-serving-with-vllm)).
+- **Serving.** `hf_server` serves both with the `gemma4` tool-call parser, using either the
+  transformers engine (`inference.backend: hf_transformers`) or the much faster vLLM engine
+  ([below](#faster-serving-with-vllm), with measured speeds).
 - **Training.** LoRA applies to the language model only (`lora_exclude_modules` skips the vision
   and audio towers). The trainer computes logits only over completion tokens, and `pilot.yaml`
   enables `training.dpo.gradient_checkpointing` with `max_length: 32768`; memory figures are in
@@ -252,17 +251,20 @@ episode. With `inference.backend: vllm` (example: `configs/machines/examples/run
 `training/render.py`, parses tool calls and counts tokens with the training tokenizer. What the
 learner sees and what is counted therefore stay the same as with the transformers engine.
 
-- On first use the pod installs the model profile's `serving.vllm.engine_package` into
-  `.engines/<package>/`, a separate environment because vLLM pins its own torch. This takes a
-  few minutes on a new pod.
+- On first use the pod installs the model profile's `serving.vllm.engine_package` into a
+  separate environment, because vLLM pins its own torch. It lives in `.engines/` in the pod's
+  repository copy, in a directory named after the package with characters other than letters,
+  digits, `.`, `_` and `-` replaced by `_` (`vllm==0.30.0` → `.engines/vllm__0.30.0/`). The
+  install takes a few minutes on a new pod and counts against `inference.startup_timeout_sec`.
 - Every sampling parameter is sent explicitly with each request (`--generation-config vllm`), so
   the model repository's own sampling defaults never apply. Prefix caching is off, because a
   cached prefix is computed differently from a recomputed one and would change outputs.
-- Base checkpoints are served through the zero LoRA, like trained ones, so every checkpoint pays
-  the same adapter overhead.
+- In experiments that train LoRA adapters, base checkpoints are served through a
+  [zero LoRA](glossary.md) (as with the transformers engine), so every checkpoint pays the same
+  adapter overhead.
 - `inference.request_concurrency` sets how many requests vLLM batches together.
-  `docker_concurrency` must be at least as large, or there are never enough episodes running to
-  fill a batch.
+  Set `docker_concurrency` at least as large; otherwise too few episodes run at once to fill a
+  batch.
 
 Gemma-4-E4B on an A100 with the zero LoRA, 768-token generations:
 
@@ -272,18 +274,21 @@ Gemma-4-E4B on an A100 with the zero LoRA, 768-token generations:
 | vLLM with the profile's `launch_args` (full decode CUDA graphs, no torch.compile) | 88 s | 76.2 for one request; 505 in total with 8 concurrent requests |
 | vLLM defaults (`-O2`, torch.compile) | 210 s | 81.3 |
 
-vLLM computes in bf16, including the LoRA arithmetic, so its outputs differ slightly from the
-transformers engine. Before relying on it for a model profile, check that it matches on a GPU
-host with a trained adapter of that model:
+vLLM uses its own kernels (for Gemma, bf16 throughout, including the LoRA arithmetic), so its
+outputs differ slightly from the transformers engine. Before relying on it for a model profile,
+check that it matches, on a GPU host in the repository directory, with a trained adapter of that
+model on that host (without `--adapter` the check fails):
 
 ```bash
 uv run --extra train python -m learning_loop.serving.equivalence --profile gemma-4-e4b-it \
     --adapter runs/<run>/checkpoints/<ckpt> --out equivalence.json
 ```
 
-It compares prompt token ids, per-token log-probabilities and greedy decoding against
-transformers + PEFT for the base model, the trained adapter and a strong random adapter (see
-`serving/equivalence.py`).
+It exits with status 1 unless vLLM echoes back exactly the prompt token ids it was sent, its
+per-token log-probabilities match transformers + PEFT within set bounds for the base model
+(through a zero LoRA) and the trained adapter, and a strong random adapter changes both engines'
+outputs in the same way. Greedy-decoding agreement is only reported. The bounds and the report
+fields are in `serving/equivalence.py`.
 
 ## Costs
 

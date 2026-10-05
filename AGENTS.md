@@ -30,7 +30,7 @@ Credentials live in the git-ignored `.env` (template: `.env.example`), loaded au
 
 Architecture, the module map and data flow are in `docs/architecture.md`; the contents of a run
 directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. Quick index
-(paths under `src/learning_loop/`):
+(paths under `src/learning_loop/`, except `evaluation/`, which is at the repository root):
 
 | Concern | Module |
 |---|---|
@@ -44,7 +44,7 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 | Tasks, generators, splits | `tasks/instances.py`, `evaluation/generators/`, `evaluation/splits/` |
 | Editor, verification, preferences | `editing/editor.py`, `editing/verify.py`, `editing/preferences.py` |
 | Training, rendering, token counts | `training/`, `editing/token_count.py` |
-| Serving and lifecycle | `serving/` (`hf_server.py`, `tool_parse.py`, `managed.py`, `lifecycle.py`) |
+| Serving, vLLM engine, lifecycle | `serving/` (`hf_server.py`, `vllm_engine.py`, `equivalence.py`, `tool_parse.py`, `managed.py`, `lifecycle.py`) |
 | Orchestration, CLI | `orchestration/coordinator.py`, `orchestration/smoke.py`, `orchestration/external_eval.py`, `cli.py` |
 | Remote hosts, pods, preflight | `hosts/remote.py`, `hosts/remote_jobs.py`, `hosts/pods.py`, `hosts/preflight.py` |
 | Metrics, reports, live run dashboard (`loop dashboard`) | `reporting/metrics.py`, `reporting/report.py`, `reporting/dashboard.py` |
@@ -57,10 +57,11 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_core_*        contracts: seeds, config validation, storage, usage arithmetic
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
   test_tasks_*       generators and split validation
-  test_editor_*      editor view, validation, grounding
+  test_editor_*      editor view, answer tools, validation, grounding
   test_verify_*      branch specs, costs, acceptance, local end-to-end
   test_prefs_*       preference construction, exports, buffer
-  test_train_*       rendering/masking, fixture trainer, profiles, precision, server parsing (no weights)
+  test_train_*       rendering/masking, fixture trainer, profiles, precision, server parsing, vLLM engine
+                     against a fake vLLM process (no weights)
   test_report_*      metrics, reports, comparisons, the live dashboard (numbers match reports, escaping, path safety, read-only)
   test_loop_*        orchestration on fixtures: lineage, controls, resume, retries, remote training
   test_cli_examples  every committed experiment/machine example validates through the CLI
@@ -91,12 +92,13 @@ have failed before it.
   transfer; graders that execute agent code (fix-stats) run it as an unprivileged child that
   cannot read `/tests` or write `/logs/verifier`, and the parent judges its raw outputs. The host
   agent never writes through the container-writable `/logs/agent` mount except via a
-  symlink-refusing copy. The editor sees only instruction, tool schemas, the learner's turns and
-  scalar outcomes.
+  symlink-refusing copy. The editor sees only the instruction, the learner's system prompt and tool
+  schemas, the learner's turns with their tool outputs, and scalar outcomes.
 - **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
   mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
-- **Acceptance** (`strict_all_success_v1`): valid replay, complete success on both branches for every
-  repetition, no infra/budget/safety stops, all costs present, positive saving above the threshold.
+- **Acceptance** (`strict_all_success_v1`): valid replay, the fixed action ran without tool error or
+  timeout, complete success on both branches for every repetition, every branch ended by the model
+  (stop category `model`), all costs present, a positive mean saving that meets both thresholds.
 - **Cost accounting**: counterfactual episode cost = shared prefix + intervention request input +
   learner-tokenizer length of the fixed turn + continuation usage; verification spend is separate.
   Missing measurements are null, never 0; cached/reasoning tokens are subsets, never added.

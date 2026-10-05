@@ -40,7 +40,7 @@ runs/<run-id>/
 ├── checkpoints/cNNN-<hash12>/   read-only published checkpoints
 ├── cache/ref_logps/          DPO reference log-probs, reused on resume (trl_dpo; remote training keeps them in its work dir)
 ├── logs/
-│   ├── <role>-server-<checkpoint>-<unix time>.log   model server output (copied back from remote hosts)
+│   ├── <role>-server-<checkpoint>-<unix time>.log   model server output, including vLLM's (copied back from remote hosts)
 │   ├── serving-lifecycle.jsonl  append-only: model server start/ready/stop events
 │   └── pod-lifecycle.jsonl   append-only: Runpod pod events
 └── reports/                  CSV and markdown reports (see below)
@@ -103,7 +103,11 @@ items/ep-<hash>/
 
 `items/prop-<hash>/proposal.json`: `status` (`proposed`, `abstained`, `invalid`), `turn_index`,
 `replacement` (the proposed call), `rejection_reasons`, `raw_response`, `usage`, and the editor's
-`justification` (never used for training).
+`justification` (never used for training). From a model editor, `raw_response` holds the request
+messages, seed and model response, plus `answer_recovery: bare_tool_call` when the answer call
+was accepted although written without the model format's call markers. A source with no editable
+turn is recorded as `abstained` with the reason `skipped:no_editable_turns` and no `raw_response`
+or `usage`, because no request was made ([editing](experiment.md#editing)).
 
 ### Verify and audit items (`verify/`, `audit/`)
 
@@ -206,8 +210,12 @@ results):
 |---|---|
 | `runs/<run-id>/remote-train/cNNN/` | request, dataset copy, work directory, `train.log` |
 | `runs/<run-id>/checkpoints/` | incoming checkpoints pushed there and new ones published there |
-| `runs/_servers/` | model server logs |
+| `runs/_servers/` | model server logs; with vLLM, also `zero-lora-<hash>/`, the [zero LoRA](glossary.md) served for base checkpoints |
+| `.engines/<package>/` | vLLM only: the engine's own environment (vLLM pins its own torch), installed on first use; `vllm==0.30.0` becomes `vllm__0.30.0` |
 | `runs/_pod/` | Runpod only: heartbeat, watchdog log and PID |
+
+When the machine running `loop` serves with vLLM itself, it has `.engines/<package>/` and
+`runs/_servers/zero-lora-<hash>/` too.
 
 On a coordinator host used through `loop submit`, `runs/<run-id>/` is the run directory itself,
 plus `submitted-machine.yaml` and `coordinator.log`; `loop fetch` copies it back.

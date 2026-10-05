@@ -40,7 +40,7 @@ flowchart TB
     CO --> BE["episode backend (episodes/backends.py)"]
     BE -->|Harbor Trial, in-process| AG["ToolAgent (evaluation/agents)<br/>runs episodes/episode.py on the host"]
     AG -->|exec / upload| TC[("task container<br/>(Docker)")]
-    AG -->|chat completions| SRV["model server<br/>(serving/hf_server.py: transformers or vLLM engine;<br/>llama.cpp as an external endpoint)"]
+    AG -->|chat completions| SRV["model server<br/>(serving/hf_server.py: generates with transformers<br/>or a vLLM child process; llama.cpp as an external endpoint)"]
     BE -->|after the episode| VC[("verifier container<br/>tests/ + declared artifacts")]
     CO --> EDT["editor (editing/editor.py)"] --> SRV
     CO --> VER["verifier (editing/verify.py)"] --> BE
@@ -55,7 +55,7 @@ Three machine roles, which one or two hosts can share:
 | Role | Runs | Machine profile keys |
 |---|---|---|
 | Coordinator / environment runner | `loop`, Harbor, the ToolAgent, task and verifier containers | `coordinator`, `environment_backend`, `docker_concurrency` |
-| Inference endpoint | a server per checkpoint started by the run (`managed`), an existing endpoint such as llama.cpp (`external`), or a scripted fixture | `inference`, optional `editor_inference` |
+| Inference endpoint | a server per checkpoint started by the run (`managed`: `hf_server`, plus its vLLM child process with `backend: vllm`), an existing endpoint such as llama.cpp (`external`), or a scripted fixture | `inference`, optional `editor_inference` |
 | Training host | `python -m learning_loop.training.run`, locally or over SSH | `training` |
 
 `loop dashboard` is a separate read-only process next to the run directory. It never takes the
@@ -110,6 +110,7 @@ src/learning_loop/            the loop (module map below)
 tests/                        unit/, integration/ (-m docker), train/ (-m train), fixtures/
 runs/                         run directories (git-ignored)
 artifacts/                    local state outside runs, e.g. the created-pod ledger (git-ignored)
+.engines/                     a generation engine's own environment, e.g. vLLM, made on the serving host (git-ignored)
 pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (`train` extra)
 ```
 
@@ -132,16 +133,16 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | | `policy.py` | OpenAI-compatible and scripted policies |
 | | `episode.py` | the agent loop, budgets, stop reasons, replay + intervention |
 | | `events.py` | `events.jsonl` writer and per-turn view (`load_turns`) |
-| `editing/` | `editor.py` | editor input, LLM and scripted editors, proposal validation |
+| `editing/` | `editor.py` | editor input, answer tools (`replace_with_<tool>`, `abstain`), LLM and scripted editors, proposal validation |
 | | `verify.py` | branch replay, branch costs, acceptance rules, audits |
 | | `preferences.py` | preference pairs, exports, history buffer |
 | | `token_count.py` | learner-tokenizer length of a fixed turn |
-| `training/` | | rendering (`render.py`), TRL DPO (`dpo.py`), fixture trainer, publication, trainer CLI (`run.py`) |
+| `training/` | | rendering (`render.py`), model and adapter loading and log-probs (`modeling.py`), TRL DPO (`dpo.py`), fixture trainer (`fixture.py`), publication (`common.py`), trainer CLI (`run.py`) |
 | `serving/` | `hf_server.py`, `tool_parse.py` | the model server: renders prompts with `training/render.py`, parses tool calls, counts usage with the training tokenizer; generates with transformers + PEFT or a vLLM engine |
 | | `vllm_engine.py` | vLLM as a child process of `hf_server` that only generates, from token ids, in its own environment (`.engines/`) |
 | | `equivalence.py` | GPU check that the vLLM engine matches transformers + PEFT (log-probs and greedy output, base and adapters) |
-| | `managed.py` | start/stop an owned `hf_server` process |
-| | `lifecycle.py` | which checkpoint is served where; owned servers; policy specs |
+| | `managed.py` | HTTP and port helpers; `ManagedHFServer`, a local `hf_server` that the `-m train` tests start and stop |
+| | `lifecycle.py` | which checkpoint is served where; starts and stops the run's own servers, locally or over SSH (with the SSH tunnel to a pod); policy specs |
 | `orchestration/` | `coordinator.py` | runs, cycles, stages, retries, lineage, resume |
 | | `smoke.py` | smoke levels |
 | | `external_eval.py` | pinned external Harbor benchmark configs |
@@ -153,13 +154,14 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | `docs_tools/` | `docgen.py`, `docserver.py` | generated doc sections; `loop docs` viewer |
 
 Imports point downward: `core` imports nothing else; `tasks` and `training` import only `core`;
-`episodes` adds `tasks`; `editing` adds `episodes` (and `training/render.py` for token counts);
+`episodes` adds `tasks`; `editing` adds `episodes` (plus `training/render.py` for token counts and
+`serving/tool_parse.py` for the editor's answer); `serving` adds `training` and `hosts/remote.py`;
 `orchestration` wires everything, and `hosts/remote_jobs.py` sits above it. This keeps the
 ToolAgent, which Harbor loads, and the trainer, which runs as its own process, free of the
 coordinator.
 
 Torch, PEFT and TRL (the `train` extra) are imported only inside functions of `training/`,
-`serving/hf_server.py` and `hosts/preflight.py`, so the coordinator runs without them.
+`serving/` and `hosts/preflight.py`, so the coordinator runs without them.
 
 ## Data flow
 

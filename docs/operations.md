@@ -12,10 +12,11 @@ How to run a real experiment, watch it, and recover when something goes wrong. C
    alias from `~/.ssh/config`; if the learner server runs there, keep your own SSH tunnel open to
    `inference.api_base` (as in `configs/machines/examples/lab-gpu.yaml`). Pods need none: the run
    opens their tunnel, since a pod's address changes at every start.
-2. **Check the hosts.** Run `uv run loop preflight --trainable --model-profile <profile>` on the
-   training machine, and `uv run pytest` and `uv run pytest -m docker tests/integration` on the
-   coordinator. On a new GPU host, run `uv run pytest -m train tests/train` once: it trains and
-   serves a small LoRA adapter in about a minute, catching driver and library problems early.
+2. **Check the hosts.** Run `uv run loop preflight --trainable --model-profile <model>` (a name
+   from `configs/models/`, without `.yaml`) on the training machine, and `uv run pytest` and
+   `uv run pytest -m docker tests/integration` on the coordinator. On a new GPU host, run
+   `uv run pytest -m train tests/train` once: it trains and serves a small LoRA adapter in about
+   a minute, catching driver and library problems early.
 3. **Validate every configuration**, controls included: `uv run loop validate <experiment> --machines <profile>`.
    Read the notes it prints (untested backends, fixture components).
 4. **Calibrate.** Run the frozen baseline (`experiments/frozen-baseline.yaml`, adjusted to your
@@ -33,6 +34,9 @@ How to run a real experiment, watch it, and recover when something goes wrong. C
 6. **Watch each cycle** ([below](#watching-a-run)): proposal rejection reasons, acceptance
    reasons, infra retries and success transitions (lost successes are listed explicitly).
 7. **Compare:** `uv run loop compare runs/pilot-s0 runs/pilot-s1 runs/pilot-s2 --vs runs/baseline`.
+   Effects are reported as the `--vs` side minus the other side, here baseline minus pilot, so a
+   better pilot shows a negative success change and a positive token delta. A single run is
+   accepted only after `--vs`, so the order cannot be swapped.
 8. **Freeze decisions, then evaluate final panels.** Write down the method and checkpoint choice
    first, then run `loop evaluate ... --final`. Optionally run `loop external-eval` (a dry run until
    `--execute`). Neither feeds back into a run.
@@ -90,9 +94,9 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `... server exited with N while loading <ckpt>; log: ...` | port in use, out of memory, or a bad adapter | read the log; change `inference.port` if the port is taken |
+| `... server exited with N while loading <ckpt>; log: ...` / `... server on <kind> host exited while loading <ckpt>; log: ...` | port in use, out of memory, or a bad adapter | read the log; change `inference.port` if the port is taken |
 | `... server for <ckpt> not ready after Ns; log: ...` | slow first load (the host downloads the model, or `uv run` builds the environment) or a hung server | check the log; on a fixed SSH host, run `loop sync-hosts` first so the environment is built in advance; raise `inference.startup_timeout_sec` |
-| `vLLM exited with N while starting` in the server log | the vLLM engine failed to start, for example too little free GPU memory (`--gpu-memory-utilization`), a missing build tool, or an unsupported model and LoRA combination | read vLLM's own error in the server log (copied into `runs/<id>/logs/`); the engine environment is `.engines/<package>/` on the host |
+| `vLLM exited with N while starting` in the server log | the vLLM engine failed to start, for example too little free GPU memory (`--gpu-memory-utilization`), a missing build tool, or an unsupported model and LoRA combination | read vLLM's own error in the server log in `runs/<id>/logs/` (a remote host's log is copied there from its `runs/_servers/` when the server stops); the engine environment is in `.engines/` on the host, named after `engine_package` with characters other than letters, digits, `.`, `_` and `-` replaced by `_` (`vllm==0.30.0` → `.engines/vllm__0.30.0/`) |
 | `infra:` stops with `vLLM returned HTTP ...` | the vLLM engine rejected or failed a request | read the server log; check that the model profile's `serving.vllm.launch_args` suit its `engine_package` version |
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | stop that process group on the host, then resume |
 | many `infra:` stops (connection errors, timeouts) | the endpoint or tunnel went away, or `inference.request_timeout_sec` is too short | check the server log and tunnel; attempts are retried `runtime.infra_retries` times |
@@ -119,8 +123,11 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 | Reason | Meaning | Action |
 |---|---|---|
 | `nonempty_reasoning`, `nonempty_assistant_content` | the learner writes text or reasoning with its tool calls | disable reasoning in the model profile (`chat_template_kwargs: {enable_thinking: false}`) |
-| `skipped:no_editable_turns` (status `abstained`) | no turn of the source is editable, so no editor request was made | none if expected; the eligibility reasons above say why turns were not editable |
+| `skipped:no_editable_turns` (status `abstained`) | no turn of the source is editable, so no editor request was made | none if expected; which turns are editable is defined in [experiment.md](experiment.md#editing) |
 | `no_tool_call`, `multiple_tool_calls:N`, `unknown_editor_tool:...`, `unparsed_tool_call:...`, `response_schema:...`, `identical_replacement` | the editor did not answer with exactly one valid answer-tool call (`unparsed_tool_call` gives the parse error of a malformed call) | try `editor.mode: external` via `edit-replay` |
+| `editor_output_truncated` (with the reasons above) | the editor's reply hit `editor.sampling.max_output_tokens` before a complete answer call | raise `editor.sampling.max_output_tokens` |
+| `editor_infra_error:...` | the editor endpoint failed (connection error, timeout, HTTP 408, 429 or 5xx); the edit item is retried `runtime.infra_retries` times, then becomes `infra_failed`, and the report counts it apart from invalid proposals | check the editor server log and tunnel |
+| `editor_request_error:...` | the editor endpoint rejected the request with another 4xx, e.g. `context_length_exceeded` | read the message; for context errors, serve the editor with a longer context |
 | `ungrounded_constant:<value>` | the replacement uses a value seen only later (possible hindsight) | check `proposals.csv` if legitimate edits are rejected |
 | `replay_failed:<branch>:rN` with `replay:observation:...` | a replayed command printed something different | make the task deterministic, or declare a narrow normalizer in the task |
 | `replay:fingerprint:...` | the restored state differs from the source | fix the task's undeclared state |
@@ -133,7 +140,7 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `cycle N: trainer found no trainable examples (...) -> no-update cycle` | every pair was dropped (e.g. longer than `training.dpo.max_length`) | recorded as a no-update; see `cycles/cycle-NNN/train/work/render_report.json`; raise `training.dpo.max_length` |
+| `cycle N: trainer found no trainable examples (...) -> no-update cycle` | every pair was dropped (e.g. longer than `training.dpo.max_length`) | recorded as a no-update; see `training_data` in `cycles/cycle-NNN/cycle.json`; raise `training.dpo.max_length` |
 | `cycle N: WARNING k of n pairs dropped before training: {...}` | some pairs were not trained on | listed in `cycle.json`, `loop status` and the report; raise `training.dpo.max_length` (larger GPU) rather than accept them |
 | `training work dir ... is held by another trainer process; ...` (exit 4) | a trainer for this stage is still running | wait or stop it |
 | `trainer used reference X, expected incoming Y` / `checkpoint lineage does not continue the incoming learner` | the wrong checkpoint was published | find the cause; do not bypass |

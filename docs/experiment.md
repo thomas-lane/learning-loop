@@ -53,7 +53,8 @@ loop compare runs/A-seed1 runs/A-seed2 runs/A-seed3 --vs runs/B-seed1 runs/B-see
 Runs are matched by loop seed (by position if seeds are missing or differ). A single B run, such
 as a frozen baseline, is compared against every A run. The A-vs-B effect is computed within each
 matched pair, as above, then averaged over seeds. A 95% interval across seeds needs at least 3
-seeds.
+seeds. Every effect is reported as B minus A (a "lost" pair lost success under B), so with a
+frozen baseline after `--vs` the effects read as baseline minus learning.
 
 Smoke runs and runs with *fixtures* (scripted stand-ins for the learner, editor or trainer, used
 to test the plumbing without a model) never support statistical claims.
@@ -81,8 +82,8 @@ Cycle *c* starts with learner checkpoint *L_c*, which stays fixed for the whole 
    on.
 6. **Train** a LoRA adapter with DPO for exactly `training.optimizer_steps` steps. Training
    continues from *L_c*'s adapter, the DPO reference model is *L_c* including its adapter, and
-   the optimizer and scheduler restart every cycle. The new checkpoint is published read-only,
-   reload-checked and served once before it becomes *L_{c+1}*.
+   the optimizer and scheduler restart every cycle. The new checkpoint is published read-only
+   and reload-checked before it becomes *L_{c+1}*.
 
 If no pair is accepted (or none fits training's length limit), nothing is trained: the cycle is
 recorded as a *no-update* cycle and *L_{c+1} = L_c*.
@@ -154,11 +155,11 @@ The editor answers by calling exactly one tool. For each learner tool it is offe
 `replace_with_<tool>` tool, which takes that tool's own parameters (the replacement call) plus
 `edit_turn`, limited to the editable turns, and `edit_justification`, kept for audit and never in
 training data. Calling `abstain` declines. Because the answer is a tool call rather than written
-JSON, the replacement goes through the same tool-call parser as the learner's own calls, in the
-model's native format, and code or file contents in it need no hand-written escaping. If the
-reply is exactly one answer call written without the model format's call markers, it is
-accepted as that call and recorded (`answer_recovery: bare_tool_call` in the proposal's raw
-response). Learner turns are never recovered this way: whether the learner follows its tool-call
+JSON, the replacement is written in the model's native tool-call format and parsed by its
+server's tool-call parser, as the learner's own calls are, and code or file contents in it need
+no hand-written escaping. If the reply is exactly one answer call written without the model
+format's call markers, it is accepted as that call and recorded (`answer_recovery:
+bare_tool_call` in the proposal's raw response). Learner turns are never recovered this way: whether the learner follows its tool-call
 format is part of what is measured. The editor cannot approve its own edit or touch grading,
 budgets or the environment.
 
@@ -241,7 +242,7 @@ counted twice. Tokens spent on verification itself are tracked separately.
 - replay is valid on every branch;
 - the fixed action ran without a tool error or timeout on every branch;
 - both branches fully succeed in every repetition (`verification.continuations_per_branch`);
-- no branch stopped for infrastructure, budget, safety or replay reasons;
+- no branch stopped for infrastructure, budget, safety, replay or model-error reasons;
 - every cost was measured;
 - the mean saving is at least `verification.min_token_saving` tokens and at least
   `verification.min_relative_saving` of the original branch's cost.
@@ -318,8 +319,9 @@ uninterrupted one only up to that noise.
 Runs record serving backend, template, quantization, hardware and request concurrency in their
 serving record. The backend and concurrency are part of a run's conditions: compare runs only
 when both match. The vLLM engine leaves what the learner sees and what is counted unchanged,
-because `hf_server` still renders, parses and counts, but it generates in bf16 (including the LoRA
-arithmetic), so its outputs differ slightly from the transformers engine. With request
+because `hf_server` still renders, parses and counts, but it generates with its own GPU kernels and,
+for bf16 models (the Gemma profiles), computes the LoRA in bf16 where PEFT uses float32, so its
+outputs differ slightly from the transformers engine. With request
 concurrency above 1, an output can also depend on which requests share a batch, which adds noise
 to seed-matched comparisons. Timings likewise only compare under the same setup. With `training.trainer: trl_dpo`, untrained checkpoints (cycle
 0, frozen baseline, an initial-policy editor) are served through an all-zero LoRA adapter: outputs
