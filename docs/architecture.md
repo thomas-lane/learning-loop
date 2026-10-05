@@ -127,6 +127,11 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | | `provenance.py` | code, package and hardware identity |
 | | `envfile.py` | `.env` loading |
 | `tasks/` | `instances.py` | split files to content-hashed task instances; split validation |
+| | `spec.py` | task families as Python specs: `Family`, `TaskSpec`, `Solution` (shell + Python model), grader kinds, container profiles |
+| | `generate.py` | (family, difficulty, seed) to a checked spec: the oracle model passes, shortcut models and doing nothing fail |
+| | `render.py` | the only writer of a task directory: pinned image without `RUN`, profile `ENV`, no network, fixed mtimes, hidden key |
+| | `runtime/` | `grade.py` (shared grader) and `probe.py` (environment probe): shipped into task containers, also run on the host |
+| | `family_lint.py` | rejects family modules that use randomness or time other than `GenContext.rng` |
 | `episodes/` | `envs/` | environment sessions: Harbor container, local fixture |
 | | `fingerprint.py` | state fingerprint (runs in the container) |
 | | `backends.py` | run and grade one episode: `HarborDockerBackend`, `LocalFixtureBackend` |

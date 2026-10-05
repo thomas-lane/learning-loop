@@ -42,6 +42,7 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 | Policies (OpenAI-compatible, scripted fixture) | `episodes/policy.py` |
 | Environments, fingerprints, backends | `episodes/envs/`, `episodes/fingerprint.py`, `episodes/backends.py` |
 | Tasks, generators, splits | `tasks/instances.py`, `evaluation/generators/`, `evaluation/splits/` |
+| Task specs, generation checks, rendering, shared grader, probe | `tasks/spec.py`, `tasks/generate.py`, `tasks/render.py`, `tasks/runtime/` |
 | Editor, verification, preferences | `editing/editor.py`, `editing/verify.py`, `editing/preferences.py` |
 | Training, rendering, token counts | `training/`, `editing/token_count.py` |
 | Serving, vLLM engine, lifecycle | `serving/` (`hf_server.py`, `vllm_engine.py`, `equivalence.py`, `tool_parse.py`, `managed.py`, `lifecycle.py`) |
@@ -56,7 +57,8 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 tests/unit/          default suite (`uv run pytest`): no Docker, no model downloads, seconds
   test_core_*        contracts: seeds, config validation, storage, usage arithmetic
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
-  test_tasks_*       generators and split validation
+  test_tasks_*       generators, split validation, task specs: generation checks, rendering, shared grader,
+                     environment probe, family lint (fixture families in tests/fixtures/tasks/)
   test_editor_*      editor view, answer tools, validation, grounding
   test_verify_*      branch specs, costs, acceptance, end-to-end on the local fixture environment
   test_prefs_*       preference construction, exports, buffer
@@ -72,9 +74,11 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_core_envfile  .env loading precedence, template has no values, secrets never synced
   test_docs_generated generated docs are current; every config field and CLI argument is described
   test_docs_server   doc viewer rendering, path safety, and that every doc is in the index and navigation
-tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading)
+tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading; rendered
+                     tasks: shell solutions score what their models predicted, a networked verifier refuses to grade)
 tests/train/         `-m train`: real LoRA DPO on Qwen3-0.6B + serving the adapter
-tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/)
+tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/),
+                     fixture task families (tasks/)
 ```
 
 Name new test files with the area prefix above. A behavior change comes with a test that would

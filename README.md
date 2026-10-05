@@ -21,6 +21,7 @@ on tasks it never trained on? Method and metrics: [docs/experiment.md](docs/expe
 | Component | Status |
 |---|---|
 | Harbor tasks (`log-triage`, `fix-stats`), generators (also `csv-revenue`, `count-errors`), splits, separate-verifier grading | working; checked in Docker |
+| Task specs, generation checks, renderer (`network_mode: none`, fixed env and mtimes), shared grader, environment probe | checked on fixture families in Docker (oracle, shortcuts, no-op, networked verifier refused); no evaluation family uses them yet |
 | Episode loop, replay, branching, acceptance, preference export | working on the local fixture backend and Docker |
 | Orchestration, resume, infra retries, controls, reports, `loop dashboard` | working on two-cycle fixture runs; dashboard also used on a live Runpod run |
 | LoRA DPO (Qwen3-0.6B), publish and reload, serving through the reference HF server | working on MPS and CUDA |
