@@ -81,12 +81,19 @@ def check_disk(path: str | Path = ".", min_free_gb: float = 20.0) -> CheckResult
     return CheckResult("disk", status, f"{data['free_gb']} GB free at {data['path']} (need {min_free_gb})", data)
 
 
-def total_memory_bytes() -> int | None:
+MEMINFO = Path("/proc/meminfo")
+# cgroup v2, then v1: the memory limit of the container this process runs in (e.g. a pod)
+CGROUP_MEMORY_LIMIT_FILES = (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+NO_LIMIT_BYTES = 2**60  # v2 writes "max" for no limit, v1 a page-rounded 2**63-1
+
+
+def machine_memory_bytes() -> int | None:
+    """Physical memory as the kernel reports it; inside a container this is the host's."""
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
             return int(out.stdout.strip())
-        with open("/proc/meminfo") as f:
+        with open(MEMINFO) as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     return int(line.split()[1]) * 1024
@@ -95,13 +102,29 @@ def total_memory_bytes() -> int | None:
     return None
 
 
+def cgroup_memory_limit_bytes() -> int | None:
+    """The lowest cgroup memory limit on this process's cgroup, or None when none is set."""
+    limits = []
+    for p in CGROUP_MEMORY_LIMIT_FILES:
+        try:
+            raw = p.read_text().strip()
+        except OSError:
+            continue
+        if raw.isdigit() and 0 < int(raw) < NO_LIMIT_BYTES:
+            limits.append(int(raw))
+    return min(limits, default=None)
+
+
 def check_memory(min_total_gb: float = 16.0) -> CheckResult:
-    total = total_memory_bytes()
+    """Memory this process can use: physical memory, or the cgroup limit when that is lower."""
+    machine, limit = machine_memory_bytes(), cgroup_memory_limit_bytes()
+    total = min((n for n in (machine, limit) if n is not None), default=None)
     if total is None:
         return CheckResult("memory", "skipped", "total memory not measurable on this platform")
-    data = {"total_gb": _gb(total), "min_total_gb": min_total_gb}
+    data = {"total_gb": _gb(total), "machine_gb": _gb(machine), "cgroup_limit_gb": _gb(limit), "min_total_gb": min_total_gb}
     status: Status = "ok" if total / 2**30 >= min_total_gb else "fail"
-    return CheckResult("memory", status, f"{data['total_gb']} GB total (need {min_total_gb})", data)
+    src = " (cgroup limit)" if total == limit else ""
+    return CheckResult("memory", status, f"{data['total_gb']} GB total{src} (need {min_total_gb})", data)
 
 
 # --------------------------------------------------------------------------- #

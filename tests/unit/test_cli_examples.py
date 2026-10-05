@@ -43,13 +43,13 @@ def test_fixed_dataset_control_requires_a_frozen_export(capsys):
                  "--set", f"training.fixed_dataset={fixture_export}", "--set", "labels.allow_fixture_data='true'"]) == 0
 
 
-def test_incompatible_serving_rejected(tmp_path, capsys):
-    # qwen declares no llama_cpp serving: LoRA serving compatibility must be explicit
+def test_managed_llama_cpp_rejected(tmp_path, capsys):
+    # the run can launch only hf_server (hf_transformers or vllm); llama.cpp is served externally
     m = yaml.safe_load((M / "mac-local.yaml").read_text())
     m["inference"]["backend"] = "llama_cpp"
     (tmp_path / "m.yaml").write_text(yaml.safe_dump(m))
     assert main(["validate", str(E / "smoke-mac.yaml"), "--machines", str(tmp_path / "m.yaml")]) == 2
-    assert "declares no 'llama_cpp'" in capsys.readouterr().err
+    assert "managed inference serves hf_transformers or vllm" in capsys.readouterr().err
 
 
 def test_training_device_outside_the_profile_rejected(capsys):

@@ -17,8 +17,7 @@ Exports are immutable: `preferences.jsonl` and `provenance.jsonl` are written
 atomically, then `manifest.json` (hashes, counts, composition) seals the
 export; files are made read-only; re-exporting identical content returns the
 sealed manifest (safe resume) and different content is refused. Export refuses held-out instances (split != train or listed
-held-out ids), forbidden families, mixed verification modes (unless explicitly
-allowed) and mixed fixture/verified kinds.
+held-out ids), forbidden families and mixed fixture/verified kinds.
 
 History: `bound_history` keeps at most `buffer_capacity` earlier pairs by a
 seeded, task-balanced selection; `select_pairs` mixes current and history pairs
@@ -260,10 +259,9 @@ def check_exportable(
     forbidden_families: Iterable[str] = (),
     heldout_instance_ids: Iterable[str] | None = None,
     train_instance_ids: set[str] | None = None,
-    allow_mixed_modes: bool = False,
 ) -> None:
     """Refuse held-out instances (split != train, or listed held-out ids), forbidden
-    families, instances outside the training panel, mixed modes and mixed kinds."""
+    families, instances outside the training panel and mixed kinds."""
     forbidden = set(forbidden_families)
     heldout = set(heldout_instance_ids or ())
     errs = []
@@ -277,9 +275,6 @@ def check_exportable(
             errs.append(f"{pv.pair_id}: forbidden family {pv.family}")
         if train_instance_ids is not None and pv.instance_id not in train_instance_ids:
             errs.append(f"{pv.pair_id}: instance {pv.instance_id} not in the training panel")
-    modes = {p.provenance.verification_mode for p in pairs}
-    if len(modes) > 1 and not allow_mixed_modes:
-        errs.append(f"mixed verification modes {sorted(modes)} (pass allow_mixed_modes to permit)")
     kinds = {p.provenance.kind for p in pairs}
     if len(kinds) > 1:
         errs.append(f"mixed pair kinds {sorted(kinds)}: fixture data never mixes with verified data")
@@ -345,7 +340,6 @@ def export_dataset(
     forbidden_families: Iterable[str] = (),
     heldout_instance_ids: Iterable[str] | None = None,
     train_instance_ids: set[str] | None = None,
-    allow_mixed_modes: bool = False,
     meta: dict[str, Any] | None = None,
     extra_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -361,7 +355,6 @@ def export_dataset(
         forbidden_families=forbidden_families,
         heldout_instance_ids=heldout_instance_ids,
         train_instance_ids=train_instance_ids,
-        allow_mixed_modes=allow_mixed_modes,
     )
     prefs_text = "".join(p.example.model_dump_json() + "\n" for p in items)
     existing = _existing(out_dir, prefs_text)

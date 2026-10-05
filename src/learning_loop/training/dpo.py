@@ -299,7 +299,7 @@ class TrlDpoTrainer:
             from peft import LoraConfig, get_peft_model
 
             lcfg = LoraConfig(
-                r=cfg.lora.r, lora_alpha=cfg.lora.alpha, lora_dropout=cfg.lora.dropout,
+                r=cfg.lora.r, lora_alpha=cfg.lora.alpha, lora_dropout=0.0,  # TRL's disable_dropout would zero it anyway
                 target_modules=list(lora_targets), exclude_modules=profile.lora_exclude_modules, task_type="CAUSAL_LM",
             )
             model = get_peft_model(base, lcfg)
@@ -471,8 +471,8 @@ class TrlDpoTrainer:
                     "device": dev,
                     "dtype": profile.training_dtype,
                     "precision": precision,
-                    # TRL disable_dropout=True zeroes every nn.Dropout incl. LoRA dropout, so policy and
-                    # precomputed reference see identical forwards; lora.dropout is recorded but inactive.
+                    # TRL disable_dropout=True zeroes every nn.Dropout incl. LoRA dropout (also that of a
+                    # continued adapter), so policy and precomputed reference see identical forwards.
                     "effective_lora_dropout": 0.0,
                     "chat_template_kwargs": profile.chat_template_kwargs,
                     **init,

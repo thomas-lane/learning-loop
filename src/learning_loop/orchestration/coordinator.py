@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from ..core import provenance, seeds
 from ..core.config import (
     ExperimentConfig,
+    InferenceProfile,
     MachineProfile,
     ModelProfile,
     load_experiment,
@@ -167,8 +168,7 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
     notes: list[str] = []
     trains = exp.condition in ("learning", "fixed_dataset") and exp.cycles >= 1
     inf = machine.inference
-    if (inf.mode == "scripted") != bool(exp.learner.scripted_policy):
-        raise PlanError("learner.scripted_policy and scripted inference go together (fixtures only)")
+    check_scripted_learner(exp, machine)
     if exp.condition == "fixed_dataset":
         fd = repo_path(exp.training.fixed_dataset)  # type: ignore[arg-type]
         if not (fd / "preferences.jsonl").exists():
@@ -181,30 +181,12 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
             notes.append(f"fixed dataset {fd} is labeled fixture data")
     if exp.condition == "frozen_baseline" and exp.cycles != 0:
         raise PlanError("frozen_baseline evaluates the initial checkpoint only; set cycles: 0")
-    if exp.verification.mode == "local":
-        # verify.LocalVerifier needs an environment session factory; no backend in this build
-        # exposes one, so the mode would only fail after collection and editing were paid for.
-        raise PlanError("verification.mode=local is not supported by the available environment backends")
-    initial_id = (
-        base_checkpoint(learner).checkpoint_id
-        if exp.learner.initial_checkpoint == "base"
-        else CheckpointRecord.model_validate(read_json(Path(exp.learner.initial_checkpoint) / "checkpoint.json")).checkpoint.checkpoint_id
-    )
-    if inf.mode == "external" and inf.served_checkpoint_id != initial_id:
-        raise PlanError(f"external endpoint declares served_checkpoint_id={inf.served_checkpoint_id!r}; this run needs {initial_id!r}")
+    initial_id = resolve_initial_checkpoint(exp, learner).checkpoint_id
+    uses_model_editor = exp.condition == "learning" and exp.cycles >= 1 and exp.editor.mode != "scripted"
     ed_inf = machine.editor_inference
-    uses_model_editor = exp.condition == "learning" and exp.editor.mode != "scripted"
-    if uses_model_editor and ed_inf is not None and ed_inf.mode == "external":
-        if exp.editor.mode == "current_learner":
-            raise PlanError("editor=current_learner changes every cycle; a fixed external editor endpoint cannot serve it")
-        needed = initial_id if exp.editor.mode == "initial_policy" else (
-            base_checkpoint(editor).checkpoint_id if (exp.editor.checkpoint or "base") == "base"
-            else CheckpointRecord.model_validate(read_json(Path(exp.editor.checkpoint) / "checkpoint.json")).checkpoint.checkpoint_id
-        )
-        if ed_inf.served_checkpoint_id != needed:
-            raise PlanError(f"editor endpoint declares {ed_inf.served_checkpoint_id!r}; the editor is {needed!r}")
-    if uses_model_editor and ed_inf is None and inf.mode == "scripted":
-        raise PlanError("a model editor needs editor_inference when the learner is scripted")
+    if uses_model_editor and exp.editor.mode == "current_learner" and ed_inf is not None and ed_inf.mode == "external":
+        raise PlanError("editor=current_learner changes every cycle; a fixed external editor endpoint cannot serve it")
+    check_endpoints(machine, learner, editor, initial_id, editor_checkpoint_id(exp, editor, initial_id, initial_id) if uses_model_editor else None)
     if trains and inf.mode == "external":
         raise PlanError("learning runs need managed (or scripted) inference: an external endpoint cannot serve new checkpoints")
     if trains and exp.training.trainer == "trl_dpo" and inf.mode == "managed":
@@ -244,6 +226,38 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
     if machine.training.device == "cpu" or machine.training.allow_cpu_fallback:
         notes.append("CPU training explicitly allowed; recorded in checkpoint metadata")
     return notes
+
+
+def check_scripted_learner(exp: ExperimentConfig, machine: MachineProfile) -> None:
+    if (machine.inference.mode == "scripted") != bool(exp.learner.scripted_policy):
+        raise PlanError("learner.scripted_policy and scripted inference go together (fixtures only)")
+
+
+def check_serving_backend(inf: InferenceProfile, model: ModelProfile, role: str) -> None:
+    """A backend the model profile marks `unsupported` is never used for that model."""
+    sb = model.serving.get(inf.backend) if inf.mode != "scripted" else None
+    if sb is not None and sb.status == "unsupported":
+        raise PlanError(f"configs/models/{model.name}.yaml marks serving backend {inf.backend!r} unsupported; the {role} cannot be served with it")
+
+
+def check_endpoints(machine: MachineProfile, learner: ModelProfile, editor: ModelProfile, learner_id: str, editor_id: str | None) -> None:
+    """Serving checks for the checkpoints a command will request (`editor_id` None: no model editor).
+
+    No backend the model profile marks `unsupported` is used, and an external endpoint, which
+    serves one declared checkpoint, must declare the one it is needed for. The editor uses
+    `editor_inference`, or shares the learner's endpoint when that is unset."""
+    inf = machine.inference
+    check_serving_backend(inf, learner, "learner")
+    if inf.mode == "external" and inf.served_checkpoint_id != learner_id:
+        raise PlanError(f"external endpoint declares served_checkpoint_id={inf.served_checkpoint_id!r}; this run needs {learner_id!r}")
+    if editor_id is None:
+        return
+    if machine.editor_inference is None and inf.mode == "scripted":
+        raise PlanError("a model editor needs editor_inference when the learner is scripted")
+    ed_inf = machine.editor_inference or inf
+    check_serving_backend(ed_inf, editor, "editor")
+    if ed_inf.mode == "external" and ed_inf.served_checkpoint_id != editor_id:
+        raise PlanError(f"editor endpoint declares {ed_inf.served_checkpoint_id!r}; the editor is {editor_id!r}")
 
 
 def resolve_tasks(exp: ExperimentConfig, tasks_dir: Path, extra_panels: list[str] | None = None) -> tuple[dict[str, TaskInstance], dict[str, list[str]], dict[str, Split], dict[str, Split], list[str]]:
@@ -303,9 +317,9 @@ def plan_workload(ctx: RunContext) -> Workload:
         if exp.condition == "learning":
             n_collect = len(collection_instances(ctx, c)) * exp.tasks.attempts_per_instance
             rows.append({"cycle": c, "stage": "collect", "count": n_collect})
-            rows.append({"cycle": c, "stage": "edit", "count": f"<={n_collect * exp.editor.proposals_per_source}", "note": "successful sources only"})
-            reps = 1 if exp.verification.mode == "local" else exp.verification.continuations_per_branch
-            rows.append({"cycle": c, "stage": "verify", "count": f"<={n_collect * exp.editor.proposals_per_source * 2 * reps}", "note": f"mode {exp.verification.mode}"})
+            rows.append({"cycle": c, "stage": "edit", "count": f"<={n_collect}", "note": "successful sources only"})
+            reps = exp.verification.continuations_per_branch
+            rows.append({"cycle": c, "stage": "verify", "count": f"<={n_collect * 2 * reps}", "note": f"mode {exp.verification.mode}"})
         rows.append({"cycle": c, "stage": "train", "count": exp.training.optimizer_steps, "note": f"optimizer steps ({exp.training.trainer})"})
     notes = [f"final panels {exp.evaluation.final_panels} run only via `loop evaluate`"] if exp.evaluation.final_panels else []
     return Workload(rows, notes)
@@ -366,7 +380,8 @@ def create_run(exp_path: str | Path, machine_path: str | Path, run_id: str | Non
             "compatibility_notes": notes,
         },
     )
-    record_provenance(run_dir, run_id)
+    with run_lock(run_dir):  # an invocation refused because another coordinator holds the run records nothing
+        record_provenance(run_dir, run_id)
     atomic_write_json(run_dir / "seed_schedule.json", seed_schedule(ctx))
     return ctx
 
@@ -458,13 +473,24 @@ def loop_root(ctx: RunContext) -> int:
 
 
 def initial_checkpoint(ctx: RunContext) -> CheckpointRef:
-    spec = ctx.exp.learner.initial_checkpoint
+    return resolve_initial_checkpoint(ctx.exp, ctx.learner_profile)
+
+
+def resolve_initial_checkpoint(exp: ExperimentConfig, learner: ModelProfile) -> CheckpointRef:
+    """`learner.initial_checkpoint`, refused unless it belongs to the learner's model profile.
+    Reads files only (no side effects)."""
+    spec = exp.learner.initial_checkpoint
+    ref = checkpoint_ref(spec, learner)
+    if ref.model_profile != learner.name:
+        raise PlanError(f"initial checkpoint {spec} was trained for {ref.model_profile}")
+    return ref
+
+
+def checkpoint_ref(spec: str, profile: ModelProfile) -> CheckpointRef:
+    """`base` (the profile's base model) or a published checkpoint directory."""
     if spec == "base":
-        return base_checkpoint(ctx.learner_profile)
-    rec = CheckpointRecord.model_validate(read_json(Path(spec) / "checkpoint.json"))
-    if rec.checkpoint.model_profile != ctx.learner_profile.name:
-        raise PlanError(f"initial checkpoint {spec} was trained for {rec.checkpoint.model_profile}")
-    return rec.checkpoint
+        return base_checkpoint(profile)
+    return CheckpointRecord.model_validate(read_json(Path(spec) / "checkpoint.json")).checkpoint
 
 
 def base_checkpoint(profile: ModelProfile) -> CheckpointRef:
@@ -691,12 +717,18 @@ def editor_checkpoint(ctx: RunContext, learner: CheckpointRef) -> CheckpointRef:
     if mode == "current_learner":
         return learner
     if mode == "external":
-        spec = ctx.exp.editor.checkpoint or "base"
-        if spec == "base":
-            return base_checkpoint(ctx.editor_profile)
-        return CheckpointRecord.model_validate(read_json(Path(spec) / "checkpoint.json")).checkpoint
+        return checkpoint_ref(ctx.exp.editor.checkpoint or "base", ctx.editor_profile)
     # initial_policy (and scripted): the fixed initial instruction-tuned policy, immutable across cycles
     return CheckpointRef.model_validate(read_json(ctx.run_dir / "run.json")["initial_checkpoint"])
+
+
+def editor_checkpoint_id(exp: ExperimentConfig, editor: ModelProfile, learner_id: str, initial_id: str) -> str:
+    """The model editor's checkpoint id before a run exists (as `editor_checkpoint` resolves it)."""
+    if exp.editor.mode == "current_learner":
+        return learner_id
+    if exp.editor.mode == "external":
+        return checkpoint_ref(exp.editor.checkpoint or "base", editor).checkpoint_id
+    return initial_id
 
 
 def build_editor(ctx: RunContext, learner: CheckpointRef):
@@ -750,9 +782,9 @@ async def stage_edit(ctx: RunContext, cycle: int, learner: CheckpointRef, source
     editor = build_editor(ctx, learner) if sources else None
     items = []
     for src_dir, s in sources:
-        for k in range(ctx.exp.editor.proposals_per_source):
-            pid = seeds.stable_id("prop", ctx.run_id, cycle, s.episode_id, editor.editor_id, k)
-            items.append((pid, {"source_episode_id": s.episode_id, "source_dir": ref_path(ctx, src_dir), "instance_id": s.instance_id, "k": k, "editor_id": editor.editor_id}))
+        # One proposal per source. The trailing 0 (the proposal index) keeps proposal ids stable.
+        pid = seeds.stable_id("prop", ctx.run_id, cycle, s.episode_id, editor.editor_id)
+        items.append((pid, {"source_episode_id": s.episode_id, "source_dir": ref_path(ctx, src_dir), "instance_id": s.instance_id, "editor_id": editor.editor_id}))
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
         src_dir = resolve_ref(ctx, item.meta["source_dir"])
@@ -789,7 +821,7 @@ def make_verifier(ctx: RunContext, learner: CheckpointRef, purpose: str = "accep
     if purpose == "audit":
         v = v.model_copy(update={"continuations_per_branch": v.audit.continuations_per_branch})
     sampling = v.sampling or ctx.exp.episode.sampling
-    policy = learner_policy(ctx, learner, sampling) if v.mode == "continuation" else None
+    policy = learner_policy(ctx, learner, sampling)
     return _make(
         mode=v.mode,
         backend=ctx.backend,
@@ -1229,9 +1261,10 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
     exp, raw, machine, learner, editor = load_all(exp_path, machine_path, overrides)
     if machine.inference.mode == "scripted" and not exp.learner.scripted_policy:
         raise PlanError("scripted inference requires learner.scripted_policy")
-    ckpt = base_checkpoint(learner) if checkpoint == "base" else CheckpointRecord.model_validate(read_json(Path(checkpoint) / "checkpoint.json")).checkpoint
+    ckpt = checkpoint_ref(checkpoint, learner)
     if ckpt.model_profile != learner.name:
         raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
+    check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-eval-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
@@ -1262,7 +1295,8 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
             "instances": {k: v.model_dump(mode="json") for k, v in instances.items()},
         },
     )
-    record_provenance(run_dir, run_id)
+    with run_lock(run_dir):
+        record_provenance(run_dir, run_id)
     asyncio.run(_run_evaluation(ctx, ckpt, panels))
     return run_dir
 
@@ -1287,9 +1321,14 @@ def edit_replay(source_run: Path, cycle: int, exp_path: str | Path, machine_path
         raise PlanError("edit-replay needs condition: learning (editing + verification)")
     if learner.name != src.learner_profile.name:
         raise PlanError("edit-replay must use the source run's learner profile")
-    check_compatibility(exp.model_copy(update={"cycles": 0, "condition": "frozen_baseline"}), machine, learner, editor)
     _require(_existing_manifest(src, cycle, "collect"), "collect", cycle)
     src_learner = CheckpointRef.model_validate(read_json(cycle_state_path(src, cycle))["learner_in"])
+    # The learner continues branches as the source cycle's learner; an initial_policy editor is the
+    # source run's initial checkpoint (recorded below as this run's initial checkpoint).
+    check_scripted_learner(exp, machine)
+    src_initial_id = read_json(src.run_dir / "run.json")["initial_checkpoint"]["checkpoint_id"]
+    editor_id = None if exp.editor.mode == "scripted" else editor_checkpoint_id(exp, editor, src_learner.checkpoint_id, src_initial_id)
+    check_endpoints(machine, learner, editor, src_learner.checkpoint_id, editor_id)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-editreplay-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
@@ -1313,7 +1352,8 @@ def edit_replay(source_run: Path, cycle: int, exp_path: str | Path, machine_path
             "instances": {k: v.model_dump(mode="json") for k, v in src.instances.items()},
         },
     )
-    record_provenance(run_dir, run_id)
+    with run_lock(run_dir):
+        record_provenance(run_dir, run_id)
     asyncio.run(_run_edit_replay(ctx, src, cycle, src_learner))
     return run_dir
 
@@ -1341,7 +1381,8 @@ def resume_run(run_dir: Path, machine_path: str | Path | None = None) -> None:
     meta = read_json(run_dir / "run.json")
     kind = meta.get("kind", "learning")
     ctx = open_run(run_dir, machine_path)
-    record_provenance(run_dir, ctx.run_id)
+    with run_lock(run_dir):
+        record_provenance(run_dir, ctx.run_id)
     if kind == "learning":
         asyncio.run(run_all(ctx))
     elif kind == "evaluation":

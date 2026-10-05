@@ -44,8 +44,13 @@ exits 2 before anything starts.
   `editor.scripted_path`.
 - `kind: ssh` hosts need `ssh_alias`, using only `[A-Za-z0-9_.@-]`. `kind: runpod` hosts need
   exactly one of `pod_id` or `pod`.
-- The coordinator cannot be a Runpod pod, because task containers need Docker, which pods lack.
-- `scripted` inference needs `backend: scripted`.
+- `scripted` inference needs `backend: scripted`. `managed` inference needs `backend:
+  hf_transformers` or `vllm`, the two engines this repository's server (`serving/hf_server.py`)
+  runs; another server, such as llama.cpp, is started by you and declared as `mode: external`.
+- A model profile's `name` must equal its file name without `.yaml`, because experiments refer
+  to profiles by file name while checkpoint ids and `checkpoint.json` record the `name`.
+- Each `serving.<key>.backend` in a model profile must equal its key, because machine profiles
+  look up `serving.<inference.backend>`.
 
 **Across files** (checked by `validate` and `run`)
 
@@ -54,29 +59,39 @@ is any `editor.mode` except `scripted`.
 
 - `training.fixed_dataset` must contain `preferences.jsonl`. An export labeled fixture is refused
   for a non-scripted learner unless `labels.allow_fixture_data: 'true'`.
+- `learner.initial_checkpoint` must have been trained for the learner's model profile (its
+  `checkpoint.json` names the profile).
 - `external` inference must declare the initial checkpoint as `served_checkpoint_id`
   (`base:<profile>@<rev12>` for a base model). A training run cannot use it, because it cannot
   serve new checkpoints.
+- A serving backend that the model profile marks `status: unsupported` is refused for the
+  learner and, checked against the editor's model profile, for a model editor.
 - In a training run with `trainer: trl_dpo`, an explicit `training.device` must be one of the
   model profile's `supported_train_devices`, if it lists any. With managed inference, the profile
   must also list `inference.backend` under `serving` with `peft_lora` in `adapter_formats`.
-- In a learning run with a model editor, an `external` `editor_inference` must serve the
-  editor's checkpoint and cannot be used with `editor.mode: current_learner`; a scripted learner
-  needs `editor_inference`.
+- In a learning run with `cycles` ≥ 1 and a model editor, the editor's endpoint
+  (`editor_inference`, or the learner's when that is unset) must, if `external`, declare the
+  editor's checkpoint; an `external` `editor_inference` cannot be used with `editor.mode:
+  current_learner`, whose checkpoint changes every cycle; a scripted learner needs
+  `editor_inference`.
 - Every named panel exists in the split file; `evaluation.final_panels` are `final` or
   `external` panels; every family in `tasks.exposure_schedule` occurs in the collection panel.
   The split file passes the checks in
   [../evaluation/README.md](../evaluation/README.md#generators-and-splits).
 
-`loop run` also checks, when it creates the run, that `learner.initial_checkpoint` was trained
-for the same model profile. `loop evaluate` checks only the per-file rules, the panel rules and
-that `--checkpoint` was trained for the learner's model profile. `loop edit-replay` checks the
-rules as for a `frozen_baseline` experiment, which skips the training-run and model-editor rules;
-it skips the panel rules too, because it reuses the source run's tasks.
+`loop evaluate` checks the per-file rules and, before it creates the run directory, that
+`--checkpoint` was trained for the learner's model profile, the `unsupported` rule for the
+learner, and that an `external` endpoint declares `--checkpoint`; then it checks the panel rules.
+`loop edit-replay` checks the per-file rules, the `unsupported` rule, and that each `external`
+endpoint declares the checkpoint it will serve: the learner's endpoint the source cycle's learner
+(`learner_in` in its `cycle.json`), the editor's endpoint the editor's checkpoint (the source
+run's initial checkpoint for `initial_policy`, the source cycle's learner for `current_learner`,
+`editor.checkpoint` for `external`). It skips the panel rules, because it reuses the source run's
+tasks.
 `resume --machines` on a learning run checks the new profile against all but the panel rules.
 
 **Warnings, not errors.** `validate` prints `note:` lines for fixture components (scripted
-learner or editor, fixture trainer, fixture dataset), serving backends not marked `tested`,
+learner or editor, fixture trainer, fixture dataset), serving backends marked `untested`,
 `editor.mode: current_learner`, allowed CPU training, final panels (run only by `loop evaluate`),
 the Runpod pods the command will start or create, and a missing Runpod API key variable (pod
 commands then fail at start).
@@ -128,7 +143,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `episode.max_output_chars` | int | `8000` | Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded). |
 | `episode.system_prompt` | str | `evaluation/agents/system_prompt.md` | System prompt file; `{workdir}` is filled in. |
 | `editor` | mapping | **required** | Editor condition. |
-| `editor.mode` | `initial_policy` or `current_learner` or `external` or `scripted` | **required** | `initial_policy` (fixed initial checkpoint; default condition), `current_learner` (changes every cycle), `external` (a fixed separate model) or `scripted` (fixture). |
+| `editor.mode` | `initial_policy` or `current_learner` or `external` or `scripted` | **required** | `initial_policy` (the learner's initial checkpoint, fixed for the whole run), `current_learner` (the learner of each cycle, so it changes every cycle), `external` (a fixed separate model) or `scripted` (fixture). |
 | `editor.model_profile` | str or null | null | `external` only: the editor's model profile. |
 | `editor.checkpoint` | str or null | null | `external` only: `base` or a checkpoint directory (default `base`). |
 | `editor.prompt` | str | `prompts/editor/v2.md` | Editor prompt; its SHA-256 is part of the editor identity. |
@@ -137,13 +152,12 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `editor.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
 | `editor.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
 | `editor.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
-| `editor.proposals_per_source` | int (>= 1) | `1` | Proposals per successful source; only 1 is supported (more would need fresh-seed confirmation). |
 | `editor.include_outcome_metrics` | bool | `True` | Show the editor scalar outcomes of the source episode (success, token totals). |
 | `editor.include_later_observations` | bool | `True` | Show the editor observations after each turn (hindsight is still filtered at validation). |
 | `editor.assistant_text_policy` | `reject_nonempty` | `reject_nonempty` | Strict mode: turns with assistant text or reasoning are not editable. |
 | `editor.scripted_path` | str or null | null | `scripted` only: fixture proposals file. |
 | `verification` | mapping | `{'mode': 'continuation', 'continuations_per_branch': 1, 'acceptance_rule': 'strict_all_success_v1', 'min_token_saving': 1.0, 'min_relative_saving': 0.0, 'audit': {'fraction': 0.0, 'continuations_per_branch': 2}}` | Branch verification and acceptance. |
-| `verification.mode` | `continuation` or `local` | `continuation` | `continuation` (fresh learner continuations from both branches). `local` is refused at validation: no backend supports it yet. |
+| `verification.mode` | `continuation` | `continuation` | `continuation`: each branch (original and edited turn) is replayed in a fresh environment and continued by the current learner. |
 | `verification.continuations_per_branch` | int (>= 1) | `1` | Matched continuations per branch; all must succeed on both branches. |
 | `verification.acceptance_rule` | `strict_all_success_v1` | `strict_all_success_v1` | Named acceptance rule (see docs/experiment.md). |
 | `verification.min_token_saving` | float (> 0) | `1.0` | Minimum mean counterfactual token saving (original - edited) to accept; ties never pass. |
@@ -175,10 +189,9 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `training.dpo.warmup_steps` | int | `0` | Learning-rate warmup steps. |
 | `training.dpo.max_grad_norm` | float | `1.0` | Gradient clipping norm. |
 | `training.dpo.gradient_checkpointing` | bool | `False` | Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values. |
-| `training.lora` | mapping | `{'r': 16, 'alpha': 32, 'dropout': 0.05}` | LoRA shape. |
+| `training.lora` | mapping | `{'r': 16, 'alpha': 32}` | LoRA shape. |
 | `training.lora.r` | int | `16` | LoRA rank. |
 | `training.lora.alpha` | int | `32` | LoRA alpha. |
-| `training.lora.dropout` | float | `0.05` | LoRA dropout; TRL disables dropout, so the effective value (recorded) is 0. |
 | `training.lora.target_modules` | list of str or null | null | Module names; default: the model profile's `lora_target_modules`. |
 | `training.optimizer_steps` | int (>= 1) | **required** | Exact optimizer steps per training cycle (the effort matched across conditions). |
 | `training.reference` | `incoming_checkpoint` | `incoming_checkpoint` | DPO reference: the learner frozen at the start of the cycle, including its adapter. |
@@ -198,16 +211,14 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `schema_version` | int | `1` | Schema version of this file. |
 | `name` | str | **required** | Profile name (recorded in run.json). |
 | `coordinator` | mapping | `{'kind': 'local'}` | Where `loop run` executes; an SSH host is used by `loop submit/fetch/remote-status`. |
-| `coordinator.kind` | `local` or `ssh` or `runpod` | `local` | `local`, `ssh` (a fixed host reached by an alias) or `runpod` (a pod the command starts or creates, reaches by its current address, and stops or terminates; see the machine profile's `runpod` block). |
+| `coordinator.kind` | `local` or `ssh` | `local` | `local` (this machine) or `ssh` (a fixed host reached by an alias; `loop submit`, `fetch` and `remote-status` drive a coordinator there). A Runpod pod cannot be the coordinator: task containers need Docker, which pods lack. |
 | `coordinator.ssh_alias` | str or null | null | `ssh` only: host alias from ~/.ssh/config (keys, ports and jump hosts stay there). |
-| `coordinator.pod_id` | str or null | null | `runpod` only: id of an existing pod, started and stopped by each command (never created or terminated). Exclusive with `pod`. |
-| `coordinator.pod` | str or null | null | `runpod` only: name of a spec in `runpod.create`; each command creates a pod from it and terminates it at the end. Exclusive with `pod_id`. |
-| `coordinator.workdir` | str or null | null | Absolute path of the repository checkout on that host. Required for `ssh` and `runpod`. |
+| `coordinator.workdir` | str or null | null | Absolute path of the repository checkout on that host. Required for `ssh`. |
 | `environment_backend` | `harbor_docker` or `local_fixture` | `harbor_docker` | `harbor_docker` (Harbor trials in Docker) or `local_fixture` (host subprocesses; scripted policies and fixture tasks only; not a sandbox). |
 | `docker_concurrency` | int | `1` | Maximum concurrent episodes (containers). |
 | `inference` | mapping | **required** | Learner inference (and the editor's, unless `editor_inference` is set). |
 | `inference.mode` | `managed` or `external` or `scripted` | **required** | `managed` (the run starts/stops its own server per checkpoint), `external` (an existing endpoint serving one declared checkpoint) or `scripted` (fixture policy). |
-| `inference.backend` | `hf_transformers` or `llama_cpp` or `vllm` or `scripted` | **required** | Serving backend; must be declared in the model profile's `serving` for managed LoRA runs. |
+| `inference.backend` | `hf_transformers` or `llama_cpp` or `vllm` or `scripted` | **required** | Serving backend. `managed` runs `hf_transformers` or `vllm` (learning_loop.serving.hf_server); `external` names what serves the endpoint (e.g. `llama_cpp`); `scripted` goes with `mode: scripted`. Must be declared in the model profile's `serving` for managed LoRA runs. |
 | `inference.host` | mapping | `{'kind': 'local'}` | Where a managed server runs. |
 | `inference.host.kind` | `local` or `ssh` or `runpod` | `local` | `local`, `ssh` (a fixed host reached by an alias) or `runpod` (a pod the command starts or creates, reaches by its current address, and stops or terminates; see the machine profile's `runpod` block). |
 | `inference.host.ssh_alias` | str or null | null | `ssh` only: host alias from ~/.ssh/config (keys, ports and jump hosts stay there). |
@@ -220,12 +231,12 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `inference.served_model_name` | str or null | null | External mode: the `model` id to request (e.g. a GGUF name); default: the endpoint's only listed model. |
 | `inference.port` | int or null | null | Managed mode: server port (required). |
 | `inference.device` | `mps` or `cuda` or `cpu` or `auto` | `auto` | Managed mode: accelerator for the server. |
-| `inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. |
+| `inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`). |
 | `inference.request_timeout_sec` | int | `600` | Per-request client timeout; a timeout is an infrastructure failure. |
-| `inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. |
+| `inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
 | `editor_inference` | mapping or null | null | Separate endpoint for the editor; when unset the editor shares the learner's serving slot (servers are swapped sequentially). |
 | `editor_inference.mode` | `managed` or `external` or `scripted` | **required** | `managed` (the run starts/stops its own server per checkpoint), `external` (an existing endpoint serving one declared checkpoint) or `scripted` (fixture policy). |
-| `editor_inference.backend` | `hf_transformers` or `llama_cpp` or `vllm` or `scripted` | **required** | Serving backend; must be declared in the model profile's `serving` for managed LoRA runs. |
+| `editor_inference.backend` | `hf_transformers` or `llama_cpp` or `vllm` or `scripted` | **required** | Serving backend. `managed` runs `hf_transformers` or `vllm` (learning_loop.serving.hf_server); `external` names what serves the endpoint (e.g. `llama_cpp`); `scripted` goes with `mode: scripted`. Must be declared in the model profile's `serving` for managed LoRA runs. |
 | `editor_inference.host` | mapping | `{'kind': 'local'}` | Where a managed server runs. |
 | `editor_inference.host.kind` | `local` or `ssh` or `runpod` | `local` | `local`, `ssh` (a fixed host reached by an alias) or `runpod` (a pod the command starts or creates, reaches by its current address, and stops or terminates; see the machine profile's `runpod` block). |
 | `editor_inference.host.ssh_alias` | str or null | null | `ssh` only: host alias from ~/.ssh/config (keys, ports and jump hosts stay there). |
@@ -238,11 +249,11 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `editor_inference.served_model_name` | str or null | null | External mode: the `model` id to request (e.g. a GGUF name); default: the endpoint's only listed model. |
 | `editor_inference.port` | int or null | null | Managed mode: server port (required). |
 | `editor_inference.device` | `mps` or `cuda` or `cpu` or `auto` | `auto` | Managed mode: accelerator for the server. |
-| `editor_inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. |
+| `editor_inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`). |
 | `editor_inference.request_timeout_sec` | int | `600` | Per-request client timeout; a timeout is an infrastructure failure. |
-| `editor_inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. |
+| `editor_inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
 | `training` | mapping | `{'host': {'kind': 'local', 'ssh_alias': None, 'pod_id': None, 'pod': None, 'workdir': None}, 'device': 'auto', 'allow_cpu_fallback': False}` | Training host and device. |
-| `training.host` | mapping | `{'kind': 'local'}` | `local` (subprocess) or an SSH host (inputs pushed, trainer started detached, checkpoint pulled back). |
+| `training.host` | mapping | `{'kind': 'local'}` | `local` (subprocess), or an `ssh` host or `runpod` pod (inputs pushed, trainer started detached, checkpoint pulled back). |
 | `training.host.kind` | `local` or `ssh` or `runpod` | `local` | `local`, `ssh` (a fixed host reached by an alias) or `runpod` (a pod the command starts or creates, reaches by its current address, and stops or terminates; see the machine profile's `runpod` block). |
 | `training.host.ssh_alias` | str or null | null | `ssh` only: host alias from ~/.ssh/config (keys, ports and jump hosts stay there). |
 | `training.host.pod_id` | str or null | null | `runpod` only: id of an existing pod, started and stopped by each command (never created or terminated). Exclusive with `pod`. |
@@ -253,7 +264,7 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `runpod` | mapping or null | null | Pod lifecycle settings; required when any host has `kind: runpod`. |
 | `runpod.api_key_env` | str | `RUNPOD_API_KEY` | Environment variable holding the Runpod API key on the coordinator (e.g. from .env). Never sent to the pod. |
 | `runpod.api_base` | str | `https://rest.runpod.io/v1` | Runpod REST API base URL. |
-| `runpod.identity_file` | str | `~/.ssh/id_ed25519` | Private key for SSH to the pods (its public key must be in your Runpod account settings). |
+| `runpod.identity_file` | str | `~/.ssh/id_ed25519` | Private key for SSH to the pods. Existing pods (`pod_id`) must already accept its public key (e.g. from your Runpod account settings); created pods are given `<identity_file>.pub` as their authorized key. |
 | `runpod.ssh_user` | str | `root` | SSH user on the pods. |
 | `runpod.start_timeout_sec` | int (>= 60) | `900` | How long to wait for a started or created pod to report its address and accept SSH (a stopped pod may wait for its GPU to become free; creation is retried while no GPU of the listed types is available). |
 | `runpod.stop_when_done` | bool | `True` | Existing pods (`pod_id`): stop every pod this command used when it ends (success, failure or Ctrl-C). Created pods are always terminated. |
@@ -289,8 +300,8 @@ Exact identity of a model and how it is rendered, served and trained. Files: `co
 | `serving.<name>.artifact_revision` | str or null | null | Exact revision of `artifact`. |
 | `serving.<name>.adapter_formats` | list of `peft_lora` or `gguf_lora` | `[]` | Adapter formats this backend can load. Learning runs require `peft_lora` (what the trainer produces). |
 | `serving.<name>.quantization` | str or null | null | Quantization of the served artifact (e.g. `Q8_0`); recorded in run.json. A quantized artifact is not a trainable source. |
-| `serving.<name>.status` | `tested` or `untested` or `unsupported` | `untested` | Whether this backend+model combination has actually been exercised in this repository. `validate` warns when it is not `tested`. |
-| `serving.<name>.launch_args` | list of str | `[]` | Extra engine flags for managed launches (vLLM server flags). |
+| `serving.<name>.status` | `tested` or `untested` or `unsupported` | `untested` | Whether this backend+model combination has been exercised in this repository. `untested` adds a note to `validate` for managed LoRA runs; `unsupported` refuses every command that would serve this model through this backend. |
+| `serving.<name>.launch_args` | list of str | `[]` | `vllm` only: extra flags appended to the vLLM server command line that `hf_server --engine vllm` starts. |
 | `serving.<name>.engine_package` | str or null | null | `vllm` only: pip requirement installed into a separate environment on the serving host (`.engines/`), e.g. `vllm==0.30.0`. |
 | `serving.<name>.notes` | str or null | null | Free text: what was verified and what was not. |
 | `training_dtype` | `float32` or `bfloat16` or `float16` | `float32` | Weight dtype for training and reference log-probs (logits are always computed in float32). |

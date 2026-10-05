@@ -24,11 +24,8 @@ from learning_loop.core.seeds import continuation_seed  # noqa: E402
 from learning_loop.editing.editor import SourceContext  # noqa: E402
 from learning_loop.editing.verify import (  # noqa: E402
     ContinuationVerifier,
-    LocalVerifier,
-    UnsupportedLocalContract,
     branch_replay_specs,
     build_replay_spec,
-    check_local_contract,
     make_verifier,
 )
 from learning_loop.episodes.events import read_events  # noqa: E402
@@ -296,64 +293,6 @@ async def test_coordinator_entry_points(tmp_path):
     v2 = make_verifier(mode="continuation", backend=backend, config=VerificationConfig(), plan_factory=drifting, root_seed=ROOT, scripted=True)
     with pytest.raises(ValueError, match="differs from the source plan"):
         await v2.verify(proposal=prop, source_dir=tmp_path / "item", instance=inst, out_dir=tmp_path / "out2")
-
-
-# --------------------------------------------------------------------------- #
-# Local verification
-# --------------------------------------------------------------------------- #
-
-LOCAL_TURNS = [
-    ("bash", {"command": "ls /app/logs"}, "[exit code 0]\naccess.log\naccess.log.1\naccess.log.2.gz"),
-    ("bash", {"command": "echo        10.0.0.7         > /app/answer.txt"}, "[exit code 0]"),
-]
-
-
-async def test_local_verifier_same_state(tmp_path):
-    initial = await vb.FakeSession().fingerprint(None)  # type: ignore[arg-type]
-    spec = vb.state_spec(local_equivalence="same_state_after_action")
-    summary, path = vb.write_source_episode(tmp_path / "src", turns=LOCAL_TURNS, spec=spec, fingerprints=[initial, initial, "after"])
-    inst = vb.make_instance(tmp_path)
-    src = SourceContext.load(summary, inst, path)
-
-    def prop(cmd):
-        return EditProposal(proposal_id="lp", source_episode_id="src-ep", instance_id=inst.instance_id, editor_id="ed", status="proposed", turn_index=1, tool_call_id="call_1", replacement=ProposedCall(name="bash", arguments={"command": cmd}))
-
-    factory = vb.fake_session_factory()
-    lv = LocalVerifier(factory, {"src-ep": src}, out_root=tmp_path / "lv")
-    rec = await lv.verify(prop("echo 10.0.0.7 > /app/answer.txt"))
-    assert rec.mode == "local" and rec.acceptance_rule == "local_same_state_v1"
-    assert rec.accepted, rec.reasons
-    assert rec.evidence_label == "local_same_state_after_action" and rec.mean_saving > 0
-    assert all(b.cost.continuation_tokens is None for b in rec.branches)
-    assert len(factory.sessions) == 2  # two freshly restored environments
-    assert all(s.executed[0] == {"name": "bash", "command": "ls /app/logs"} for s in factory.sessions)
-
-    rec = await LocalVerifier(vb.fake_session_factory(), {"src-ep": src}, out_root=tmp_path / "lv2").verify(prop("echo 10.0.0.8 > /app/answer.txt"))
-    assert not rec.accepted and "state_differs_after_action" in rec.reasons
-
-    rec = await LocalVerifier(vb.fake_session_factory(fail_on="10.0.0.9"), {"src-ep": src}, out_root=tmp_path / "lv3").verify(prop("echo 10.0.0.9 > /app/answer.txt"))
-    assert not rec.accepted and "action_error:edited" in rec.reasons
-
-
-async def test_local_verifier_replay_mismatch_fails_closed(tmp_path):
-    spec = vb.state_spec(local_equivalence="same_state_after_action")
-    summary, path = vb.write_source_episode(tmp_path / "src", turns=LOCAL_TURNS, spec=spec, fingerprints=["wrong", "wrong", "x"])
-    src = SourceContext.load(summary, vb.make_instance(tmp_path), path)
-    p = EditProposal(proposal_id="lp", source_episode_id="src-ep", instance_id="log-triage/easy/s0", editor_id="ed", status="proposed", turn_index=1, tool_call_id="call_1", replacement=ProposedCall(name="bash", arguments={"command": "echo 10.0.0.7 > /app/answer.txt"}))
-    factory = vb.fake_session_factory()
-    rec = await LocalVerifier(factory, {"src-ep": src}, out_root=tmp_path / "lv").verify(p)
-    assert not rec.accepted and "replay_failed:original:r0" in rec.reasons
-    assert all(s.executed == [] for s in factory.sessions)  # nothing executed after the mismatch
-
-
-def test_unsupported_local_contract_is_a_validation_error():
-    with pytest.raises(UnsupportedLocalContract):
-        check_local_contract(vb.state_spec())
-    with pytest.raises(UnsupportedLocalContract):
-        check_local_contract(vb.state_spec(local_equivalence="exit_code_zero"))
-    assert check_local_contract(vb.state_spec(local_equivalence="same_state_after_action")) == "same_state_after_action"
-    with pytest.raises(UnsupportedLocalContract):
-        make_verifier(mode="local", backend=vb.FakeBackend(outcomes()), config=VerificationConfig(mode="local"), root_seed=0)
 
 
 def test_usage_sum_keeps_missing_missing():

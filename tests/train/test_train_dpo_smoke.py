@@ -70,7 +70,7 @@ def runs(tmp_path_factory):
     tc = TrainingConfig(
         trainer="trl_dpo", optimizer_steps=2,
         dpo={"learning_rate": 5e-4, "max_length": 1024, "beta": 0.1},
-        lora={"r": 8, "alpha": 16, "dropout": 0.0},
+        lora={"r": 8, "alpha": 16},
     ).model_dump()
 
     def req(cycle, incoming, out, seed):

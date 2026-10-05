@@ -46,7 +46,6 @@ class StateSpec(BaseModel):
     observation_normalizers: list[dict[str, str]] = Field(default_factory=list)  # [{pattern, replacement, reason}]
     success_threshold: float = 1.0  # complete success: reward["reward"] >= threshold
     reward_key: str = "reward"
-    local_equivalence: str | None = None  # named local-verification contract, if any
     caveats: list[str] = Field(default_factory=list)  # unmodeled aspects, e.g. "network: public (unmodeled)"
 
 

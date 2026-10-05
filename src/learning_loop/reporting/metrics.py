@@ -269,8 +269,7 @@ def token_units(rows_a: list[EpisodeRow], rows_b: list[EpisodeRow]) -> dict[str,
     """Whether token counts of two row sets are in the same units.
 
     Incomparable when both sides have known model identities that differ, or
-    when their usage sources differ (provider counts vs local recount vs fixture
-    estimate). Unknown identities are reported, not assumed equal."""
+    when their usage sources differ (provider counts vs fixture estimates). Unknown identities are reported, not assumed equal."""
     ids_a = sorted({str(token_identity(r)) for r in rows_a})
     ids_b = sorted({str(token_identity(r)) for r in rows_b})
     src_a = sorted({r.episode.usage.source for r in rows_a if r.episode.usage.total is not None})
@@ -655,19 +654,15 @@ def branch_cost_rows(verifications: list[VerificationRecord]) -> list[dict[str, 
 
 SAVING_UNITS = {
     "continuation": "counterfactual episode tokens (prefix + fixed turn + continuation)",
-    "local": "fixed-turn intervention tokens only (no continuation observed)",
 }
 
 
 def _branch_ok(v: VerificationRecord, b: Any) -> bool | None:
-    """Did this branch do what it had to? Continuation: complete success after a
-    model-finished stop with valid replay. Local: the fixed action executed
-    without error after a valid replay (local branches are not graded)."""
+    """Did this branch do what it had to: complete success after a model-finished
+    stop with valid replay."""
     ep = b.episode
     if not b.replay_ok or ep.stop_category != StopCategory.MODEL:
         return False
-    if v.mode == "local":
-        return bool(ep.extra.get("executed", True)) and not ep.extra.get("tool_error")
     return ep.success
 
 

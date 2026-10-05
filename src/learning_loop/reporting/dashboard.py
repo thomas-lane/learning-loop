@@ -53,7 +53,8 @@ DIFF_ORDER = {"easy": 0, "medium": 1, "hard": 2}
 BRANCH_RE = re.compile(r"^(original|edited)-r\d+$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # run ids and work-item ids
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-LOG_REL = "logs/coordinator.log"
+LOG_REL = "logs/coordinator.log"  # where `loop submit` sends the remote coordinator's console output
+OLD_LOG_REL = "coordinator.log"  # where `loop submit` sent it before; runs fetched then still have it here
 REFRESH_SEC = 10
 MAX_TEXT_BYTES = 2 << 20
 
@@ -327,7 +328,7 @@ def inside(root: Path, p: Path) -> bool:
 @dataclass(frozen=True)
 class RunView:
     """What a run page needs: the resolved run directory, its URL prefix, the console log to tail
-    (None: logs/coordinator.log in the run) and the created-pod ledger."""
+    (None: logs/coordinator.log in the run, else coordinator.log) and the created-pod ledger."""
 
     dir: Path
     base: str
@@ -428,8 +429,7 @@ def load_state(v: RunView) -> dict[str, Any]:
             if s == "edit":
                 col = cy["st"].get("collect")
                 if col and col["status"] == "done":
-                    plan = sum(1 for i in col["items"] if i.get("status") == "done" and g(i, "meta", "success") is True) * (
-                        _int(g(exp, "editor", "proposals_per_source")) or 1)
+                    plan = sum(1 for i in col["items"] if i.get("status") == "done" and g(i, "meta", "success") is True)
             if s == "verify":
                 ed = cy["st"].get("edit")
                 if ed and ed["status"] == "done":
@@ -905,7 +905,7 @@ def sec_pods(S: dict[str, Any]) -> str:
 
 def sec_log(S: dict[str, Any]) -> str:
     v: RunView = S["v"]
-    p = v.log or v.dir / LOG_REL
+    p = v.log or next((v.dir / r for r in (LOG_REL, OLD_LOG_REL) if (v.dir / r).exists()), v.dir / LOG_REL)
     if v.log is None and not p.exists():
         return (f"<h2>Coordinator log</h2><p class='muted'>no <code>{LOG_REL}</code> in this run. <code>loop run</code> prints its "
                 "progress to the console; start the dashboard with <code>--log FILE</code> to tail a file you saved it to.</p>")

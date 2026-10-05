@@ -8,11 +8,10 @@ model turn, tool_call/tool_result, fingerprints before each model turn).
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from learning_loop.core.interfaces import EnvCapabilities, EpisodePlan, EpisodeResult, StateSpec
+from learning_loop.core.interfaces import EpisodePlan, EpisodeResult, StateSpec
 from learning_loop.core.records import (
     EpisodeBudgets,
     EpisodeRole,
@@ -285,52 +284,3 @@ class FakeBackend:
             if rec is not None:
                 summary.extra["intervention_tool"] = rec
         return EpisodeResult(summary=summary, out_dir=out_dir, replay_ok=replay_ok, replay_mismatches=[] if replay_ok else ["observation:turn0:call0"])
-
-
-# --------------------------------------------------------------------------- #
-# Fake local session (for LocalVerifier)
-# --------------------------------------------------------------------------- #
-
-
-class FakeSession:
-    """Tiny deterministic 'filesystem' env: bash `echo X > F` writes; anything else is read-only."""
-
-    def __init__(self, fail_on: str | None = None):
-        self.files: dict[str, str] = {"/app/logs/access.log": "..."}
-        self.capabilities = EnvCapabilities(restore=RestoreCapability.DETERMINISTIC_REPLAY, fingerprint=True)
-        self.fail_on = fail_on
-        self.executed: list[dict[str, Any]] = []
-
-    async def execute(self, call_id: str, name: str, arguments: dict[str, Any], raw_arguments: str | None) -> ToolExecution:
-        self.executed.append({"name": name, **arguments})
-        obs = "[exit code 0]"
-        err = None
-        if name == "write_file":
-            self.files[arguments["path"]] = arguments["content"]
-            obs = f"Wrote {len(arguments['content'])} characters to {arguments['path']}"
-        elif name == "bash":
-            cmd = arguments["command"]
-            if self.fail_on and self.fail_on in cmd:
-                err, obs = "boom", "[error] boom"
-            elif ">" in cmd and cmd.startswith("echo"):
-                text, path = cmd[5:].split(">", 1)
-                self.files[path.strip()] = text.strip() + "\n"
-            elif cmd.startswith("ls"):
-                obs = "[exit code 0]\naccess.log\naccess.log.1\naccess.log.2.gz"
-        return ToolExecution(call_id=call_id, name=name, requested_arguments_raw=raw_arguments, executed_arguments=arguments, executed=True, raw_output=obs, observation=obs, error=err)
-
-    async def fingerprint(self, spec: StateSpec) -> str:
-        return "fs:" + json.dumps(self.files, sort_keys=True)
-
-
-def fake_session_factory(**kw: Any):
-    sessions: list[FakeSession] = []
-
-    @asynccontextmanager
-    async def factory(instance: TaskInstance):
-        s = FakeSession(**kw)
-        sessions.append(s)
-        yield s
-
-    factory.sessions = sessions  # type: ignore[attr-defined]
-    return factory

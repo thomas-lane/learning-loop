@@ -29,7 +29,6 @@ editor:
   mode: initial_policy            # the fixed initial instruction-tuned policy
   prompt: prompts/editor/v2.md
   sampling: {temperature: 0.0, max_output_tokens: 2048}
-  proposals_per_source: 1
 verification:
   mode: continuation
   continuations_per_branch: 1
@@ -41,7 +40,7 @@ training:
   optimizer_steps: 40
   dpo: {beta: 0.1, learning_rate: 5.0e-6, per_device_batch_size: 1, gradient_accumulation_steps: 4, max_length: 32768,
         gradient_checkpointing: true}
-  lora: {r: 16, alpha: 32, dropout: 0.0}
+  lora: {r: 16, alpha: 32}
   data: {selection: current_and_history, buffer_capacity: 256, history_fraction: 0.5, task_balanced: true}
 runtime:
   infra_retries: 2

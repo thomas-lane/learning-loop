@@ -1,7 +1,7 @@
 """Branch verification of edit proposals and the acceptance rule.
 
-Continuation verification (default)
------------------------------------
+Continuation verification
+-------------------------
 From the SAME source events two ReplaySpecs are built that differ only in the
 fixed intervention message (original vs edited). Each runs as a fresh BRANCH
 episode through an `EpisodeBackend`: clean reset, deterministic replay of turns
@@ -31,39 +31,24 @@ budget/safety/infra/replay/model-error); every cost present; mean saving
 original. Anything else is rejected with every failed criterion listed. With a
 single repetition an accepted record is labeled "one observed successful
 preference", not proof of reliable improvement.
-
-Local verification (`LocalVerifier`)
------------------------------------
-Only for tasks whose StateSpec names a supported `local_equivalence` contract.
-Implemented: `same_state_after_action` - from two freshly restored states, the
-declared-state fingerprint after the edited action equals the fingerprint after
-the original action, both actions execute without tool errors, the source
-episode succeeded, and the edited rendered turn is shorter. No continuation is
-run, so these records are labeled mode=local, their costs cover only the
-fixed turn (mean_cost_* = rendered intervention tokens; continuation None),
-and they must not be mixed with continuation-verified pairs.
 """
 
 from __future__ import annotations
 
 import json
 import math
-import re
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .editor import SourceContext, make_edited_message, parse_call_arguments, tool_calls_of
+from .editor import SourceContext, make_edited_message
 from ..episodes.events import first_request_messages, load_turns
 from ..core.interfaces import (
-    EnvironmentSession,
     EpisodeBackend,
     EpisodePlan,
     EpisodeResult,
     ReplaySpec,
     ReplayTurn,
-    StateSpec,
 )
 from ..episodes.episode import source_image_identity
 from ..core.records import (
@@ -71,7 +56,6 @@ from ..core.records import (
     BranchResult,
     EditProposal,
     EpisodeRole,
-    EpisodeSummary,
     Event,
     Message,
     RestoreCapability,
@@ -88,8 +72,6 @@ from ..core.seeds import continuation_seed, stable_id
 from ..core.storage import atomic_write_json, read_json
 
 ACCEPTANCE_RULE = "strict_all_success_v1"
-LOCAL_ACCEPTANCE_RULE = "local_same_state_v1"
-LOCAL_CONTRACTS = ("same_state_after_action",)
 
 InterventionCounter = Callable[[list[Message], Message, list[ToolSchema]], tuple[int | None, str]]
 
@@ -98,22 +80,6 @@ def fixture_intervention_counter(prompt: list[Message], message: Message, tools:
     """Clearly-labeled estimate for scripted fixtures: ceil(chars/4) of the turn JSON."""
     text = json.dumps({k: message.get(k) for k in ("content", "tool_calls")}, ensure_ascii=False, sort_keys=True)
     return math.ceil(len(text) / 4), "fixture_estimate"
-
-
-class UnsupportedLocalContract(ValueError):
-    pass
-
-
-def check_local_contract(state_spec: StateSpec) -> str:
-    """Validation for verification.mode=local: the task must name a supported contract."""
-    c = state_spec.local_equivalence
-    if c is None:
-        raise UnsupportedLocalContract("task declares no local_equivalence contract; local verification unsupported")
-    if c not in LOCAL_CONTRACTS:
-        raise UnsupportedLocalContract(f"unsupported local_equivalence contract {c!r} (supported: {', '.join(LOCAL_CONTRACTS)})")
-    if not state_spec.fingerprint_paths:
-        raise UnsupportedLocalContract(f"{c} needs declared fingerprint_paths")
-    return c
 
 
 # --------------------------------------------------------------------------- #
@@ -353,45 +319,7 @@ def _preserve(path: Path) -> None:
     path.rename(path.with_name(f"{path.name}.interrupted-{n}"))
 
 
-class _VerifierBase:
-    mode: str
-    sources: Sources | None
-    out_root: Path | None
-
-    def _resolve(
-        self,
-        proposal: EditProposal,
-        purpose: str,
-        round_index: int,
-        repetitions: int,
-        verification_id: str | None,
-        source_dir: str | Path | None,
-        instance: TaskInstance | None,
-        out_dir: str | Path | None,
-    ) -> tuple[SourceContext, str, Path]:
-        if proposal.status != "proposed":
-            raise ValueError(f"only valid proposals are verified (status={proposal.status})")
-        if source_dir is not None:
-            if instance is None:
-                raise ValueError("source_dir needs the task instance")
-            src = SourceContext.from_dir(source_dir, instance)
-        elif self.sources is not None:
-            src = self.sources(proposal.source_episode_id) if callable(self.sources) else self.sources[proposal.source_episode_id]
-        else:
-            raise ValueError("no source: pass source_dir+instance or construct the verifier with sources")
-        if src.summary.episode_id != proposal.source_episode_id:
-            raise ValueError("source episode does not match the proposal")
-        vid = verification_id or stable_id("verif", proposal.proposal_id, purpose, round_index, self.mode, repetitions)
-        if out_dir is not None:
-            vdir = Path(out_dir)
-        elif self.out_root is not None:
-            vdir = self.out_root / purpose / vid
-        else:
-            raise ValueError("no output location: pass out_dir or construct the verifier with out_root")
-        return src, vid, vdir
-
-
-class ContinuationVerifier(_VerifierBase):
+class ContinuationVerifier:
     """Verifies proposals by fresh original/edited continuations (see module doc)."""
 
     mode = "continuation"
@@ -430,6 +358,38 @@ class ContinuationVerifier(_VerifierBase):
         self.sampling = sampling
         self.plan_factory = plan_factory
         self.acceptance_rule = acceptance_rule
+
+    def _resolve(
+        self,
+        proposal: EditProposal,
+        purpose: str,
+        round_index: int,
+        repetitions: int,
+        verification_id: str | None,
+        source_dir: str | Path | None,
+        instance: TaskInstance | None,
+        out_dir: str | Path | None,
+    ) -> tuple[SourceContext, str, Path]:
+        if proposal.status != "proposed":
+            raise ValueError(f"only valid proposals are verified (status={proposal.status})")
+        if source_dir is not None:
+            if instance is None:
+                raise ValueError("source_dir needs the task instance")
+            src = SourceContext.from_dir(source_dir, instance)
+        elif self.sources is not None:
+            src = self.sources(proposal.source_episode_id) if callable(self.sources) else self.sources[proposal.source_episode_id]
+        else:
+            raise ValueError("no source: pass source_dir+instance or construct the verifier with sources")
+        if src.summary.episode_id != proposal.source_episode_id:
+            raise ValueError("source episode does not match the proposal")
+        vid = verification_id or stable_id("verif", proposal.proposal_id, purpose, round_index, self.mode, repetitions)
+        if out_dir is not None:
+            vdir = Path(out_dir)
+        elif self.out_root is not None:
+            vdir = self.out_root / purpose / vid
+        else:
+            raise ValueError("no output location: pass out_dir or construct the verifier with out_root")
+        return src, vid, vdir
 
     def _precheck(self, proposal: EditProposal, src: SourceContext) -> list[str]:
         reasons = []
@@ -529,183 +489,6 @@ class ContinuationVerifier(_VerifierBase):
 
 
 # --------------------------------------------------------------------------- #
-# Local verifier
-# --------------------------------------------------------------------------- #
-
-SessionFactory = Callable[[TaskInstance], AbstractAsyncContextManager[EnvironmentSession]]
-
-
-def apply_normalizers(text: str, normalizers: list[dict[str, str]]) -> tuple[str, list[str]]:
-    """Apply only task-declared normalizers; returns (text, reasons of those that matched)."""
-    applied = []
-    for n in normalizers:
-        new = re.sub(n["pattern"], n.get("replacement", ""), text)
-        if new != text:
-            applied.append(n.get("reason") or n["pattern"])
-        text = new
-    return text, applied
-
-
-async def replay_prefix(session: EnvironmentSession, spec: ReplaySpec, state_spec: StateSpec) -> tuple[list[str], list[str]]:
-    """Re-execute prefix turns in a fresh session; returns (mismatches, normalizers applied)."""
-    mismatches: list[str] = []
-    applied: list[str] = []
-    for turn in spec.prefix_turns:
-        if turn.expected_fingerprint_before is not None:
-            fp = await session.fingerprint(state_spec)
-            if fp != turn.expected_fingerprint_before:
-                mismatches.append(f"fingerprint_before_turn:{turn.turn_index}")
-                return mismatches, applied
-        calls = tool_calls_of(turn.assistant_message)
-        for i, call in enumerate(calls):
-            args = turn.executed_arguments[i] if i < len(turn.executed_arguments) else None
-            if args is None:
-                continue  # not executed in the source either (visible error observation)
-            name = (call.get("function") or {}).get("name", "")
-            te = await session.execute(call.get("id", ""), name, args, (call.get("function") or {}).get("arguments"))
-            got, a1 = apply_normalizers(te.observation, state_spec.observation_normalizers)
-            exp, a2 = apply_normalizers(turn.expected_observations[i], state_spec.observation_normalizers)
-            applied += a1 + a2
-            if got != exp:
-                mismatches.append(f"observation:turn{turn.turn_index}:call{i}")
-                return mismatches, applied
-    if spec.expected_fingerprint_before_intervention is not None:
-        fp = await session.fingerprint(state_spec)
-        if fp != spec.expected_fingerprint_before_intervention:
-            mismatches.append(f"fingerprint_before_turn:{spec.intervention_turn}")
-    return mismatches, sorted(set(applied))
-
-
-class LocalVerifier(_VerifierBase):
-    """Cheaper verification for tasks with an explicit local equivalence contract."""
-
-    mode = "local"
-
-    def __init__(
-        self,
-        session_factory: SessionFactory,
-        sources: Sources | None = None,
-        *,
-        out_root: str | Path | None = None,
-        min_token_saving: float = 1.0,
-        intervention_counter: InterventionCounter = fixture_intervention_counter,
-    ):
-        if min_token_saving <= 0:
-            raise ValueError("min_token_saving must be > 0")
-        self.session_factory = session_factory
-        self.sources = sources
-        self.out_root = Path(out_root) if out_root is not None else None
-        self.min_token_saving = min_token_saving
-        self.counter = intervention_counter
-
-    async def _run_branch(self, src: SourceContext, spec: ReplaySpec, label: str, vid: str) -> tuple[BranchResult, dict[str, Any]]:
-        state_spec = src.plan.state_spec
-        call = tool_calls_of(spec.intervention_message)[0]
-        fn = call.get("function") or {}
-        args = parse_call_arguments(call) or {}
-        detail: dict[str, Any] = {}
-        async with self.session_factory(src.instance) as session:
-            mismatches, applied = await replay_prefix(session, spec, state_spec)
-            detail["normalizers_applied"] = applied
-            te = None
-            fp_after = None
-            if not mismatches:
-                te = await session.execute(call.get("id", ""), fn.get("name", ""), args, fn.get("arguments"))
-                fp_after = await session.fingerprint(state_spec)
-        detail.update(fingerprint_after=fp_after, tool_error=(te.error if te else None), executed=(te.executed if te else False))
-        episode = EpisodeSummary(
-            episode_id=stable_id("local", vid, label),
-            role=EpisodeRole.BRANCH,
-            instance_id=src.instance.instance_id,
-            checkpoint_id=src.summary.checkpoint_id,
-            stop_reason="replay:" + ";".join(mismatches) if mismatches else "local:action_executed",
-            stop_category=StopCategory.REPLAY if mismatches else StopCategory.MODEL,
-            usage=Usage(input_tokens=0, output_tokens=0, source="none"),  # no model calls in local mode
-            n_requests=0,
-            n_tool_calls=sum(len(t.expected_observations) for t in spec.prefix_turns) + (1 if te else 0),
-            extra={"verification_mode": "local", **detail, "observation": te.observation if te else None},
-        )
-        n, source = self.counter(spec.history_prefix, spec.intervention_message, src.plan.tools)
-        cost = BranchCost(
-            shared_prefix_tokens=spec.prefix_usage.total,
-            intervention_request_input_tokens=spec.intervention_request_input_tokens,
-            intervention_tokens=n,
-            intervention_tokens_source=source,
-            continuation_tokens=None,  # not observed in local mode
-        )
-        br = BranchResult(branch=label, repetition=0, continuation_seed=0, episode=episode, replay_ok=not mismatches, replay_mismatches=mismatches, cost=cost)  # type: ignore[arg-type]
-        return br, detail
-
-    async def verify(
-        self,
-        proposal: EditProposal,
-        purpose: str = "acceptance",
-        *,
-        verification_id: str | None = None,
-        source_dir: str | Path | None = None,
-        instance: TaskInstance | None = None,
-        out_dir: str | Path | None = None,
-        round_index: int = 0,
-    ) -> VerificationRecord:
-        src, vid, vdir = self._resolve(proposal, purpose, round_index, 1, verification_id, source_dir, instance, out_dir)
-        check_local_contract(src.plan.state_spec)
-        rec_path = vdir / "verification.json"
-        if rec_path.exists():
-            return VerificationRecord.model_validate(read_json(rec_path))
-        specs = branch_replay_specs(proposal, src)
-        branches, details = [], {}
-        for label in ("original", "edited"):
-            br, det = await self._run_branch(src, specs[label], label, vid)
-            branches.append(br)
-            details[label] = det
-        reasons: list[str] = []
-        if src.summary.success is not True:
-            reasons.append("source_not_successful")
-        for b in branches:
-            if not b.replay_ok:
-                reasons.append(f"replay_failed:{b.branch}:r0")
-            d = details[b.branch]
-            if not d["executed"] or d["tool_error"]:
-                reasons.append(f"action_error:{b.branch}")
-        fo, fe = details["original"]["fingerprint_after"], details["edited"]["fingerprint_after"]
-        if fo is None or fe is None:
-            reasons.append("missing_fingerprint_after")
-        elif fo != fe:
-            reasons.append("state_differs_after_action")
-        to = branches[0].cost.intervention_tokens
-        tn = branches[1].cost.intervention_tokens
-        saving = None
-        if to is None or tn is None:
-            reasons.append("missing_cost")
-        else:
-            saving = float(to - tn)
-            if saving == 0:
-                reasons.append("tie")
-            elif saving < 0:
-                reasons.append(f"no_saving:{saving:g}")
-            elif saving < self.min_token_saving:
-                reasons.append(f"saving_below_min:{saving:g}<{self.min_token_saving:g}")
-        accepted = not reasons
-        rec = VerificationRecord(
-            verification_id=vid,
-            proposal_id=proposal.proposal_id,
-            mode="local",
-            acceptance_rule=LOCAL_ACCEPTANCE_RULE,
-            branches=branches,
-            accepted=accepted,
-            reasons=reasons or ["accepted"],
-            mean_cost_original=float(to) if to is not None else None,
-            mean_cost_edited=float(tn) if tn is not None else None,
-            mean_saving=saving,
-            operational_usage=Usage(input_tokens=0, output_tokens=0, source="none"),
-            purpose=purpose,  # type: ignore[arg-type]
-            evidence_label="local_same_state_after_action" if accepted else None,
-        )
-        atomic_write_json(rec_path, rec)
-        return rec
-
-
-# --------------------------------------------------------------------------- #
 # Factory (coordinator entry point)
 # --------------------------------------------------------------------------- #
 
@@ -720,9 +503,8 @@ def make_verifier(
     plan_factory: PlanFactory | None = None,
     root_seed: int,
     scripted: bool = False,
-    session_factory: SessionFactory | None = None,
     intervention_counter: InterventionCounter | None = None,
-) -> ContinuationVerifier | LocalVerifier:
+) -> ContinuationVerifier:
     """Build the configured verifier from a `config.VerificationConfig`.
 
     Intervention lengths use the learner tokenizer/template
@@ -746,9 +528,4 @@ def make_verifier(
             plan_factory=plan_factory,
             acceptance_rule=config.acceptance_rule,
         )
-    if mode == "local":
-        factory = session_factory or getattr(backend, "session_factory", None)
-        if factory is None:
-            raise UnsupportedLocalContract(f"backend {getattr(backend, 'name', backend)!r} provides no session_factory for local verification")
-        return LocalVerifier(factory, min_token_saving=config.min_token_saving, intervention_counter=intervention_counter)
     raise ValueError(f"unknown verification mode {mode!r}")

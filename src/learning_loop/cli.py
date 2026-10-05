@@ -100,8 +100,10 @@ def cmd_compare(a: argparse.Namespace) -> int:
     if len(a.run_a) == 1 and len(a.run_b) == 1:
         print(compare_runs(Path(a.run_a[0]), Path(a.run_b[0]), out_dir=out_dir, panel=a.panel))
     else:
-        # several independent loop seeds per condition: per-seed paired effects, then spread
-        res = compare_conditions([Path(p) for p in a.run_a], [Path(p) for p in a.run_b], out_dir=out_dir, panel=a.panel)
+        # several independent loop seeds per condition (or one baseline run against several
+        # seeds): per-seed paired effects (--vs minus positional), then spread
+        res = compare_conditions([Path(p) for p in a.run_a], [Path(p) for p in a.run_b], out_dir=out_dir, panel=a.panel,
+                                 label_a="baseline", label_b="experiment")
         print(res["markdown"])
     return 0
 
@@ -115,6 +117,7 @@ def cmd_stage(a: argparse.Namespace) -> int:
         from .core.storage import run_lock
 
         with run_lock(ctx.run_dir), ctx.pods():
+            co.record_provenance(ctx.run_dir, ctx.run_id)
             try:
                 await co.run_single_stage(ctx, a.cycle, a.stage)
             finally:
@@ -240,7 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
     # --- experiments -------------------------------------------------------- #
     s = _cmd(sub, "validate", cmd_validate, "Resolve configs and print the planned workload",
              "Loads the experiment (with `base:` and --set), the machine profile and the model profiles, checks\n"
-             "compatibility (serving/adapter formats, external endpoint identities, panels and splits), materializes\n"
+             "compatibility (serving/adapter formats, external endpoint identities, panels and splits, that the\n"
+             "initial checkpoint was trained for the learner's model profile), materializes\n"
              "task instances in a temporary directory, and prints panels and the per-cycle workload.\n"
              "Side effects: none (no run directory, no model, no Docker).")
     s.add_argument("experiment", help="experiment YAML (experiments/*.yaml)")
@@ -269,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = _cmd(sub, "stage", cmd_stage, "Run one stage of one cycle inside an existing run",
              "Runs eval, collect, edit, verify, dataset or train for one cycle using the earlier stages' outputs\n"
              "on disk and the same manifests as the full loop, so a later `resume` skips what was done here.\n"
-             "Does not update cycle.json. Holds the run lock.")
+             "Does not update cycle.json. Holds the run lock. Appends this invocation to invocations.jsonl.")
     s.add_argument("run_dir", help="runs/<run-id>")
     s.add_argument("--cycle", type=int, required=True, help="cycle number (0-based)")
     s.add_argument("--stage", required=True, choices=["eval", "collect", "edit", "verify", "dataset", "train"], help="stage to run")
@@ -315,8 +319,10 @@ def build_parser() -> argparse.ArgumentParser:
              "Two runs (`loop compare A B`): episodes paired by panel/instance/attempt/seed; full success\n"
              "transition counts; token deltas only where both succeed, with coverage; tokens withheld when model\n"
              "identities or usage sources differ. Several runs per side (`loop compare A1 A2 --vs B1 B2`): runs\n"
-             "matched by loop seed, per-seed paired effects first, then spread across seeds. Prints markdown;\n"
-             "never writes into the compared runs.")
+             "matched by loop seed, per-seed paired effects first, then spread across seeds; a single run on either\n"
+             "side (e.g. one frozen baseline: `loop compare BASE --vs L1 L2 L3`) is compared with every run of the\n"
+             "other. Every effect is the --vs (experiment) side minus the positional (baseline) side. Prints\n"
+             "markdown; never writes into the compared runs.")
     s.add_argument("run_a", nargs="+", help="baseline run(s); with exactly two runs and no --vs, the second is the experiment")
     s.add_argument("--vs", dest="run_b", nargs="+", required=False, help="experiment run(s)")
     s.add_argument("--panel", help="restrict to one panel")
@@ -334,7 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("run_dir", nargs="?", help="runs/<run-id> to show (default: an index of the runs under --runs-dir)")
     s.add_argument("--runs-dir", default="runs", help="directory whose runs the index lists (relative to the repository root)")
     s.add_argument("--log", help="file to tail as the coordinator log, e.g. saved `loop run` console output (default: the "
-                   "run's logs/coordinator.log if present); needs RUN_DIR")
+                   "run's logs/coordinator.log, else its coordinator.log, where older `loop submit` runs wrote it); "
+                   "needs RUN_DIR")
     s.add_argument("--port", type=int, default=8090, help="port to listen on (0 picks a free port)")
     s.add_argument("--host", default="127.0.0.1", help="address to bind; anything but loopback exposes run outputs and "
                    "transcripts to the network")
@@ -459,6 +466,7 @@ def cmd_docs(a: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     from pydantic import ValidationError
 
+    from .core.storage import RunLockedError
     from .hosts.pods import RunpodError
     from .orchestration.coordinator import PlanError
 
@@ -468,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)
-    except (PlanError, ValidationError, FileNotFoundError, FileExistsError, ValueError, RunpodError) as e:
+    except (PlanError, ValidationError, FileNotFoundError, FileExistsError, ValueError, RunpodError, RunLockedError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 

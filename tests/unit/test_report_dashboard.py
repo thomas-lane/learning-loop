@@ -219,6 +219,18 @@ def test_coordinator_log_from_run_or_override(runs, tmp_path):
     assert "cycle 2: evaluating c001" in doc and "cycle 1: &lt;collecting&gt;" not in doc
 
 
+def test_coordinator_log_falls_back_to_the_old_submit_location(runs):
+    """Runs fetched before `loop submit` wrote logs/coordinator.log have it at the run root."""
+    rd = runs / "fx"
+    (rd / "coordinator.log").write_text("cycle 0: old location\n")
+    _, doc = get(board(runs), "/run/fx/")
+    assert "cycle 0: old location" in doc
+    (rd / "logs").mkdir(exist_ok=True)
+    (rd / "logs" / "coordinator.log").write_text("cycle 0: new location\n")
+    _, doc = get(board(runs), "/run/fx/")
+    assert "cycle 0: new location" in doc and "old location" not in doc
+
+
 # --------------------------------------------------------------------------- #
 # Path safety and read-only behaviour
 # --------------------------------------------------------------------------- #

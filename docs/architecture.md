@@ -134,7 +134,7 @@ pyproject.toml, uv.lock       package, `loop` entry point, pinned dependencies (
 | | `episode.py` | the agent loop, budgets, stop reasons, replay + intervention |
 | | `events.py` | `events.jsonl` writer and per-turn view (`load_turns`) |
 | `editing/` | `editor.py` | editor input, answer tools (`replace_with_<tool>`, `abstain`), LLM and scripted editors, proposal validation |
-| | `verify.py` | branch replay, branch costs, acceptance rules, audits |
+| | `verify.py` | branch replay, branch costs, the acceptance rule, audits |
 | | `preferences.py` | preference pairs, exports, history buffer |
 | | `token_count.py` | learner-tokenizer length of a fixed turn |
 | `training/` | | rendering (`render.py`), model and adapter loading and log-probs (`modeling.py`), TRL DPO (`dpo.py`), fixture trainer (`fixture.py`), publication (`common.py`), trainer CLI (`run.py`) |
@@ -256,7 +256,7 @@ How the containers are separated is in
 | Trained checkpoint | `cNNN-<hash12>` over run, cycle, dataset hash, incoming checkpoint, training config, seed, trainer |
 | Editor | hash of mode, checkpoint, prompt SHA-256, decoding settings |
 | Episode (`ep-`) | hash of run, stage, cycle, checkpoint, instance, attempt (and panel, for eval) |
-| Proposal (`prop-`) | hash of run, cycle, source episode, editor, proposal index |
+| Proposal (`prop-`) | hash of run, cycle, source episode and editor (the editor makes one proposal per source) |
 | Verification (`ver-`) | hash of proposal and purpose (`acceptance` or `audit`) |
 
 The hashes are SHA-256 over the listed parts (`core/seeds.py`), so re-running a stage computes
@@ -275,5 +275,5 @@ checkpoint is evaluated on the same seeds.
 | An environment type | an `EnvironmentSession` and an `EpisodeBackend` (`core/interfaces.py`) | set the session's `capabilities.restore` to `deterministic_replay` only if a fresh session plus the replayed prefix reproduces the state; branch episodes stop before the intervention on any other value |
 | A trainer | the `Trainer` interface (`core/interfaces.py`), a `training.trainer` value and its dispatch in `training/run.py` | continue the incoming adapter, use it as the DPO reference and publish through `training/common.py` (the coordinator checks parent and reference); add `-m train` tests |
 | A serving backend | a `serving` entry in the model profile + its launch command in `serving/lifecycle.py`, or a generation engine behind `hf_server` | declare `adapter_formats`; learning runs require `peft_lora`, the format the trainer writes. An engine behind `hf_server` keeps rendering, parsing and token counting unchanged, so it only needs an equivalence check like `serving/equivalence.py` that its generations match |
-| An editor condition | a new `editor.mode` + its checkpoint choice in `editor_checkpoint` (`orchestration/coordinator.py`) | the mode is part of the editor identity, so its proposals get their own IDs |
+| An editor condition | a new `editor.mode` + its checkpoint choice in `editor_checkpoint` and, for the checks before a run exists, `editor_checkpoint_id` (`orchestration/coordinator.py`) | the mode is part of the editor identity, so its proposals get their own IDs |
 | An acceptance rule | a named rule in `editing/verify.py` + a `verification.acceptance_rule` value | every verification records its rule name, so keep `strict_all_success_v1` unchanged and add a new name |

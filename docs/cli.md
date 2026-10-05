@@ -16,8 +16,8 @@ generated from the argument parser and matches `--help`. See also
   git-ignored `configs/machines/local/` and edit it.
 - **One coordinator per run.** `run`, `resume`, `stage`, `evaluate` and `edit-replay` hold an
   exclusive `flock` on `runs/<id>/.lock` while they work, because two processes on one run would
-  execute the same work items twice. A second one fails at once with "locked by another
-  coordinator".
+  execute the same work items twice. A second one stops at once with `error: ... is locked by
+  another coordinator (...)` and exit 2.
 - **Nothing is overwritten.** `resume` skips completed work items and keeps interrupted attempts
   as `*.interrupted-N` ([run-layout.md](run-layout.md)). `run` with an existing `--run-id`
   continues that run only if the new `run.json` would be identical, and fails otherwise.
@@ -60,6 +60,8 @@ uv run loop compare runs/base-s0 runs/pilot-s0
 uv run loop run experiments/pilot.yaml --machines $M --run-id pilot-s1 --set seeds.loop_seed=1
 uv run loop run experiments/ablations/verify-three-continuations.yaml --machines $M --run-id v3-s0   # and v3-s1
 uv run loop compare runs/pilot-s0 runs/pilot-s1 --vs runs/v3-s0 runs/v3-s1
+# One frozen baseline against every loop seed; effects are always --vs minus the first side
+uv run loop compare runs/base-s0 --vs runs/pilot-s0 runs/pilot-s1
 
 # Final evaluation, only once method and selection are frozen
 uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
@@ -111,7 +113,8 @@ loop validate [-h] --machines MACHINES [--set KEY=VALUE] experiment
 ```
 
 Loads the experiment (with `base:` and --set), the machine profile and the model profiles, checks
-compatibility (serving/adapter formats, external endpoint identities, panels and splits), materializes
+compatibility (serving/adapter formats, external endpoint identities, panels and splits, that the
+initial checkpoint was trained for the learner's model profile), materializes
 task instances in a temporary directory, and prints panels and the per-cycle workload.
 Side effects: none (no run directory, no model, no Docker).
 
@@ -169,7 +172,7 @@ loop stage [-h] --cycle CYCLE --stage {eval,collect,edit,verify,dataset,train} [
 
 Runs eval, collect, edit, verify, dataset or train for one cycle using the earlier stages' outputs
 on disk and the same manifests as the full loop, so a later `resume` skips what was done here.
-Does not update cycle.json. Holds the run lock.
+Does not update cycle.json. Holds the run lock. Appends this invocation to invocations.jsonl.
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
@@ -264,8 +267,10 @@ loop compare [-h] [--vs RUN_B [RUN_B ...]] [--panel PANEL] [--out OUT] run_a [ru
 Two runs (`loop compare A B`): episodes paired by panel/instance/attempt/seed; full success
 transition counts; token deltas only where both succeed, with coverage; tokens withheld when model
 identities or usage sources differ. Several runs per side (`loop compare A1 A2 --vs B1 B2`): runs
-matched by loop seed, per-seed paired effects first, then spread across seeds. Prints markdown;
-never writes into the compared runs.
+matched by loop seed, per-seed paired effects first, then spread across seeds; a single run on either
+side (e.g. one frozen baseline: `loop compare BASE --vs L1 L2 L3`) is compared with every run of the
+other. Every effect is the --vs (experiment) side minus the positional (baseline) side. Prints
+markdown; never writes into the compared runs.
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
@@ -295,7 +300,7 @@ modifies a run, so it is safe next to a running `loop run`. Runs in the foregrou
 |---|---|---|---|
 | `run_dir` |  |  | `runs/<run-id>` to show (default: an index of the runs under --runs-dir) |
 | `--runs-dir` `RUNS_DIR` |  | `runs` | directory whose runs the index lists (relative to the repository root) |
-| `--log` `LOG` |  |  | file to tail as the coordinator log, e.g. saved `loop run` console output (default: the run's logs/coordinator.log if present); needs RUN_DIR |
+| `--log` `LOG` |  |  | file to tail as the coordinator log, e.g. saved `loop run` console output (default: the run's logs/coordinator.log, else its coordinator.log, where older `loop submit` runs wrote it); needs RUN_DIR |
 | `--port` `PORT` |  | `8090` | port to listen on (0 picks a free port) |
 | `--host` `HOST` |  | `127.0.0.1` | address to bind; anything but loopback exposes run outputs and transcripts to the network |
 | `--open` |  |  | open the dashboard in the default browser |

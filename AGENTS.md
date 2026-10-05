@@ -58,12 +58,13 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
   test_tasks_*       generators and split validation
   test_editor_*      editor view, answer tools, validation, grounding
-  test_verify_*      branch specs, costs, acceptance, local end-to-end
+  test_verify_*      branch specs, costs, acceptance, end-to-end on the local fixture environment
   test_prefs_*       preference construction, exports, buffer
   test_train_*       rendering/masking, fixture trainer, profiles, precision, server parsing, vLLM engine
                      against a fake vLLM process (no weights)
   test_report_*      metrics, reports, comparisons, the live dashboard (numbers match reports, escaping, path safety, read-only)
   test_loop_*        orchestration on fixtures: lineage, controls, resume, retries, remote training
+  test_loop_plan_checks plan checks before a run directory exists: unsupported backends, endpoint checkpoints
   test_cli_examples  every committed experiment/machine example validates through the CLI
   test_loop_remote_* remote training and serving against a fake SSH host
   test_loop_pods     Runpod lifecycle: existing and created pods (fake REST API over HTTP), price limit,

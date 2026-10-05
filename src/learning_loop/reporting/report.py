@@ -734,14 +734,17 @@ def _run_label(run: RunRef, i: int) -> str:
 
 def _pair_runs(runs_a: list[RunRef], runs_b: list[RunRef]) -> tuple[list[tuple[Any, RunRef, RunRef]], str]:
     """Match runs of the two conditions by loop seed (run.json) when every run has
-    one and the seed sets are equal; a single b run (e.g. a frozen baseline) is
-    compared with every a run; otherwise runs are matched by position."""
+    one and the seed sets are equal; a single run on either side (e.g. a frozen
+    baseline) is compared with every run of the other side; otherwise runs are
+    matched by position. Each match is (seed label, a run, b run): the sides never swap."""
     seeds_a = [None if isinstance(r, list) else run_loop_seed(r) for r in runs_a]
     seeds_b = [None if isinstance(r, list) else run_loop_seed(r) for r in runs_b]
     if len(runs_b) == 1 and len(runs_a) > 1:
         return [(seeds_a[i] if seeds_a[i] is not None else _run_label(r, i), r, runs_b[0]) for i, r in enumerate(runs_a)], "every a run vs the single b run"
+    if len(runs_a) == 1 and len(runs_b) > 1:
+        return [(seeds_b[i] if seeds_b[i] is not None else _run_label(r, i), runs_a[0], r) for i, r in enumerate(runs_b)], "the single a run vs every b run"
     if len(runs_a) != len(runs_b):
-        raise ValueError(f"need the same number of runs per condition (or one b run): {len(runs_a)} vs {len(runs_b)}")
+        raise ValueError(f"need the same number of runs per condition (or one run on a side): {len(runs_a)} vs {len(runs_b)}")
     known = all(s is not None for s in seeds_a + seeds_b)
     if known and len(set(seeds_a)) == len(seeds_a) and set(seeds_a) == set(seeds_b):
         by_b = dict(zip(seeds_b, runs_b, strict=True))
@@ -765,6 +768,8 @@ def multi_seed_markdown(c: dict[str, Any]) -> str:
         f"Independent learning-loop seeds: {c['n_seeds']} ({c.get('pairing', 'pairing n/a')}). Within a seed, effects are paired "
         f"on panel/instance/attempt/seed and averaged over task instances; across seeds the seed is the unit. "
         f"Intervals need >= {c['min_seeds_for_interval']} seeds.\n\n",
+        f"Runs: {a} = {', '.join(c.get('runs_a') or []) or 'n/a'}; {b} = {', '.join(c.get('runs_b') or []) or 'n/a'}. "
+        f"Every change below is {b} minus {a}.\n\n",
         md_table(
             c["per_seed"],
             [("seed", "loop seed"), ("n_pairs", "pairs"), ("n_instances", "instances"), ("success_delta", f"success change ({b} - {a})"),
@@ -797,8 +802,9 @@ def compare_conditions(
     """Compare two conditions, each given as several runs (one per independent
     learning-loop seed; run dirs or row lists). For each seed: the latest
     evaluated checkpoint of each run (or the given checkpoints) is compared with
-    `paired_comparison`; then the per-seed effects are summarized across seeds
-    (`metrics.multi_seed_comparison`). Returns the dict, with the rendered text
+    `paired_comparison`; then the per-seed effects (b minus a) are summarized across
+    seeds (`metrics.multi_seed_comparison`). A single run on either side is compared
+    with every run of the other side. Returns the dict, with the rendered text
     under "markdown"; writes `conditions.md` / `conditions.json` / `per_seed.csv`
     to `out_dir` when given."""
     if not runs_a or not runs_b:
@@ -811,6 +817,8 @@ def compare_conditions(
         seed_pairs.append((seed, select_eval_rows(rows_a, checkpoint=checkpoint_a, panel=panel), select_eval_rows(rows_b, checkpoint=checkpoint_b, panel=panel)))
     c = multi_seed_comparison(seed_pairs, label_a, label_b, min_seeds=min_seeds)
     c["pairing"] = how
+    c["runs_a"] = [_run_label(r, i) for i, r in enumerate(runs_a)]
+    c["runs_b"] = [_run_label(r, i) for i, r in enumerate(runs_b)]
     c["markdown"] = multi_seed_markdown(c)
     if out_dir is not None:
         out = Path(out_dir)

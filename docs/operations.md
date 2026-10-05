@@ -33,10 +33,10 @@ How to run a real experiment, watch it, and recover when something goes wrong. C
    ```
 6. **Watch each cycle** ([below](#watching-a-run)): proposal rejection reasons, acceptance
    reasons, infra retries and success transitions (lost successes are listed explicitly).
-7. **Compare:** `uv run loop compare runs/pilot-s0 runs/pilot-s1 runs/pilot-s2 --vs runs/baseline`.
-   Effects are reported as the `--vs` side minus the other side, here baseline minus pilot, so a
-   better pilot shows a negative success change and a positive token delta. A single run is
-   accepted only after `--vs`, so the order cannot be swapped.
+7. **Compare:** `uv run loop compare runs/baseline --vs runs/pilot-s0 runs/pilot-s1 runs/pilot-s2`.
+   Effects are reported as the `--vs` side minus the positional side, here pilot minus baseline,
+   so a better pilot shows a positive success change and a negative token delta. The output names
+   the runs on each side.
 8. **Freeze decisions, then evaluate final panels.** Write down the method and checkpoint choice
    first, then run `loop evaluate ... --final`. Optionally run `loop external-eval` (a dry run until
    `--execute`). Neither feeds back into a run.
@@ -83,11 +83,16 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | Symptom | Cause | Action |
 |---|---|---|
 | `error: ...` and exit 2 before anything starts | a schema, cross-field or plan check failed | read the message; rules are in [configuration.md](configuration.md#cross-field-rules) |
-| `error: external endpoint declares served_checkpoint_id=...; this run needs ...` | the endpoint serves a different checkpoint | use the right endpoint, or correct `served_checkpoint_id` |
+| `error: external endpoint declares served_checkpoint_id=...; this run needs ...` | the endpoint serves a different checkpoint than the command needs: the initial checkpoint (`validate`, `run`), `--checkpoint` (`evaluate`) or the source cycle's learner (`edit-replay`) | use the right endpoint, or correct `served_checkpoint_id` |
+| `error: editor endpoint declares ...; the editor is ...` | the editor's external endpoint serves a different checkpoint than the editor's ([configuration.md](configuration.md#cross-field-rules)) | use the right endpoint, or correct `editor_inference.served_checkpoint_id` |
+| `error: configs/models/<m>.yaml marks serving backend '<b>' unsupported; the <learner or editor> cannot be served with it` | the model profile records that this backend does not work for this model | choose another `inference.backend` (or `editor_inference.backend`) that the profile lists |
+| `managed inference serves hf_transformers or vllm (learning_loop.serving.hf_server); run <b> yourself and declare it as mode: external` | a managed endpoint names a backend the repository's server cannot run | start that server yourself and use `mode: external` with `api_base` and `served_checkpoint_id`, or use `hf_transformers` or `vllm` |
+| `error: <path>: name '<n>' must match the file name '<stem>' (experiments refer to profiles by file name)` | a model profile was copied or renamed without updating `name` | make `name` equal the file name |
+| `serving.<k>.backend is '<b>'; it must equal its key '<k>'` | a model profile's `serving` entry is filed under another backend's key | rename the key or fix `backend` |
 | `error: model profile ... declares no '...' serving backend` / `... accepts ... adapters, but the trainer produces peft_lora ...` | the serving backend cannot load trained adapters | use a backend whose model-profile entry lists `peft_lora` |
 | preflight `docker daemon not reachable` | Docker is not running | start Docker |
 | preflight `... not in the local HF cache` | the pinned revision was never downloaded | `uv run python -c "from huggingface_hub import snapshot_download as s; s('<base_model>', revision='<base_revision>')"` |
-| `... is locked by another coordinator (...)` | another `loop` process is using this run | wait or stop it (the lock ends with its process) |
+| `error: ... is locked by another coordinator (...)` and exit 2 | another `loop` process is using this run; the refused command changed nothing, not even `invocations.jsonl` | wait or stop it (the lock ends with its process) |
 | `refusing to overwrite immutable file with different content: .../run.json` | a run id was reused with a different configuration | use a new `--run-id`, or resume the run unchanged |
 
 ### Serving

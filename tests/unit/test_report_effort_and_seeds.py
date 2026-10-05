@@ -111,7 +111,6 @@ def test_branch_saving_is_conditioned_on_success_and_split_by_mode():
         _ver("lost", [_br("original", True, 500), _br("edited", False, 10)]),  # "saving" 490 from a FAILED edit
         _ver("rev", [_br("original", False, 500), _br("edited", True, 400)]),
         _ver("early", [_br("original", True, 500), _br("edited", True, 5, stop=StopCategory.BUDGET)]),
-        _ver("loc", [_br("original", None, 0, extra={"executed": True}), _br("edited", None, 0, extra={"executed": True})], accepted=True, mode="local", saving=7.0),
     ]
     s = branch_saving_summary(vs)
     by = {r["mode"]: r for r in s["by_mode"]}
@@ -119,8 +118,6 @@ def test_branch_saving_is_conditioned_on_success_and_split_by_mode():
     assert c["n_verifications"] == 4 and c["n_all_branches_ok"] == 1 and c["mean_saving_all_branches_ok"] == 200
     assert c["n_edited_failed_original_ok"] == 2  # failed + budget-stopped edits
     assert c["n_original_failed_edited_ok"] == 1 and c["n_branch_pairs"] == 4
-    loc = by["local"]
-    assert loc["n_all_branches_ok"] == 1 and loc["mean_saving_all_branches_ok"] == 7.0 and "intervention tokens only" in loc["saving_unit"]
 
 
 def test_replay_vs_continuation_effort_split():
@@ -150,8 +147,8 @@ def test_token_delta_none_for_different_models_or_usage_sources():
     assert c["token_delta_instance_level"]["interval"] == INCOMPARABLE_TOKENS_NOTE
     assert all(p["token_delta_both_succeed"] is None for p in c["pairs"])
     assert c["transitions"]["lost"] == 1  # success transitions are still reported
-    # same model, different usage source (provider vs local recount)
-    b2 = [row(ep("i1", total=(50, 5), ckpt="base:qwen-a@111111111111").model_copy(update={"usage": Usage(input_tokens=50, output_tokens=5, source="local_recount")}))]
+    # same model, different usage source (provider vs fixture estimate)
+    b2 = [row(ep("i1", total=(50, 5), ckpt="base:qwen-a@111111111111").model_copy(update={"usage": Usage(input_tokens=50, output_tokens=5, source="fixture_estimate")}))]
     c2 = paired_comparison(a[:1], b2)
     assert c2["token_ratio_both_succeed"] is None and "usage source differs" in c2["token_units"]["note"]
     # explicit identity on trained-checkpoint rows
@@ -187,7 +184,8 @@ def test_across_seeds_interval_threshold():
     assert across_seeds([None, 0.5])["n_missing"] == 1 and across_seeds([])["interval"] == "no data"
 
 
-def test_compare_conditions_per_seed_then_across_seeds(tmp_path):
+def _condition_runs(tmp_path):
+    """Three learning seeds and three frozen-baseline runs; learning gains 1/4, 1/4, 2/4 success."""
     base = _cond_rows("c0", [True, False, False, True], tokens=200)
     runs_a, runs_b = [], []
     for seed, succ in ((0, [True, True, False, True]), (1, [True, False, True, True]), (2, [True, True, True, True])):
@@ -196,6 +194,11 @@ def test_compare_conditions_per_seed_then_across_seeds(tmp_path):
             atomic_write_json(d / "run.json", {"run_id": d.name, "experiment": {"seeds": {"loop_seed": seed}}, "model_profiles": {"learner": {"name": "p", "base_revision": "r" * 12}}})
             append_rows(d / "episodes.jsonl", rows)
             lst.append(d)
+    return runs_a, runs_b
+
+
+def test_compare_conditions_per_seed_then_across_seeds(tmp_path):
+    runs_a, runs_b = _condition_runs(tmp_path)
     c = compare_conditions(list(reversed(runs_a)), runs_b, label_a="learning", label_b="frozen", out_dir=tmp_path / "out")
     assert c["pairing"] == "matched by loop seed" and [p["seed"] for p in c["per_seed"]] == [0, 1, 2]
     # frozen - learning per seed: seed0 -1/4, seed1 -1/4, seed2 -2/4
@@ -210,5 +213,29 @@ def test_compare_conditions_per_seed_then_across_seeds(tmp_path):
     # one frozen baseline run against several learning seeds
     c3 = compare_conditions(runs_a, runs_b[:1])
     assert c3["n_seeds"] == 3 and c3["pairing"] == "every a run vs the single b run"
+    assert [p["success_delta"] for p in c3["per_seed"]] == [-0.25, -0.25, -0.5]  # frozen - learning
+    # ... or on the a side: still b - a, now learning - frozen, matched by the b runs' seeds
+    c4 = compare_conditions(runs_b[:1], runs_a, label_a="frozen", label_b="learning")
+    assert c4["n_seeds"] == 3 and c4["pairing"] == "the single a run vs every b run"
+    assert [p["seed"] for p in c4["per_seed"]] == [0, 1, 2]
+    assert [p["success_delta"] for p in c4["per_seed"]] == [0.25, 0.25, 0.5]
+    assert c4["success_delta"]["mean"] == pytest.approx(1 / 3)
+    assert "frozen = frozen-s0; learning = learn-s0, learn-s1, learn-s2. Every change below is learning minus frozen." in c4["markdown"]
     with pytest.raises(ValueError):
         compare_conditions(runs_a[:2], runs_b)
+
+
+def test_cli_compare_names_the_sides_either_orientation(tmp_path, capsys):
+    """`loop compare BASE --vs L1 L2 L3` (positional baseline) and `loop compare L1 L2 L3 --vs BASE`
+    both work; effects are always --vs minus positional and the output says so."""
+    from learning_loop.cli import main
+
+    learn, frozen = _condition_runs(tmp_path)
+    assert main(["compare", str(frozen[0]), "--vs", *map(str, learn)]) == 0
+    out = capsys.readouterr().out
+    assert "baseline = frozen-s0; experiment = learn-s0, learn-s1, learn-s2. Every change below is experiment minus baseline." in out
+    assert "Success change across seeds: 0.333" in out  # learning better than frozen: positive
+    assert main(["compare", *map(str, learn), "--vs", str(frozen[0])]) == 0
+    out = capsys.readouterr().out
+    assert "baseline = learn-s0, learn-s1, learn-s2; experiment = frozen-s0" in out
+    assert "Success change across seeds: -0.333" in out

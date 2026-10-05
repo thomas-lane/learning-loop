@@ -191,6 +191,46 @@ def test_concurrent_coordinators_refused(tmp_path):
             asyncio.run(co.run_all(co.open_run(ctx.run_dir), log=lambda m: None))
 
 
+def test_cli_stage_records_provenance_and_refuses_a_locked_run(tmp_path, capsys):
+    """`loop stage` appends its invocation like `resume`; a second coordinator on a locked run gets
+    `error: ...` and exit 2, and leaves no invocation record."""
+    from learning_loop.cli import main
+
+    ctx = run(co.create_run(EXP, MACHINE, run_id="stg", runs_dir=tmp_path, overrides=["cycles=0"]))
+    inv = ctx.run_dir / "invocations.jsonl"
+    assert not inv.exists()
+    assert main(["stage", str(ctx.run_dir), "--cycle", "0", "--stage", "eval"]) == 0
+    assert len(read_jsonl(inv)) == 1 and read_jsonl(inv)[0]["run_id"] == "stg"
+    capsys.readouterr()
+    with run_lock(ctx.run_dir):
+        assert main(["stage", str(ctx.run_dir), "--cycle", "0", "--stage", "eval"]) == 2
+        err = capsys.readouterr().err
+        assert err.startswith("error: ") and "locked by another coordinator" in err
+        assert len(read_jsonl(inv)) == 1  # the refused invocation changed nothing
+        assert main(["resume", str(ctx.run_dir)]) == 2
+        assert "locked by another coordinator" in capsys.readouterr().err
+        assert len(read_jsonl(inv)) == 1  # nor did the refused resume
+        with pytest.raises(RunLockedError):  # nor does re-running the same --run-id
+            co.create_run(EXP, MACHINE, run_id="stg", runs_dir=tmp_path, overrides=["cycles=0"])
+        assert len(read_jsonl(inv)) == 1
+
+
+def test_cli_validate_checks_the_initial_checkpoint_profile(two_cycles, tmp_path, capsys):
+    """`validate` refuses an initial checkpoint trained for another model profile, as `run` does."""
+    from learning_loop.cli import main
+
+    src = two_cycles.checkpoints_dir / cycle(two_cycles, 0)["learner_out"]["checkpoint_id"]
+    rec = read_json(src / "checkpoint.json")
+    assert main(["validate", str(EXP), "--machines", str(MACHINE), "--set", f"learner.initial_checkpoint={src}"]) == 0
+    rec["checkpoint"]["model_profile"] = "some-other-profile"
+    other = tmp_path / "other-ckpt"
+    other.mkdir()
+    (other / "checkpoint.json").write_text(json.dumps(rec))
+    capsys.readouterr()
+    assert main(["validate", str(EXP), "--machines", str(MACHINE), "--set", f"learner.initial_checkpoint={other}"]) == 2
+    assert "was trained for some-other-profile" in capsys.readouterr().err
+
+
 class FlakyBackend:
     """Wraps the real fixture backend; the first `n_fail` episodes report an infra failure."""
 
@@ -286,11 +326,6 @@ def test_audit_uses_its_own_repetitions(tmp_path):
         assert sorted({b["repetition"] for b in rec["branches"]}) == [0, 1]
     # audits never change the frozen dataset
     assert read_json(ctx.stage_dir(0, "dataset") / "manifest.json")["n_examples"] == len(manifest(ctx, 0, "verify").items)
-
-
-def test_local_verification_mode_rejected_at_validation(tmp_path):
-    with pytest.raises(co.PlanError, match="local"):
-        co.create_run(EXP, MACHINE, run_id="loc", runs_dir=tmp_path, overrides=["verification.mode=local"])
 
 
 def test_documented_manual_reopen_of_failed_eval_item(tmp_path):

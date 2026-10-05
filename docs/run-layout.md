@@ -21,7 +21,7 @@ runs/<run-id>/
 ├── .lock                     run lock (see below)
 ├── run.json                  write-once: resolved configs and inputs (see below)
 ├── provenance.json           write-once: code version, packages, uv.lock hash, hardware, argv
-├── invocations.jsonl         append-only: provenance of each `loop resume`, or repeated command with this `--run-id`
+├── invocations.jsonl         append-only: provenance of each `loop resume` and `loop stage`, or repeated command with this `--run-id`
 ├── machine-overrides.jsonl   append-only: profiles passed to `loop resume/stage --machines`
 ├── seed_schedule.json        evaluation seeds per instance and attempt
 ├── tasks/
@@ -40,6 +40,7 @@ runs/<run-id>/
 ├── checkpoints/cNNN-<hash12>/   read-only published checkpoints
 ├── cache/ref_logps/          DPO reference log-probs, reused on resume (trl_dpo; remote training keeps them in its work dir)
 ├── logs/
+│   ├── coordinator.log       console output of a coordinator started by `loop submit`
 │   ├── <role>-server-<checkpoint>-<unix time>.log   model server output, including vLLM's (copied back from remote hosts)
 │   ├── serving-lifecycle.jsonl  append-only: model server start/ready/stop events
 │   └── pod-lifecycle.jsonl   append-only: Runpod pod events
@@ -218,7 +219,8 @@ When the machine running `loop` serves with vLLM itself, it has `.engines/<packa
 `runs/_servers/zero-lora-<hash>/` too.
 
 On a coordinator host used through `loop submit`, `runs/<run-id>/` is the run directory itself,
-plus `submitted-machine.yaml` and `coordinator.log`; `loop fetch` copies it back.
+plus `submitted-machine.yaml`, and the coordinator's console output goes to `logs/coordinator.log`,
+which `loop dashboard` tails; `loop fetch` copies it back.
 
 ## Finding things
 

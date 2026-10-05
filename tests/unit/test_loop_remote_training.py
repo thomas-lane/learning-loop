@@ -117,3 +117,38 @@ def test_remote_pull_rejects_tampered_adapter(tmp_path, monkeypatch):
     ctx = co.create_run(EXP, machine, run_id="rt2", runs_dir=tmp_path / "runs", overrides=["cycles=1"])
     with pytest.raises(RuntimeError, match="sha256"):
         asyncio.run(co.run_all(ctx, log=lambda _: None))
+
+
+def test_submitted_coordinator_log_is_where_the_dashboard_reads_it(tmp_path, monkeypatch):
+    """`loop submit` sends the coordinator's console output to runs/<id>/logs/coordinator.log, so a
+    run brought back with `loop fetch` shows its log on the dashboard without --log."""
+    from learning_loop.hosts import remote_jobs
+    from learning_loop.reporting import dashboard
+
+    host_root = tmp_path / "coordinator-box"
+    host_root.mkdir()
+    machine = tmp_path / "m.yaml"
+    m = yaml.safe_load((REPO_ROOT / "configs/machines/examples/lab-gpu.yaml").read_text())
+    m["coordinator"]["workdir"] = str(host_root)
+    machine.write_text(yaml.safe_dump(m))
+
+    class Host(FakeRemote):
+        def run_state(self, rel):
+            return "missing"
+
+        def start_detached(self, argv, log_rel):
+            assert argv[:3] == ["uv", "run", "loop"] and (self.root / log_rel).parent.is_dir()
+            (self.root / log_rel).write_text("cycle 0: evaluating c000\n")
+            return 4242
+
+    monkeypatch.setattr(remote_jobs, "Remote", Host)
+    monkeypatch.setattr(remote_jobs, "SUBMISSIONS", tmp_path / "_submissions")
+    msg = remote_jobs.submit(str(EXP), str(machine), run_id="sub1")
+    assert msg.endswith("log: runs/sub1/logs/coordinator.log")
+    assert (host_root / "runs/sub1/logs/coordinator.log").exists() and not (host_root / "runs/sub1/coordinator.log").exists()
+
+    monkeypatch.setattr(remote_jobs, "REPO_ROOT", tmp_path / "laptop")
+    remote_jobs.fetch("sub1", str(machine))
+    rd = tmp_path / "laptop" / "runs" / "sub1"
+    section = dashboard.sec_log({"v": dashboard.RunView(dir=rd, base="/run/sub1/")})
+    assert "cycle 0: evaluating c000" in section

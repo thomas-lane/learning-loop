@@ -187,7 +187,6 @@ def test_conflicting_duplicate_pair_ids_refused(tmp_path):
         ([mk(1), mk(2, split=Split.FINAL)], {}, "held-out instance"),
         ([mk(1, instance="inst-h")], {"heldout_instance_ids": {"inst-h"}}, "is held out"),
         ([mk(1, family="heldout-fam")], {"forbidden_families": {"heldout-fam"}}, "forbidden family"),
-        ([mk(1), mk(2, mode="local")], {}, "mixed verification modes"),
         ([mk(1), mk(2, kind="fixture")], {}, "mixed pair kinds"),
         ([mk(1, instance="other")], {"train_instance_ids": {"inst-a"}}, "not in the training panel"),
     ],
@@ -196,11 +195,6 @@ def test_export_refusals(tmp_path, pairs, kwargs, match):
     with pytest.raises(PreferenceError, match=match):
         export_dataset(pairs, tmp_path / "x", **kwargs)
     assert not (tmp_path / "x" / "manifest.json").exists()
-
-
-def test_mixed_modes_only_when_explicit(tmp_path):
-    m = export_dataset([mk(1), mk(2, mode="local")], tmp_path / "x", allow_mixed_modes=True)
-    assert m["verification_modes"] == ["continuation", "local"]
 
 
 def test_freeze_fixed_dataset_copies_bytes(tmp_path):

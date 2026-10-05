@@ -2,7 +2,8 @@
 
 The coordinator host runs Docker itself; the laptop only syncs code, starts
 `loop run` detached, and later pulls the run directory back. Submission
-records live in runs/_submissions/<run_id>.json.
+records live in runs/_submissions/<run_id>.json. The detached coordinator's console output goes
+to runs/<run_id>/logs/coordinator.log, the file `loop dashboard` tails by default.
 
 Reconciliation rule: before (re)submitting a run id, ask the host whether the
 run lock is held. A lost SSH session or local timeout never counts as proof
@@ -20,6 +21,7 @@ from ..orchestration.coordinator import load_all, new_run_id
 from .remote import Remote, RemoteError
 
 SUBMISSIONS = REPO_ROOT / "runs" / "_submissions"
+LOG_REL = "logs/coordinator.log"  # inside the run directory; the dashboard's default log (reporting.dashboard.LOG_REL)
 
 
 def _coordinator(machines: str) -> Remote:
@@ -39,16 +41,17 @@ def submit(experiment: str, machines: str, run_id: str | None = None) -> str:
     if state == "free":
         raise RemoteError(f"run {run_id} already exists on {remote.alias}; use `ssh {remote.alias}` + `loop resume runs/{run_id}`")
     remote.push_repo()
-    remote.run(["mkdir", "-p", f"runs/{run_id}"])
+    log = f"runs/{run_id}/{LOG_REL}"
+    remote.run(["mkdir", "-p", f"runs/{run_id}/logs"])
     remote.push(Path(machines).resolve(), f"runs/{run_id}/submitted-machine.yaml")
     exp_rel = str(Path(experiment).resolve().relative_to(REPO_ROOT))
     pid = remote.start_detached(
         ["uv", "run", "loop", "run", exp_rel, "--machines", f"runs/{run_id}/submitted-machine.yaml", "--run-id", run_id],
-        f"runs/{run_id}/coordinator.log",
+        log,
     )
     rec = {"run_id": run_id, "host": remote.alias, "workdir": remote.workdir, "pid": pid, "submitted_at": now_iso(), "experiment": exp_rel}
     atomic_write_json(SUBMISSIONS / f"{run_id}.json", rec)
-    return f"submitted {run_id} to {remote.alias} (pid {pid}); log: runs/{run_id}/coordinator.log"
+    return f"submitted {run_id} to {remote.alias} (pid {pid}); log: {log}"
 
 
 def remote_status(run_id: str, machines: str) -> dict[str, Any]:

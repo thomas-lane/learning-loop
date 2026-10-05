@@ -80,10 +80,41 @@ def test_preflight_failures_are_structured(tmp_path, monkeypatch):
     prof = tmp_path / "missing.yaml"
     prof.write_text(
         "name: missing\nbase_model: nobody/does-not-exist\nbase_revision: '" + "0" * 40 + "'\n"
-        "serving: {x: {backend: scripted}}\n"
+        "serving: {scripted: {backend: scripted}}\n"
     )
     r = preflight.check_model_access(str(prof), allow_network=False)
     assert r.status == "fail" and "not in the local HF cache" in r.detail
+
+
+GB = 2**30
+
+
+@pytest.mark.parametrize(
+    ("v2", "v1", "total_gb", "limit_gb"),
+    [
+        (str(8 * GB), None, 8.0, 8.0),  # cgroup v2 limit below the host's RAM: a pod container
+        (None, str(12 * GB), 12.0, 12.0),  # cgroup v1
+        ("max", None, 64.0, None),  # v2 without a limit
+        (None, str(2**63 - 4096), 64.0, None),  # v1 without a limit (page-rounded LONG_MAX)
+        (str(128 * GB), None, 64.0, 128.0),  # a limit above physical memory does not raise it
+        (None, None, 64.0, None),  # no cgroup files (macOS, bare metal)
+    ],
+)
+def test_preflight_memory_respects_cgroup_limit(tmp_path, monkeypatch, v2, v1, total_gb, limit_gb):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(f"MemTotal:       {64 * GB // 1024} kB\nMemFree:        1024 kB\n")
+    files = (tmp_path / "memory.max", tmp_path / "memory" / "memory.limit_in_bytes")
+    for f, val in zip(files, (v2, v1)):
+        if val is not None:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(val + "\n")
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    monkeypatch.setattr(preflight, "MEMINFO", meminfo)
+    monkeypatch.setattr(preflight, "CGROUP_MEMORY_LIMIT_FILES", files)
+    r = preflight.check_memory(min_total_gb=10)
+    assert r.data["total_gb"] == total_gb and r.data["machine_gb"] == 64.0 and r.data["cgroup_limit_gb"] == limit_gb
+    assert r.status == ("fail" if total_gb < 10 else "ok")
+    assert ("cgroup limit" in r.detail) == (total_gb == limit_gb)
 
 
 def test_preflight_cli_exit_code(tmp_path, capsys):

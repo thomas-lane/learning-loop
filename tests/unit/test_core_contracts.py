@@ -10,8 +10,18 @@ import yaml
 from pydantic import ValidationError
 
 from learning_loop.core import seeds
-from learning_loop.core.config import ExperimentConfig, assert_no_secrets, load_experiment, load_machine
-from learning_loop.core.records import Usage
+from learning_loop.core.config import (
+    REPO_ROOT,
+    ExperimentConfig,
+    InferenceProfile,
+    MachineProfile,
+    ModelProfile,
+    assert_no_secrets,
+    load_experiment,
+    load_machine,
+    load_model_profile,
+)
+from learning_loop.core.records import Usage, VerificationRecord
 from learning_loop.core.storage import (
     JsonlAppender,
     StageManifest,
@@ -83,7 +93,6 @@ MINIMAL = {
 
 def test_minimal_experiment_validates():
     cfg = ExperimentConfig.model_validate(MINIMAL)
-    assert cfg.editor.proposals_per_source == 1
     assert cfg.verification.continuations_per_branch == 1
     assert cfg.verification.acceptance_rule == "strict_all_success_v1"
     assert cfg.training.reference == "incoming_checkpoint"
@@ -97,8 +106,9 @@ def test_minimal_experiment_validates():
         {"condition": "fixed_dataset"},  # missing fixed_dataset
         {"training": {"optimizer_steps": 2, "fixed_dataset": "x"}},  # fixed dataset outside its condition
         {"editor": {"mode": "external"}},  # missing profile
-        {"editor": {"mode": "initial_policy", "proposals_per_source": 3}},  # needs confirmation seeds
-        {"verification": {"mode": "local", "continuations_per_branch": 2}},
+        {"editor": {"mode": "initial_policy", "proposals_per_source": 1}},  # removed: one proposal per source
+        {"verification": {"mode": "local"}},  # removed: continuation is the only verification
+        {"training": {"optimizer_steps": 2, "lora": {"dropout": 0.05}}},  # removed: TRL disables dropout
         {"name": "Bad Name"},
     ],
 )
@@ -140,6 +150,41 @@ def test_machine_ssh_alias_validated(tmp_path):
     """))
     with pytest.raises(ValidationError):
         load_machine(p)
+
+
+def test_coordinator_is_never_a_pod():
+    base = {"name": "m", "inference": {"mode": "scripted", "backend": "scripted"}}
+    for coord in ({"kind": "runpod", "pod_id": "abc", "workdir": "/w"}, {"kind": "local", "pod_id": "abc"}):
+        with pytest.raises(ValidationError, match="coordinator"):
+            MachineProfile.model_validate({**base, "coordinator": coord})
+    m = MachineProfile.model_validate({**base, "coordinator": {"kind": "ssh", "ssh_alias": "box", "workdir": "/w"}})
+    assert m.pod_ids() == [] and ("coordinator", m.coordinator) in m.hosts()
+
+
+def test_managed_inference_only_for_backends_it_can_launch():
+    for backend in ("llama_cpp", "scripted"):
+        with pytest.raises(ValidationError, match="managed inference serves"):
+            InferenceProfile(mode="managed", backend=backend, port=1)
+    InferenceProfile(mode="managed", backend="vllm", port=1)
+    InferenceProfile(mode="external", backend="llama_cpp", api_base="http://x/v1", served_checkpoint_id="base:x@1")
+
+
+def test_model_profiles_name_and_serving_keys_enforced(tmp_path):
+    for p in sorted((REPO_ROOT / "configs" / "models").glob("*.yaml")):
+        assert load_model_profile(p.stem).name == p.stem
+    raw = yaml.safe_load((REPO_ROOT / "configs" / "models" / "qwen3-0.6b.yaml").read_text())
+    with pytest.raises(ValidationError, match="must equal its key"):
+        ModelProfile.model_validate({**raw, "serving": {"vllm": raw["serving"]["hf_transformers"]}})
+    (tmp_path / "other-name.yaml").write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="must match the file name"):
+        load_model_profile(str(tmp_path / "other-name.yaml"))
+
+
+def test_removed_record_values_rejected():
+    with pytest.raises(ValidationError):
+        Usage(input_tokens=1, output_tokens=1, source="local_recount")
+    with pytest.raises(ValidationError):
+        VerificationRecord(verification_id="v", proposal_id="p", mode="local", acceptance_rule="r", accepted=False)
 
 
 # --------------------------------------------------------------------------- #

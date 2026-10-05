@@ -50,11 +50,16 @@ and pass one run directory per seed:
 loop compare runs/A-seed1 runs/A-seed2 runs/A-seed3 --vs runs/B-seed1 runs/B-seed2 runs/B-seed3
 ```
 
-Runs are matched by loop seed (by position if seeds are missing or differ). A single B run, such
-as a frozen baseline, is compared against every A run. The A-vs-B effect is computed within each
-matched pair, as above, then averaged over seeds. A 95% interval across seeds needs at least 3
-seeds. Every effect is reported as B minus A (a "lost" pair lost success under B), so with a
-frozen baseline after `--vs` the effects read as baseline minus learning.
+Runs are matched by loop seed (by position if seeds are missing or differ). A single run on
+either side, such as a frozen baseline, is compared against every run of the other side. The
+A-vs-B effect is computed within each matched pair, as above, then averaged over seeds. A 95%
+interval across seeds needs at least 3 seeds. Every effect is reported as B minus A (a "lost"
+pair lost success under B), so a frozen baseline goes first, and the effects then read as
+learning minus baseline:
+
+```bash
+loop compare runs/baseline --vs runs/learning-seed1 runs/learning-seed2 runs/learning-seed3
+```
 
 Smoke runs and runs with *fixtures* (scripted stand-ins for the learner, editor or trainer, used
 to test the plumbing without a model) never support statistical claims.
@@ -203,8 +208,8 @@ Models in thinking mode reason on every turn, so the committed model profiles tu
 generates no reasoning at all (it is not generated and hidden); it answers with tool calls
 directly.
 
-`editor.proposals_per_source` must be 1: picking the best of several verified edits from one
-episode would favor edits whose continuations happened to go well.
+The editor makes one proposal per source episode: picking the best of several verified edits
+from one episode would favor edits whose continuations happened to go well.
 
 ## Verification and acceptance
 
@@ -263,7 +268,7 @@ templates take them as a separate input (`apply_chat_template(messages, tools=..
 the model's API takes tools separately from messages. Evidence
 (continuations, editor justification, costs) lives in a separate provenance record keyed by
 `pair_id`. An export is refused if it contains instances outside the training split, held-out
-families, mixed verification modes, or fixture pairs mixed with verified ones.
+families, or fixture pairs mixed with verified ones.
 
 Rendering uses the learner's pinned tokenizer and chat template. The rendered prompt must be an
 exact token prefix of both full renders. Only the completion tokens (through end-of-turn) carry

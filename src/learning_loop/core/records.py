@@ -121,7 +121,7 @@ class Usage(BaseModel):
     output_tokens: int | None = None
     cached_input_tokens: int | None = None  # subset of input_tokens
     reasoning_tokens: int | None = None  # subset of output_tokens
-    source: Literal["provider", "local_recount", "fixture_estimate", "mixed", "none"] = "provider"
+    source: Literal["provider", "fixture_estimate", "mixed", "none"] = "provider"
 
     @property
     def total(self) -> int | None:
@@ -338,7 +338,7 @@ class BranchResult(Record):
 class VerificationRecord(Record):
     verification_id: str
     proposal_id: str
-    mode: Literal["continuation", "local"]
+    mode: Literal["continuation"]
     acceptance_rule: str
     branches: list[BranchResult] = Field(default_factory=list)
     accepted: bool
@@ -371,7 +371,7 @@ class PreferenceProvenance(Record):
     """Companion record keyed by pair_id; never rendered into model inputs."""
 
     pair_id: str
-    verification_mode: Literal["continuation", "local"]
+    verification_mode: Literal["continuation"]
     instance_id: str
     family: str
     difficulty: str | None

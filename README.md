@@ -61,9 +61,10 @@ uv run loop dashboard runs/<run-id> --open       # http://localhost:8090/; omit 
 uv run loop status runs/<run-id>
 uv run loop report runs/<run-id>                 # -> runs/<run-id>/reports/
 
-# Paired comparison of runs; several loop seeds per side with --vs
+# Paired comparison of runs; several loop seeds per side with --vs (effects: --vs side minus first side)
 uv run loop compare runs/<baseline-id> runs/<experiment-id>
 uv run loop compare runs/<base-s0> runs/<base-s1> --vs runs/<exp-s0> runs/<exp-s1>
+uv run loop compare runs/<baseline-id> --vs runs/<exp-s0> runs/<exp-s1>   # one frozen baseline
 
 # One stage of one cycle: eval|collect|edit|verify|dataset|train
 uv run loop stage runs/<run-id> --cycle 0 --stage collect

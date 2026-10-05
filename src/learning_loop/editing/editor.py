@@ -795,7 +795,6 @@ class LLMEditor(_EditorBase):
         include_outcome_metrics: bool = True,
         include_later_observations: bool = True,
         assistant_text_policy: str = "reject_nonempty",
-        proposals_per_source: int = 1,
     ):
         self.policy = policy
         self.mode = mode
@@ -807,7 +806,6 @@ class LLMEditor(_EditorBase):
         self.include_outcome_metrics = include_outcome_metrics
         self.include_later_observations = include_later_observations
         self.assistant_text_policy = assistant_text_policy
-        self.proposals_per_source = proposals_per_source
         self.decoding = {
             "sampling": policy.spec.sampling.model_dump(),
             "send_seed": policy.spec.send_seed,
@@ -817,7 +815,6 @@ class LLMEditor(_EditorBase):
                 "later_observations": include_later_observations,
                 "assistant_text_policy": assistant_text_policy,
             },
-            "proposals_per_source": proposals_per_source,
             "answer": "tool_call",
         }
         self.editor_id = editor_identity(mode, checkpoint_id, self.prompt_sha256, self.decoding)
@@ -837,7 +834,6 @@ class LLMEditor(_EditorBase):
         tools: list[ToolSchema],
         *,
         system_prompt: str | None = None,
-        proposal_index: int = 0,
         proposal_id: str | None = None,
         seed: int | None = None,
     ) -> EditProposal:
@@ -851,7 +847,7 @@ class LLMEditor(_EditorBase):
             system_prompt=system_prompt,
             assistant_text_policy=self.assistant_text_policy,
         )
-        proposal_id = proposal_id or stable_id("prop", self.editor_id, source.episode_id, proposal_index)
+        proposal_id = proposal_id or stable_id("prop", self.editor_id, source.episode_id)
         common = dict(proposal_id=proposal_id, source_episode_id=source.episode_id, instance_id=instance.instance_id, editor_id=self.editor_id)
         editable = editable_turns(view)
         if not editable:  # nothing the editor could change: no request is made
@@ -859,7 +855,7 @@ class LLMEditor(_EditorBase):
         messages = self.request_messages(view)
         answer_tools = editor_tools(tools, editable)
         if seed is None:
-            seed = derive_seed(self.root_seed, "editor_proposal", self.editor_id, source.episode_id, proposal_index)
+            seed = derive_seed(self.root_seed, "editor_proposal", self.editor_id, source.episode_id)
         # The editor answers with one of its answer tools; nothing it calls is executed.
         decision = await self.policy.decide(messages, answer_tools, seed)
         raw = {
@@ -936,12 +932,11 @@ class ScriptedEditor(_EditorBase):
         tools: list[ToolSchema],
         *,
         system_prompt: str | None = None,
-        proposal_index: int = 0,
         proposal_id: str | None = None,
         seed: int | None = None,
     ) -> EditProposal:
         common = dict(
-            proposal_id=proposal_id or stable_id("prop", self.editor_id, source.episode_id, proposal_index),
+            proposal_id=proposal_id or stable_id("prop", self.editor_id, source.episode_id),
             source_episode_id=source.episode_id,
             instance_id=instance.instance_id,
             editor_id=self.editor_id,
@@ -999,5 +994,4 @@ def make_editor(
         include_outcome_metrics=cfg.include_outcome_metrics,
         include_later_observations=cfg.include_later_observations,
         assistant_text_policy=cfg.assistant_text_policy,
-        proposals_per_source=cfg.proposals_per_source,
     )
