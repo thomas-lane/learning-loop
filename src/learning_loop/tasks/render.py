@@ -162,11 +162,15 @@ def _mtime_ns(path: str, rel: str, is_dir: bool) -> int:
 
 
 def _fix_mtimes(root: Path) -> None:
+    """Fix directory modes (0755, whatever the host's umask) and every entry's mtime."""
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         for name, is_dir in [(f, False) for f in filenames] + [(d, True) for d in dirnames]:
             path = os.path.join(dirpath, name)
+            if is_dir and not os.path.islink(path):
+                os.chmod(path, 0o755)
             t = _mtime_ns(path, os.path.relpath(path, root), is_dir)
             os.utime(path, ns=(t, t), follow_symlinks=False)
+    os.chmod(root, 0o755)
     t = _mtime_ns(str(root), ".", True)
     os.utime(root, ns=(t, t))
 

@@ -221,6 +221,7 @@ def test_tree_on_disk_sees_links_and_modes_without_following(tmp_path):
     out = tmp_path / "app" / "out"
     (out / "d").mkdir(parents=True)
     (out / "a.txt").write_bytes(b"A")
+    (out / "a.txt").chmod(0o644)  # explicit: the host's umask must not matter
     (out / "d" / "b.txt").write_bytes(b"B")
     (out / "d" / "b.txt").chmod(0o600)
     (tmp_path / "secret").write_bytes(b"A")

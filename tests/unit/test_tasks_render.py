@@ -195,3 +195,15 @@ def test_symlinks_are_rendered_as_links_and_counted_in_the_app_digest(tmp_path):
         assert (files / "old").is_symlink() and not (files / "old").exists() and (files / "cur").read_text() == "1\n"
         digests.append(tree_digest(str(d / "environment" / "files")))
     assert digests[0] != digests[1]  # the link target is learner-visible state
+
+
+def test_directory_modes_do_not_depend_on_the_umask(tmp_path):
+    old = os.umask(0o002)  # e.g. a Linux desktop account
+    try:
+        render(fixture_family("sum_numbers"), "easy", 1, tmp_path / "t")
+    finally:
+        os.umask(old)
+    dirs = [p for p in _all_paths(tmp_path / "t") if p.is_dir() and not p.is_symlink()]
+    assert dirs and all(stat.S_IMODE(p.stat().st_mode) == 0o755 for p in dirs)
+    files = [p for p in _all_paths(tmp_path / "t") if p.is_file() and not p.is_symlink()]
+    assert all(stat.S_IMODE(p.stat().st_mode) in (0o644, 0o755) for p in files)
