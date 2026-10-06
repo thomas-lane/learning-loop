@@ -189,8 +189,11 @@ def _gemma_call(block: str) -> tuple[str, dict[str, Any]]:
 
 def parse_gemma4(text: str, id_seed: str) -> ParsedCompletion:
     thoughts = [m.group(1) for m in _GEMMA_THOUGHT.finditer(text)]
-    reasoning = "\n".join(t.removeprefix("thought").strip("\n") for t in thoughts) if thoughts else None
     body = _GEMMA_THOUGHT.sub("", text)
+    if "<|channel>" in body:  # a thought the output limit cut off is still reasoning, not content
+        body, _, cut = body.partition("<|channel>")
+        thoughts.append(cut)
+    reasoning = "\n".join(t.removeprefix("thought").strip("\n") for t in thoughts) if thoughts else None
     calls: list[dict[str, Any]] = []
     errors: list[str] = []
     kept: list[str] = []
@@ -242,6 +245,18 @@ def parse_bare_call(text: str, names: set[str]) -> tuple[str, dict[str, Any]] | 
     except json.JSONDecodeError:
         return None
     return (name, args) if isinstance(args, dict) else None
+
+
+def generation_prefix(tool_call_format: str, prompt_text: str) -> str:
+    """Output syntax the rendered prompt already opened for the model. With thinking enabled,
+    Gemma's generation prompt after a tool result ends with "<|channel>thought\\n", so the model's
+    completion starts inside the thought; the server parses prefix + completion so such a turn parses
+    the same as one that opened the thought itself."""
+    if tool_call_format == "gemma4":
+        i = prompt_text.rfind("<|channel>")
+        if i >= 0 and "<channel|>" not in prompt_text[i:]:
+            return prompt_text[i:]
+    return ""
 
 
 def parse_completion(tool_call_format: str, text: str, id_seed: str) -> ParsedCompletion:

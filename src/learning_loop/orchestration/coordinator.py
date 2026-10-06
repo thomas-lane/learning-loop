@@ -187,6 +187,9 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
     if uses_model_editor and exp.editor.mode == "current_learner" and ed_inf is not None and ed_inf.mode == "external":
         raise PlanError("editor=current_learner changes every cycle; a fixed external editor endpoint cannot serve it")
     check_endpoints(machine, learner, editor, initial_id, editor_checkpoint_id(exp, editor, initial_id, initial_id) if uses_model_editor else None)
+    if exp.condition == "learning" and exp.cycles >= 1 and learner.chat_template_kwargs.get("enable_thinking") and exp.editor.assistant_text_policy == "reject_nonempty":
+        raise PlanError(f"{learner.name} reasons on every turn (enable_thinking), so editor.assistant_text_policy reject_nonempty would leave "
+                        "almost no editable turns; use keep_reasoning")
     if trains and inf.mode == "external":
         raise PlanError("learning runs need managed (or scripted) inference: an external endpoint cannot serve new checkpoints")
     if trains and exp.training.trainer == "trl_dpo" and inf.mode == "managed":

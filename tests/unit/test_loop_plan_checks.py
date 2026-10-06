@@ -58,6 +58,15 @@ def test_unsupported_serving_backend_is_refused():
         co.check_compatibility(exp, live, learner, unsupported(learner, "hf_transformers"))
 
 
+def test_thinking_learner_needs_an_editor_that_keeps_reasoning():
+    exp, _, mac, learner, editor = co.load_all(EXP, M / "mac-local.yaml", REAL_LEARNER)
+    thinking = learner.model_copy(update={"chat_template_kwargs": {"enable_thinking": True}})
+    with pytest.raises(co.PlanError, match="use keep_reasoning"):
+        co.check_compatibility(exp, mac, thinking, editor)
+    keep = exp.model_copy(update={"editor": exp.editor.model_copy(update={"assistant_text_policy": "keep_reasoning"})})
+    co.check_compatibility(keep, mac, thinking, editor)
+
+
 def test_managed_lora_runs_need_a_declared_peft_backend():
     exp, _, mac, learner, editor = co.load_all(REPO_ROOT / "experiments" / "smoke-mac.yaml", M / "mac-local.yaml")
     co.check_compatibility(exp, mac, learner, editor)

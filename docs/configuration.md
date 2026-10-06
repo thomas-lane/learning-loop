@@ -51,6 +51,8 @@ exits 2 before anything starts.
   to profiles by file name while checkpoint ids and `checkpoint.json` record the `name`.
 - Each `serving.<key>.backend` in a model profile must equal its key, because machine profiles
   look up `serving.<inference.backend>`.
+- A `sampling` block's `extra_body` must not set `temperature`, `top_p`, `top_k`, `max_tokens` or
+  `seed`, so each setting has one place and is recorded under its own name.
 
 **Across files** (checked by `validate` and `run`)
 
@@ -74,6 +76,10 @@ is any `editor.mode` except `scripted`.
   editor's checkpoint; an `external` `editor_inference` cannot be used with `editor.mode:
   current_learner`, whose checkpoint changes every cycle; a scripted learner needs
   `editor_inference`.
+- In a learning run with `cycles` ≥ 1, a learner whose model profile sets
+  `chat_template_kwargs.enable_thinking: true` needs `editor.assistant_text_policy:
+  keep_reasoning`, because it reasons on every turn and `reject_nonempty` would leave almost no
+  turn editable ([why](experiment.md#editing)).
 - Every named panel exists in the split file; `evaluation.final_panels` are `final` or
   `external` panels; every family in `tasks.exposure_schedule` occurs in the collection panel.
   The split file passes the checks in
@@ -134,8 +140,9 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `episode.sampling` | mapping | **required** | Learner decoding for evaluation and collection. |
 | `episode.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `episode.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `episode.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `episode.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `episode.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `episode.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `episode.max_turns` | int (>= 1) | **required** | Experimental budget: model turns per episode (a branch's prefix and intervention count). |
 | `episode.max_episode_tokens` | int or null | null | Experimental budget: input+output tokens over all requests; an endpoint without usage then stops the episode (`budget:usage_unavailable`). |
 | `episode.tool_timeout_sec` | int | `60` | Per-command timeout; the model cannot raise it. |
@@ -150,11 +157,12 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `editor.sampling` | mapping | `{'temperature': 0.0, 'max_output_tokens': 2048}` | Editor decoding. |
 | `editor.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `editor.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `editor.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `editor.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `editor.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `editor.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `editor.include_outcome_metrics` | bool | `True` | Show the editor scalar outcomes of the source episode (success, token totals). |
 | `editor.include_later_observations` | bool | `True` | Show the editor observations after each turn (hindsight is still filtered at validation). |
-| `editor.assistant_text_policy` | `reject_nonempty` | `reject_nonempty` | Strict mode: turns with assistant text or reasoning are not editable. |
+| `editor.assistant_text_policy` | `reject_nonempty` or `keep_reasoning` | `reject_nonempty` | Which turns may be edited given their text: `reject_nonempty` (turns with assistant text or reasoning are not editable; for profiles with thinking off) or `keep_reasoning` (turns with reasoning are editable, and the edit keeps the reasoning and replaces only the tool call; for profiles with thinking on). Turns with assistant text are not editable under either. |
 | `editor.scripted_path` | str or null | null | `scripted` only: fixture proposals file. |
 | `verification` | mapping | `{'mode': 'continuation', 'continuations_per_branch': 1, 'acceptance_rule': 'strict_all_success_v1', 'min_token_saving': 1.0, 'min_relative_saving': 0.0, 'audit': {'fraction': 0.0, 'continuations_per_branch': 2}}` | Branch verification and acceptance. |
 | `verification.mode` | `continuation` | `continuation` | `continuation`: each branch (original and edited turn) is replayed in a fresh environment and continued by the current learner. |
@@ -165,8 +173,9 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `verification.sampling` | mapping or null | null | Continuation decoding; default `episode.sampling`. |
 | `verification.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `verification.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `verification.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `verification.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `verification.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `verification.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `verification.audit` | mapping | `{'fraction': 0.0, 'continuations_per_branch': 2}` | Optional audits. |
 | `verification.audit.fraction` | float (>= 0.0, <= 1.0) | `0.0` | Seeded random fraction of accepted edits to re-verify with fresh seeds. |
 | `verification.audit.continuations_per_branch` | int (>= 1) | `2` | Continuations per branch in an audit. |

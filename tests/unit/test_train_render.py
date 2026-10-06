@@ -252,6 +252,7 @@ def test_qwen3_fixture_dataset_renders(qwen):
         assert p.chosen_ids != p.rejected_ids
 
 
+# Thinking off; gemma-4-12b-it (thinking on) has its own test below.
 GEMMA = ["gemma-4-e4b-it", "gemma-4-e2b-it"]  # different pinned templates, same tool-call syntax
 
 
@@ -286,6 +287,40 @@ def test_gemma4_parser_roundtrips_the_pinned_template(profile):
     again = pair(tc["function"]["arguments"], '{"command":"cat app.log"}')
     q = render_pair(again, tok, chat_template_kwargs=prof.chat_template_kwargs, eot_ids=eot, max_length=4096)
     assert q.chosen_ids == p.chosen_ids
+
+
+def test_gemma4_thinking_turns_roundtrip_and_keep_reasoning_in_both_sides():
+    """With thinking on, the 12B template opens the thought channel in the generation prompt after
+    a tool result, so the completion starts inside the thought. The server's prefix makes it parse
+    back to the same message, and an edit that keeps the reasoning renders it identically on both
+    sides of the pair, so only the tool call differs."""
+    from learning_loop.editing.editor import make_edited_message
+    from learning_loop.core.records import ProposedCall
+    from learning_loop.serving.tool_parse import generation_prefix, parse_gemma4
+    from learning_loop.training.render import render_text
+
+    prof, tok = _cached("gemma-4-12b-it")
+    kw = prof.chat_template_kwargs
+    assert kw.get("enable_thinking") is True
+    eot = end_of_turn_ids(tok, prof)
+    a0 = {**asst(call("call_0", '{"command": "ls"}')), "reasoning_content": "List first.\nThen count."}
+    a1 = {**asst(call("call_1", '{"command": "wc -l a"}')), "reasoning_content": "Now count."}
+    after_tool = [*PROMPT, a0, {"role": "tool", "tool_call_id": "call_0", "content": "a\nb"}]
+    for prompt, msg in [(PROMPT, a0), (after_tool, a1)]:
+        prompt_text = render_text(tok, prompt, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw)
+        rc = render_completion(tok, prompt, [msg], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
+        text = tok.decode(rc.completion_ids[:-1], skip_special_tokens=False)
+        parsed = parse_gemma4(generation_prefix("gemma4", prompt_text) + text, "s")
+        assert parsed.parse_errors == [] and parsed.content == "" and parsed.reasoning_content == msg["reasoning_content"]
+        assert [c["function"]["name"] for c in parsed.tool_calls] == ["bash"]
+    assert render_text(tok, after_tool, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw).endswith("<|channel>thought\n")
+    chosen = make_edited_message(a1, ProposedCall(name="bash", arguments={"command": "grep -c . a"}))
+    ex = PreferenceExample(pair_id="p", prompt=after_tool, chosen=[chosen], rejected=[a1], tools=TOOLS)
+    p = render_pair(ex, tok, chat_template_kwargs=kw, eot_ids=eot, max_length=4096)
+    assert p.chosen_text.startswith("Now count.\n<channel|><|tool_call>") and p.rejected_text.startswith("Now count.\n<channel|><|tool_call>")
+    # An empty thought after a tool result cannot be rendered as generated (hence `empty_reasoning`).
+    with pytest.raises(RenderError):
+        render_completion(tok, after_tool, [{**a1, "reasoning_content": ""}], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
 
 
 def test_template_pin_is_enforced(qwen):

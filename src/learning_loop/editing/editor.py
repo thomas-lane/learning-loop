@@ -67,7 +67,10 @@ EDIT_TOOL_PREFIX = "replace_with_"
 ABSTAIN_TOOL = "abstain"
 EDIT_TURN = "edit_turn"
 EDIT_JUSTIFICATION = "edit_justification"
-ASSISTANT_TEXT_POLICIES = ("reject_nonempty",)
+# reject_nonempty: turns with assistant text or reasoning are not editable.
+# keep_reasoning: turns with reasoning are editable; the edit keeps the reasoning and replaces only
+# the tool call (assistant text is still not editable).
+ASSISTANT_TEXT_POLICIES = ("reject_nonempty", "keep_reasoning")
 
 # --------------------------------------------------------------------------- #
 # Small helpers shared with verify.py / preferences.py
@@ -99,9 +102,9 @@ def serialize_arguments(arguments: dict[str, Any]) -> str:
 
 def make_edited_message(original: Message, replacement: ProposedCall) -> Message:
     """The fixed edited assistant turn: identical to the original message except
-    its single tool call's name/arguments. Content (empty under the strict policy)
-    and the original tool_call_id are kept, so the tool-result message that
-    follows stays well-formed."""
+    its single tool call's name/arguments. Content (always empty in an eligible turn),
+    reasoning (under `keep_reasoning`) and the original tool_call_id are kept, so the
+    tool-result message that follows stays well-formed."""
     calls = tool_calls_of(original)
     if len(calls) != 1:
         raise ValueError("edited messages are only defined for single-tool-call turns")
@@ -502,8 +505,12 @@ def turn_ineligibility(turn: TurnRecord, assistant_text_policy: str = "reject_no
     if (isinstance(content, str) and content.strip()) or (isinstance(content, list) and len(content) > 0):
         reasons.append("nonempty_assistant_content")
     reasoning = turn.assistant_message.get("reasoning_content")
-    if isinstance(reasoning, str) and reasoning.strip():
+    if assistant_text_policy == "reject_nonempty" and isinstance(reasoning, str) and reasoning.strip():
         reasons.append("nonempty_reasoning")
+    if assistant_text_policy == "keep_reasoning" and reasoning == "":
+        # An empty thought (the model closed the thought channel at once) is dropped by the chat
+        # template, so the turn cannot be rendered as generated for training or token counting.
+        reasons.append("empty_reasoning")
     return reasons
 
 

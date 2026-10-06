@@ -186,8 +186,9 @@ contain several tool calls, or none.
 
 Proposals are checked by code before anything runs. An edit is rejected unless:
 
-- the original turn has exactly one tool call, which parsed cleanly and ran, and no assistant text
-  or reasoning (`editor.assistant_text_policy: reject_nonempty`, see below);
+- the original turn has exactly one tool call, which parsed cleanly and ran, and no assistant text.
+  Under `editor.assistant_text_policy: reject_nonempty` it also has no reasoning; under
+  `keep_reasoning` its reasoning, if any, is not empty (see below);
 - the replacement is a different, schema-valid call to an existing tool;
 - no argument mentions a grader location: `/tests`, `/solution`, `/oracle`, `/logs/verifier`,
   `/logs/agent` or `reward.txt`/`reward.json` (a pattern match on every string argument). These
@@ -210,14 +211,33 @@ there as a whole line (like the output of `wc -l`), because small numbers turn u
 inside log lines. It is a heuristic: it can reject an innocent small number and misses hindsight
 that is paraphrased or computed at runtime. Rejected proposals are kept with their reasons.
 
-**Why turns with reasoning are not editable.** The chosen and rejected sides of a training
-example are whole assistant turns, reasoning included. Keeping the original reasoning in front
-of a new call would train the learner to make a call its own reasoning did not lead to; writing
-new reasoning would train it on the editor's thoughts. So turns with reasoning are skipped.
-Models in thinking mode reason on every turn, so the committed model profiles turn thinking off
-(`chat_template_kwargs: {enable_thinking: false}` in `configs/models/*.yaml`). The model then
-generates no reasoning at all (it is not generated and hidden); it answers with tool calls
-directly.
+**Edits and reasoning.** Each side of a training example is a whole assistant turn: reasoning (if
+any) and tool call. The two policies cover the two ways a model can run.
+
+- `reject_nonempty`, for models with thinking turned off in their model profile
+  (`chat_template_kwargs: {enable_thinking: false}`, e.g. `gemma-4-e4b-it`): the model generates no
+  reasoning at all and answers with tool calls directly, and a turn with reasoning is not editable.
+- `keep_reasoning`, for models that reason before every turn (`gemma-4-12b-it`): the edited turn
+  keeps the learner's original reasoning and replaces only the tool call. The plan check refuses a
+  learning run whose learner has `enable_thinking: true` under `reject_nonempty`, since almost no
+  turn would be editable.
+
+Under `keep_reasoning`, chosen and rejected start with the same reasoning tokens. DPO's loss
+depends only on the difference between the two sides' log-probabilities (each relative to the
+reference model), and the shared reasoning contributes the same amount to both, so it cancels:
+what is trained is which tool call to make after that reasoning. The reasoning itself is never
+trained, so no editor-written text reaches the learner. The cost is that the reasoning may have
+argued for the original action; the editor prompt asks for replacements that still follow from
+it. Why not let the editor rewrite the reasoning, or drop it? Rewritten reasoning would train the
+learner on the editor's thoughts, and a turn without reasoning is a shape the model never
+generates in thinking mode. `reject_nonempty` avoids the mismatch altogether, at the price of
+running the model without its thinking. A thinking model with thinking turned off still reasons,
+only in worse places (long code comments, repeated commands), which is why the primary learner
+keeps thinking on.
+
+A turn whose thought is present but empty (the model closed the thought channel at once) is not
+editable under `keep_reasoning` (`empty_reasoning`): Gemma's chat template drops an empty thought,
+so the turn could not be rendered as it was generated for training or token counting.
 
 The editor makes one proposal per source episode: picking the best of several verified edits
 from one episode would favor edits whose continuations happened to go well.

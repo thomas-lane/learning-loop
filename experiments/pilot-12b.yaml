@@ -1,5 +1,13 @@
 # The pilot with Gemma-4-12B as the learner (and, through editor.mode initial_policy, as the editor).
+# The model reasons before every turn (enable_thinking in its model profile), so the editor keeps a
+# turn's reasoning and replaces only its tool call. Learner and editor decode with Google's
+# recommended settings for Gemma 4 (the pinned generation_config.json).
 base: pilot.yaml
 name: pilot-12b
 learner:
   model_profile: gemma-4-12b-it
+episode:
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+editor:
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  assistant_text_policy: keep_reasoning

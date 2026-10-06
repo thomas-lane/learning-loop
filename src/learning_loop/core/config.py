@@ -312,7 +312,7 @@ class EditorConfig(Strict):
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig(temperature=0.0, max_output_tokens=2048), description="Editor decoding.")
     include_outcome_metrics: bool = Field(default=True, description="Show the editor scalar outcomes of the source episode (success, token totals).")
     include_later_observations: bool = Field(default=True, description="Show the editor observations after each turn (hindsight is still filtered at validation).")
-    assistant_text_policy: Literal["reject_nonempty"] = Field(default="reject_nonempty", description="Strict mode: turns with assistant text or reasoning are not editable.")
+    assistant_text_policy: Literal["reject_nonempty", "keep_reasoning"] = Field(default="reject_nonempty", description="Which turns may be edited given their text: `reject_nonempty` (turns with assistant text or reasoning are not editable; for profiles with thinking off) or `keep_reasoning` (turns with reasoning are editable, and the edit keeps the reasoning and replaces only the tool call; for profiles with thinking on). Turns with assistant text are not editable under either.")
     scripted_path: str | None = Field(default=None, description="`scripted` only: fixture proposals file.")
 
     @model_validator(mode="after")

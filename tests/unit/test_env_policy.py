@@ -30,7 +30,7 @@ def _policy(handler, **spec_kw) -> tuple[OpenAIChatPolicy, list[dict]]:
         return handler(request)
 
     client = AsyncOpenAI(base_url="http://test/v1", api_key="k", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(_h)))
-    spec = PolicySpec(kind="openai", api_base="http://test/v1", served_model_name="m", sampling=SamplingConfig(temperature=0.5, max_output_tokens=64, extra_body={"top_k": 20}), **spec_kw)
+    spec = PolicySpec(kind="openai", api_base="http://test/v1", served_model_name="m", sampling=SamplingConfig(temperature=0.5, top_k=20, max_output_tokens=64, extra_body={"min_p": 0.05}), **spec_kw)
     return OpenAIChatPolicy(spec, client=client), seen
 
 
@@ -40,6 +40,7 @@ async def test_request_seed_reasoning_usage():
     pol, seen = _policy(lambda r: httpx.Response(200, json=_completion(msg, usage)))
     d = await pol.decide(MSGS, TOOLS, seed=42)
     assert seen[0]["seed"] == 42 and seen[0]["temperature"] == 0.5 and seen[0]["max_tokens"] == 64 and seen[0]["top_k"] == 20
+    assert seen[0]["min_p"] == 0.05
     assert d.seed_sent == 42 and d.raw_request["seed"] == 42
     assert d.history_message == {"role": "assistant", "content": "", "reasoning_content": "think  verbatim\n", "tool_calls": [{"id": "abc", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]}
     assert (d.usage.input_tokens, d.usage.output_tokens, d.usage.cached_input_tokens, d.usage.reasoning_tokens, d.usage.source) == (100, 20, 64, 5, "provider")
@@ -139,3 +140,10 @@ async def test_server_reported_unparsed_tool_call_is_a_parse_error():
     d = await pol.decide(MSGS, TOOLS, None)
     assert "tool_calls" not in d.history_message
     assert d.parse_errors == ["unparsed_tool_call: invalid JSON in <tool_call> block"]
+
+
+def test_sampling_fields_cannot_be_duplicated_in_extra_body():
+    with pytest.raises(ValueError, match="top_k"):
+        SamplingConfig(top_k=64, extra_body={"top_k": 20})
+    with pytest.raises(ValueError, match="temperature"):
+        SamplingConfig(extra_body={"temperature": 1.0})

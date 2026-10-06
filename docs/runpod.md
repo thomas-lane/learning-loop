@@ -257,7 +257,10 @@ learner sees and what is counted therefore stay the same as with the transformer
   digits, `.`, `_` and `-` replaced by `_` (`vllm==0.30.0` → `.engines/vllm__0.30.0/`). The
   install takes a few minutes on a new pod and counts against `inference.startup_timeout_sec`.
 - Every sampling parameter is sent explicitly with each request (`--generation-config vllm`), so
-  the model repository's own sampling defaults never apply. Prefix caching is off, because a
+  the model repository's own sampling defaults never apply: `temperature`, `top_p` and `top_k`
+  come from the experiment's `sampling` blocks (an unset `top_k` is off), and `hf_server`
+  rejects sampling parameters it does not apply (`min_p`, penalties, `logit_bias`) instead of
+  ignoring them. Prefix caching is off, because a
   cached prefix is computed differently from a recomputed one and would change outputs.
 - In experiments that train LoRA adapters, base checkpoints are served through a
   [zero LoRA](glossary.md) (as with the transformers engine), so every checkpoint pays the same

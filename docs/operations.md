@@ -113,13 +113,14 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | stop that process group on the host, then resume |
 | many `infra:` stops (connection errors, timeouts) | the endpoint or tunnel went away, or `inference.request_timeout_sec` is too short | check the server log and tunnel; attempts are retried `runtime.infra_retries` times |
 | `model_error:...context_length_exceeded` | the conversation outgrew the context | lower `episode.max_output_chars` or `episode.max_turns`, or serve a longer context |
+| `model_error:...sampling parameters [...] are not supported` | a `sampling.extra_body` sets a parameter `hf_server` does not apply (e.g. `min_p`, `repetition_penalty`) | remove it; `hf_server` applies `temperature`, `top_p`, `top_k` and `max_output_tokens` only |
 | Hugging Face warning about unauthenticated requests | a model load contacted the hub | harmless |
 
 ### Episodes and stages
 
 | Symptom | Cause | Action |
 |---|---|---|
-| frequent `budget:output_truncated` | replies hit `max_output_tokens` mid tool call | raise `episode.sampling.max_output_tokens` |
+| frequent `budget:output_truncated` | replies hit `max_output_tokens` mid tool call or mid thought | raise `episode.sampling.max_output_tokens` |
 | `model_error:unparsed_tool_call` | the reply's only tool calls were unparseable | none: model behavior, counted as a malformed turn |
 | `budget:usage_unavailable` | `max_episode_tokens` is set but the endpoint reports no usage | use an endpoint that reports usage, or drop the token budget |
 | `infra:RewardFileNotFoundError` and the trial's `verifier/test-stdout.txt` says `environment probe failed; not grading: <checks>` | the verifier container does not match the task's profile: `egress:dns`/`egress:tcp` (it has network), `env:<NAME>`, `tool:<name>`, `hostname` or `process:<name>` | for egress, check that the task directory was rendered by the current renderer (its `tests/docker-compose.yaml` sets `network_mode: "none"`) and that nothing overrides it; otherwise compare the image with the profile in `src/learning_loop/tasks/spec.py` |
@@ -139,7 +140,9 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 
 | Reason | Meaning | Action |
 |---|---|---|
-| `nonempty_reasoning`, `nonempty_assistant_content` | the learner writes text or reasoning with its tool calls | disable reasoning in the model profile (`chat_template_kwargs: {enable_thinking: false}`) |
+| `nonempty_reasoning` | the learner reasons before its tool calls while `editor.assistant_text_policy` is `reject_nonempty` | set `editor.assistant_text_policy: keep_reasoning`, or disable thinking in the model profile (`chat_template_kwargs: {enable_thinking: false}`) |
+| `nonempty_assistant_content` | the learner writes visible text with its tool calls | none; such turns are never editable ([why](experiment.md#editing)) |
+| `empty_reasoning` | under `keep_reasoning`, the turn's thought is empty, which the chat template cannot render as generated | none; expected to be rare |
 | `skipped:no_editable_turns` (status `abstained`) | no turn of the source is editable, so no editor request was made | none if expected; which turns are editable is defined in [experiment.md](experiment.md#editing) |
 | `no_tool_call`, `multiple_tool_calls:N`, `unknown_editor_tool:...`, `unparsed_tool_call:...`, `response_schema:...`, `identical_replacement` | the editor did not answer with exactly one valid answer-tool call (`unparsed_tool_call` gives the parse error of a malformed call) | try `editor.mode: external` via `edit-replay` |
 | `editor_output_truncated` (with the reasons above) | the editor's reply hit `editor.sampling.max_output_tokens` before a complete answer call | raise `editor.sampling.max_output_tokens` |

@@ -223,8 +223,11 @@ class OpenAIChatPolicy:
         seed_sent = seed if (self.spec.send_seed and seed is not None) else None
         if seed_sent is not None:
             req["seed"] = seed_sent
-        if s.extra_body:
-            req["extra_body"] = dict(s.extra_body)
+        extra = dict(s.extra_body)
+        if s.top_k is not None:  # not an OpenAI parameter, so it travels in the request body
+            extra["top_k"] = s.top_k
+        if extra:
+            req["extra_body"] = extra
         return req, seed_sent
 
     async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision:

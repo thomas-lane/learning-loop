@@ -10,7 +10,7 @@ import pytest
 
 from learning_loop.serving.hf_server import ApiError, make_server, validate_request
 from learning_loop.serving.managed import http_json, port_in_use
-from learning_loop.serving.tool_parse import parse_completion, parse_gemma4, parse_qwen3
+from learning_loop.serving.tool_parse import generation_prefix, parse_completion, parse_gemma4, parse_qwen3
 
 
 def test_qwen3_single_call_roundtrips_canonical_json():
@@ -66,6 +66,20 @@ def test_gemma4_call_values_and_reasoning():
     assert parse_completion("gemma4", text, "s").tool_calls == p.tool_calls
 
 
+def test_gemma4_completion_inside_a_prefilled_thought():
+    prompt = "...<tool_response|><|channel>thought\n"
+    assert generation_prefix("gemma4", prompt) == "<|channel>thought\n"
+    assert generation_prefix("gemma4", "<|turn>model\n<|channel>thought\n<channel|>") == ""  # closed: nothing open
+    assert generation_prefix("qwen3_xml", prompt) == ""
+    text = f"count lines\n<channel|><|tool_call>call:bash{{command:{Q}wc -l a{Q}}}<tool_call|>"
+    p = parse_gemma4(generation_prefix("gemma4", prompt) + text, "s")
+    assert p.reasoning_content == "count lines" and p.content == "" and len(p.tool_calls) == 1
+    p = parse_gemma4(generation_prefix("gemma4", prompt) + "<channel|><|tool_call>call:bash{}<tool_call|>", "s")
+    assert p.reasoning_content == "" and len(p.tool_calls) == 1          # empty thought: present but empty
+    p = parse_gemma4(generation_prefix("gemma4", prompt) + "still thinking when the limit hit", "s")
+    assert p.reasoning_content == "still thinking when the limit hit" and p.content == "" and p.tool_calls == []
+
+
 def test_gemma4_malformed_calls_stay_visible():
     for bad in [f"<|tool_call>call:bash{{command:{Q}ls}}<tool_call|>",       # unterminated string
                 f"<|tool_call>call:bash{{command:{Q}ls{Q}}} extra<tool_call|>",  # trailing text
@@ -80,7 +94,8 @@ def test_gemma4_malformed_calls_stay_visible():
 
 def test_validate_request_defaults_and_rejections():
     r = validate_request({"model": "m", "messages": [{"role": "user", "content": "hi"}]}, "m")
-    assert (r["temperature"], r["top_p"], r["max_tokens"], r["seed"]) == (1.0, 1.0, None, None)
+    assert (r["temperature"], r["top_p"], r["top_k"], r["max_tokens"], r["seed"]) == (1.0, 1.0, 0, None, None)
+    assert validate_request({"messages": [{"role": "user"}], "top_k": 64}, "m")["top_k"] == 64
     assert validate_request({"messages": [{"role": "user"}], "max_completion_tokens": 5}, "m")["max_tokens"] == 5
     for body, status in [
         ({"model": "other", "messages": [{}]}, 404),
@@ -89,6 +104,10 @@ def test_validate_request_defaults_and_rejections():
         ({"messages": [{}], "n": 2}, 400),
         ({"messages": [{}], "tool_choice": "required"}, 400),
         ({"messages": [{}], "seed": "7"}, 400),
+        ({"messages": [{}], "top_k": -1}, 400),
+        ({"messages": [{}], "top_k": 1.5}, 400),
+        ({"messages": [{}], "min_p": 0.05}, 400),               # accepted elsewhere, never silently ignored here
+        ({"messages": [{}], "repetition_penalty": 1.1}, 400),
     ]:
         with pytest.raises(ApiError) as e:
             validate_request(body, "m")
@@ -143,3 +162,25 @@ def test_http_routes(server):
     assert http_json(server + "/nope")[0] == 404
     host, port = server.rsplit(":", 1)
     assert port_in_use("127.0.0.1", int(port))
+
+
+def test_hf_engine_applies_top_k_and_greedy_ignores_sampling():
+    import torch
+
+    from learning_loop.serving.hf_server import HFEngine
+
+    seen = []
+
+    class Model:
+        def generate(self, input_ids, attention_mask, generation_config):
+            seen.append(generation_config)
+            return torch.cat([input_ids, torch.tensor([[5, 7]])], dim=1)
+
+    eng = object.__new__(HFEngine)  # generation only: no weights, tokenizer or template
+    eng.model, eng.device, eng.eot, eng.pad_id = Model(), "cpu", {7}, 0
+    req = validate_request({"messages": [{"role": "user"}], "temperature": 1.0, "top_p": 0.95, "top_k": 64, "seed": 3}, "m")
+    ids, applied = eng.generate([1, 2], req, 8)
+    assert ids == [5, 7] and (seen[0].temperature, seen[0].top_p, seen[0].top_k, seen[0].do_sample) == (1.0, 0.95, 64, True)
+    assert applied["top_k"] == 64
+    eng.generate([1, 2], validate_request({"messages": [{"role": "user"}], "temperature": 0, "top_k": 64}, "m"), 8)
+    assert seen[1].do_sample is False

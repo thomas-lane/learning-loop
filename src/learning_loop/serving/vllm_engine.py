@@ -238,7 +238,7 @@ class VllmEngine(ServingCore):
             "n": 1,
             "temperature": 0.0 if greedy else req["temperature"],
             "top_p": 1.0 if greedy else req["top_p"],
-            "top_k": 0,
+            "top_k": 0 if greedy else req["top_k"],
             "min_p": 0.0,
             "repetition_penalty": 1.0,
             "presence_penalty": 0.0,

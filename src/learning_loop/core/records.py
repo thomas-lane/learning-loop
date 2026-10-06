@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -88,8 +88,16 @@ class SamplingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     temperature: float | None = Field(default=None, description="Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy.")
     top_p: float | None = Field(default=None, description="Nucleus sampling threshold; null leaves the server default.")
+    top_k: int | None = Field(default=None, ge=0, description="Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`).")
     max_output_tokens: int | None = Field(default=None, description="Per-request generation limit (sent as `max_tokens`), reasoning included.")
-    extra_body: dict[str, Any] = Field(default_factory=dict, description="Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM).")
+    extra_body: dict[str, Any] = Field(default_factory=dict, description="Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply.")
+
+    @model_validator(mode="after")
+    def _no_duplicate_fields(self) -> "SamplingConfig":
+        dup = sorted(set(self.extra_body) & {"temperature", "top_p", "top_k", "max_tokens", "seed"})
+        if dup:
+            raise ValueError(f"extra_body must not set {dup}: use the sampling fields")
+        return self
 
 
 class PolicySpec(Record):

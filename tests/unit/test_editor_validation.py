@@ -81,6 +81,26 @@ def test_empty_reasoning_string_is_allowed(tmp_path):
     assert check(prop(), turns) == []
 
 
+def test_keep_reasoning_policy_edits_turns_with_reasoning(tmp_path):
+    _, turns = source(tmp_path, overrides={0: {"reasoning": "I should list the logs first."}})
+    assert check(prop(), turns, assistant_text_policy="keep_reasoning") == []
+    _, turns = source(tmp_path / "content", overrides={0: {"reasoning": "x", "content": "Let me look."}})
+    assert "nonempty_assistant_content" in check(prop(), turns, assistant_text_policy="keep_reasoning")
+    # The chat template drops an empty thought, so such a turn could not be rendered as generated.
+    _, turns = source(tmp_path / "empty", overrides={0: {"reasoning": ""}})
+    assert "empty_reasoning" in check(prop(), turns, assistant_text_policy="keep_reasoning")
+    assert check(prop(), turns) == []
+
+
+def test_edited_message_keeps_reasoning_and_replaces_only_the_call():
+    orig = {"role": "assistant", "content": "", "reasoning_content": "list first",
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]}
+    edited = make_edited_message(orig, ProposedCall(name="bash", arguments={"command": "find /app"}))
+    assert edited["reasoning_content"] == "list first" and edited["tool_calls"][0]["id"] == "call_0"
+    assert json.loads(edited["tool_calls"][0]["function"]["arguments"]) == {"command": "find /app"}
+    assert {k: v for k, v in edited.items() if k != "tool_calls"} == {k: v for k, v in orig.items() if k != "tool_calls"}
+
+
 def test_final_answer_turn_and_missing_turn(tmp_path):
     _, turns = source(tmp_path)
     assert "no_tool_call_turn" in check(prop(turn_index=4), turns)

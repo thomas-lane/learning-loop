@@ -82,13 +82,13 @@ def test_vllm_engine_round_trip_uses_our_rendering_parser_and_counts(qwen, fake_
     try:
         msgs = [{"role": "user", "content": "list files"}]
         tools = [{"type": "function", "function": {"name": "bash", "description": "run", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}}]
-        r = eng.complete({"model": "base:x", "messages": msgs, "tools": tools, "temperature": 0.7, "top_p": 0.9, "max_tokens": 64, "seed": 9})
+        r = eng.complete({"model": "base:x", "messages": msgs, "tools": tools, "temperature": 0.7, "top_p": 0.9, "top_k": 64, "max_tokens": 64, "seed": 9})
         (req,) = _requests(fake_vllm)
         want = encode(tok, render_text(tok, msgs, tools, add_generation_prompt=True, chat_template_kwargs=prof.chat_template_kwargs))
         body = req["request"]
         assert body["prompt"] == want and body["model"] == "base:x"  # token ids in; the served LoRA module
         assert {k: body[k] for k in ("temperature", "top_p", "top_k", "min_p", "repetition_penalty", "seed", "max_tokens")} == {
-            "temperature": 0.7, "top_p": 0.9, "top_k": 0, "min_p": 0.0, "repetition_penalty": 1.0, "seed": 9, "max_tokens": 64}
+            "temperature": 0.7, "top_p": 0.9, "top_k": 64, "min_p": 0.0, "repetition_penalty": 1.0, "seed": 9, "max_tokens": 64}
         assert body["skip_special_tokens"] is False and body["return_token_ids"] is True and eos in body["stop_token_ids"]
         argv = req["argv"]
         assert "--generation-config" in argv and argv[argv.index("--generation-config") + 1] == "vllm"
