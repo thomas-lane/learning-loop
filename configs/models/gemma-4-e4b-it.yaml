@@ -1,4 +1,4 @@
-# Target learner (owner's deployment). NOT trained or loaded on the laptop (bf16 weights ~16 GB).
+# Target learner. NOT trained or loaded on the laptop (bf16 weights ~16 GB).
 # Verified from ~/.cache/huggingface: refs/main of google/gemma-4-E4B-it and the snapshot's
 # config.json (architectures: Gemma4ForConditionalGeneration, model_type gemma4, dtype bfloat16).
 schema_version: 1
@@ -34,7 +34,7 @@ serving:
     adapter_formats: [gguf_lora]
     status: untested
     notes: >-
-      Base model served today by the owner's llama.cpp (existing evaluation/configs/local-llama.yaml).
+      The base model can also be served by llama.cpp (evaluation/configs/local-llama.yaml).
       Serving a trained adapter needs converting the PEFT LoRA to GGUF (llama.cpp
       convert_lora_to_gguf.py) and loading it with --lora; that conversion is not implemented or
       tested here. The server's reasoning setting must match chat_template_kwargs.

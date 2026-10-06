@@ -1,6 +1,5 @@
-# Small real pilot on the owner's target model. Hyperparameters are INITIAL CHOICES, not tuned.
-# Needs a CUDA host (see configs/machines/examples/lab-gpu.yaml); the Gemma serving/training path
-# is declared but untested in this repository (see configs/models/gemma-4-e4b-it.yaml).
+# Small real pilot on the target model. Hyperparameters are INITIAL CHOICES, not tuned.
+# Needs a CUDA host (see configs/machines/examples/lab-gpu.yaml or runpod-a100-vllm.yaml).
 name: pilot
 description: Verified efficiency edits -> LoRA DPO, 3 cycles, log-triage + fix-stats, csv-revenue held out.
 condition: learning

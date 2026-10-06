@@ -1,4 +1,4 @@
-# Bounded live smoke test for an M5 MacBook Air (32 GB, fanless): the real small learner and
+# Bounded live smoke test for a 32 GB Apple-silicon laptop: the real small learner and
 # editor, one short Docker task, one proposal, one continuation per branch, 2 optimizer steps.
 # Zero accepted edits is a valid outcome (the cycle is then a recorded no-update cycle).
 # Engineering check only; NOT evidence of learning efficacy or Gemma/GPU readiness.

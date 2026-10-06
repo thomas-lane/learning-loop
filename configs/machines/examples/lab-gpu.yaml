@@ -1,6 +1,5 @@
 # Linux coordinator runs Docker locally; one GPU VM (e.g. a Runpod pod) is a plain SSH host
 # that both serves (sequentially) and trains. Aliases/keys live in ~/.ssh/config.
-# UNTESTED: no such host was available when this example was written.
 name: lab-gpu
 coordinator:
   kind: ssh

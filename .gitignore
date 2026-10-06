@@ -21,3 +21,4 @@ configs/machines/local/*
 .env
 *.env
 !.env.example
+.lavish/
