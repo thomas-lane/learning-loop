@@ -62,6 +62,7 @@ driver's CUDA version and warns if it is below 13. Created pods get this automat
 | Learner | Suggested GPU memory | Notes |
 |---|---|---|
 | Qwen3-0.6B, Qwen3-1.7B | 24 GB (e.g. RTX 3090/4090, A5000, L4) | serving and training take turns, so only one model is on the GPU at a time |
+| Gemma-4-12B (`pilot-12b.yaml`) | 80 GB (A100/H100) for `max_length: 32768` | serving (vLLM, 131072-token window) leaves a KV cache of about 1.8M tokens; training with gradient checkpointing and `dpo.split_pair_backward` peaks at 58 GB for a 31.9k-token pair, 68 GB for 39.6k and 71 GB for 42.2k (completions of about 450 tokens; each completion token costs more than a prompt token, because its full-vocabulary float32 logits are kept) |
 | Gemma-4-E4B (`pilot.yaml`) | 80 GB (A100/H100) for `max_length: 32768` | serving uses 15 GB; training with gradient checkpointing peaks at 24 GB for a 7.3k-token pair and 54 GB for a 28.9k-token pair (about 1.3 GB per 1k tokens on top of the weights) |
 | Gemma-4-E2B | 24–48 GB depending on `max_length` | bf16 weights are about 10 GB |
 

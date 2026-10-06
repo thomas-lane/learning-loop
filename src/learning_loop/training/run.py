@@ -26,6 +26,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+# Long pairs allocate and free large, differently sized activation blocks; expandable segments let
+# the CUDA allocator reuse freed memory instead of stranding it between fixed-size blocks (several
+# GB at 47k tokens on an A100). Read when torch initializes CUDA, so set before any torch import.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 from pydantic import ValidationError
 
 from ..core.interfaces import TrainRequest
