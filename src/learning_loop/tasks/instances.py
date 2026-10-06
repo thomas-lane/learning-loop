@@ -284,6 +284,35 @@ def materialize_instance(splits: Splits, inst: InstanceDef, dest_root: Path) -> 
     )
 
 
+def calibration_ids(families: list[str], difficulties: list[str] | None, n: int) -> list[InstanceDef]:
+    """Instances for calibrating difficulty: seeds CALIBRATION_SEEDS.start .. start + n - 1 for
+    every family and difficulty (all of a family's difficulties when `difficulties` is None)."""
+    from evaluation.families import FAMILIES
+
+    if not 1 <= n <= len(CALIBRATION_SEEDS):
+        raise ValueError(f"instances per difficulty must be 1-{len(CALIBRATION_SEEDS)}")
+    out = []
+    for name in families:
+        if name not in FAMILIES:
+            raise ValueError(f"unknown family {name!r}")
+        for d in difficulties or list(FAMILIES[name].difficulties):
+            if d not in FAMILIES[name].difficulties:
+                raise ValueError(f"unknown difficulty {d!r} for {name}")
+            for seed in range(CALIBRATION_SEEDS.start, CALIBRATION_SEEDS.start + n):
+                out.append(InstanceDef(id=f"{name}/{d}/s{seed}", family=name, difficulty=d, seed=seed, split=Split.DEV))
+    return out
+
+
+def materialize_calibration(defs: list[InstanceDef], dest_root: str | Path) -> dict[str, TaskInstance]:
+    """Render calibration instances (reserved seeds, which no split file may declare) under dest_root."""
+    dest_root = Path(dest_root)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    empty = Splits(name="calibration", path="", held_out_families=[], families={}, instances={}, panels={})
+    out = {d.instance_id: materialize_instance(empty, d, dest_root) for d in defs}
+    atomic_write_json(dest_root / "instances.json", {k: v.model_dump(mode="json") for k, v in sorted(out.items())})
+    return out
+
+
 def materialize(splits: Splits, dest_root: str | Path, panels: list[str] | None = None, ids: list[str] | None = None) -> dict[str, TaskInstance]:
     """Write task dirs for the selected instances (default: all) under dest_root.
 

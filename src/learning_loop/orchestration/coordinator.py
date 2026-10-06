@@ -1303,6 +1303,99 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
     return run_dir
 
 
+CALIBRATION_TARGET = (0.2, 0.8)  # base-model success rate a family's difficulty is tuned into
+
+
+def calibrate(exp_path: str | Path, machine_path: str | Path, checkpoint: str, families: list[str] | None = None, difficulties: list[str] | None = None,
+              instances_per_difficulty: int = 6, attempts: int = 3, run_id: str | None = None, overrides: list[str] | None = None, runs_dir: Path | None = None) -> Path:
+    """Run a checkpoint on calibration instances (reserved seeds, never in a split) of every
+    family and difficulty, and report each one's success rate against CALIBRATION_TARGET. The
+    output is its own run of kind `calibration`, which nothing else reads."""
+    from evaluation.families import FAMILIES
+
+    from ..tasks import instances as task_mod
+
+    overrides = [*(overrides or []), f"evaluation.attempts_per_instance={attempts}"]
+    exp, raw, machine, learner, editor = load_all(exp_path, machine_path, overrides)
+    if machine.inference.mode == "scripted" and not exp.learner.scripted_policy:
+        raise PlanError("scripted inference requires learner.scripted_policy")
+    ckpt = checkpoint_ref(checkpoint, learner)
+    if ckpt.model_profile != learner.name:
+        raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
+    check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
+    defs = task_mod.calibration_ids(families or sorted(FAMILIES), difficulties, instances_per_difficulty)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = run_id or f"calibration-{learner.name}-{stamp}"
+    run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    instances = task_mod.materialize_calibration(defs, run_dir / "tasks")
+    panels = {"calibration": [d.instance_id for d in defs]}
+    ctx = RunContext(run_dir, run_id, exp, raw, machine, learner, editor, instances, panels, {"calibration": Split.DEV}, {i: Split.DEV for i in instances}, [])
+    write_once_json(
+        run_dir / "run.json",
+        {
+            "run_id": run_id,
+            "kind": "calibration",
+            "experiment_path": str(exp_path),
+            "experiment": exp.model_dump(mode="json"),
+            "machine": machine.model_dump(mode="json"),
+            "model_profiles": {"learner": learner.model_dump(mode="json"), "editor": editor.model_dump(mode="json")},
+            "initial_checkpoint": ckpt.model_dump(mode="json"),
+            "evaluated_checkpoint": ckpt.model_dump(mode="json"),
+            "evaluated_panels": ["calibration"],
+            "panels": panels,
+            "panel_split": {"calibration": Split.DEV.value},
+            "held_out_families": [],
+            "instances": {k: v.model_dump(mode="json") for k, v in instances.items()},
+            "calibration": {"instances_per_difficulty": instances_per_difficulty, "attempts": attempts, "target": list(CALIBRATION_TARGET)},
+        },
+    )
+    with run_lock(run_dir):
+        record_provenance(run_dir, run_id)
+    asyncio.run(_run_calibration(ctx, ckpt))
+    return run_dir
+
+
+async def _run_calibration(ctx: RunContext, ckpt: CheckpointRef) -> None:
+    await _run_evaluation(ctx, ckpt, ["calibration"])
+    calibration_report(ctx)
+
+
+def calibration_report(ctx: RunContext) -> list[dict[str, Any]]:
+    """Success rate per (family, difficulty) over the calibration episodes, written to
+    reports/calibration.csv. Episodes that stopped for infrastructure reasons are counted
+    apart and left out of the rate, so a flaky host does not read as a hard task."""
+    import csv
+
+    from evaluation.families import FAMILIES
+
+    cells: dict[tuple[str, str], dict[str, int]] = {}
+    for path in sorted(ctx.stage_dir(0, "eval").glob("items/*/summary.json")):
+        s = EpisodeSummary.model_validate(read_json(path))
+        inst = ctx.instances[s.instance_id]
+        c = cells.setdefault((inst.family, inst.difficulty or ""), {"episodes": 0, "successes": 0, "infra": 0})
+        if s.stop_category == StopCategory.INFRA:
+            c["infra"] += 1
+            continue
+        c["episodes"] += 1
+        c["successes"] += bool(s.success)
+    lo, hi = CALIBRATION_TARGET
+    rows = []
+    for (family, difficulty), c in sorted(cells.items()):
+        rate = c["successes"] / c["episodes"] if c["episodes"] else None
+        verdict = "no episodes" if rate is None else "too hard" if rate < lo else "too easy" if rate > hi else "in range"
+        rows.append({"family": family, "cluster": FAMILIES[family].cluster if family in FAMILIES else "", "difficulty": difficulty,
+                     "episodes": c["episodes"], "successes": c["successes"], "success_rate": None if rate is None else round(rate, 3),
+                     "infra_excluded": c["infra"], "verdict": verdict})
+    out = ctx.run_dir / "reports" / "calibration.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["family", "cluster", "difficulty", "episodes", "successes", "success_rate", "infra_excluded", "verdict"])
+        w.writeheader()
+        w.writerows(rows)
+    return rows
+
+
 async def _run_evaluation(ctx: RunContext, ckpt: CheckpointRef, panels: list[str]) -> None:
     with run_lock(ctx.run_dir):
         with ctx.pods():
@@ -1392,6 +1485,8 @@ def resume_run(run_dir: Path, machine_path: str | Path | None = None) -> None:
     elif kind == "evaluation":
         ckpt = CheckpointRef.model_validate(meta["evaluated_checkpoint"])
         asyncio.run(_run_evaluation(ctx, ckpt, meta["evaluated_panels"]))
+    elif kind == "calibration":
+        asyncio.run(_run_calibration(ctx, CheckpointRef.model_validate(meta["evaluated_checkpoint"])))
     elif kind == "edit_replay":
         imp = meta["imported_sources"]
         src = open_run(Path(imp["run"]))

@@ -21,6 +21,7 @@ on tasks it never trained on? Method and metrics: [docs/experiment.md](docs/expe
 | Component | Status |
 |---|---|
 | 35 task families in 7 clusters as specs, generation checks, renderer (`network_mode: none`, fixed env and file times), shared grader, environment probe, splits | working; every family checked in Docker (oracle, no-op and shortcuts score their predicted rewards, oracle replay); the agent-container probe and the Docker-host preflight run in every Docker episode and run (checked by the Docker tests and `loop smoke fixture-docker`) |
+| `loop calibrate` (difficulty calibration on reserved seeds) | runs on the local fixture backend; **untested** with a real model |
 | Episode loop, replay, branching, acceptance, preference export | working on the local fixture backend and Docker |
 | Orchestration, resume, infra retries, controls, reports, `loop dashboard` | working on two-cycle fixture runs; dashboard also used on a live Runpod run |
 | LoRA DPO (Qwen3-0.6B), publish and reload, serving through the reference HF server | working on MPS and CUDA |

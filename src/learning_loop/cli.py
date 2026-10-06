@@ -135,6 +135,19 @@ def cmd_evaluate(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate(a: argparse.Namespace) -> int:
+    from .orchestration import coordinator as co
+
+    run_dir = co.calibrate(a.experiment, a.machines, a.checkpoint, families=a.family, difficulties=a.difficulty,
+                           instances_per_difficulty=a.instances, attempts=a.attempts, run_id=a.run_id, overrides=a.set)
+    rows = co.calibration_report(co.open_run(run_dir))
+    for r in rows:
+        rate = "-" if r["success_rate"] is None else f"{r['success_rate']:.0%}"
+        print(f"{r['family']:20s} {r['difficulty']:7s} {r['successes']:>3}/{r['episodes']:<3} {rate:>5}  {r['verdict']}")
+    print(f"calibration run: {run_dir} (table: reports/calibration.csv)")
+    return 0
+
+
 def cmd_edit_replay(a: argparse.Namespace) -> int:
     from .orchestration import coordinator as co
 
@@ -302,6 +315,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--panels", nargs="+", required=True, help="panel names from the experiment's split file")
     s.add_argument("--final", action="store_true", help="allow final-test/external panels (use only after method decisions are frozen)")
     s.add_argument("--run-id", help="run directory name (default: <experiment>-eval-<UTC-stamp>)")
+    s.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help=SET_HELP)
+
+    s = _cmd(sub, "calibrate", cmd_calibrate, "Measure a checkpoint's success rate per family and difficulty",
+             "Creates a run of kind `calibration`: the checkpoint (normally the planned learner's base model)\n"
+             "runs on --instances instances per family and difficulty, drawn from the seeds reserved for\n"
+             "calibration (900000-999999, which no split may use), --attempts times each, with the\n"
+             "experiment's episode settings. Prints and writes reports/calibration.csv: each family and\n"
+             "difficulty's success rate against the 20-80% target (episodes that stopped for infrastructure\n"
+             "reasons are counted apart). Nothing else reads calibration runs; `loop resume` continues one.\n"
+             "Side effects: Docker; serving the checkpoint (managed inference).")
+    s.add_argument("--experiment", required=True, help="supplies the learner and episode settings")
+    s.add_argument("--machines", required=True, help="machine profile YAML")
+    s.add_argument("--checkpoint", default="base", help="'base' (default) or a published checkpoint directory")
+    s.add_argument("--family", action="append", help="calibrate only this family (repeatable; default: every family)")
+    s.add_argument("--difficulty", action="append", help="calibrate only this difficulty (repeatable; default: every difficulty)")
+    s.add_argument("--instances", type=int, default=6, help="instances per family and difficulty (default 6)")
+    s.add_argument("--attempts", type=int, default=3, help="attempts per instance (default 3)")
+    s.add_argument("--run-id", help="run directory name (default: calibration-<learner>-<UTC-stamp>)")
     s.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help=SET_HELP)
 
     s = _cmd(sub, "edit-replay", cmd_edit_replay, "Edit and verify saved source trajectories with another editor",

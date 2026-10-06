@@ -21,9 +21,14 @@ How to run a real experiment, watch it, and recover when something goes wrong. C
    that needs no action.
 3. **Validate every configuration**, controls included: `uv run loop validate <experiment> --machines <profile>`.
    Read the notes it prints (untested backends, fixture components).
-4. **Calibrate.** Run the frozen baseline (`experiments/frozen-baseline.yaml`, adjusted to your
-   learner) to see which dev instances are easy, intermittent or never solved. Tune on dev panels
-   only, so the final panels stay unseen until step 8.
+4. **Calibrate.** After adding or changing families, run `uv run loop calibrate --experiment
+   <experiment> --machines <profile>` with the planned learner. It runs the base model on
+   reserved-seed instances of every family and difficulty ([why](experiment.md#how-results-are-measured)),
+   prints each one's success rate, and writes `reports/calibration.csv`. For a family outside
+   20-80%, adjust its difficulty settings, bump its `version`, and rerun just that family
+   (`--family <name>`). Then run the frozen baseline (`experiments/frozen-baseline.yaml`, adjusted
+   to your learner) to see which dev instances are easy, intermittent or never solved. Tune on
+   dev panels only, so the final panels stay unseen until step 8.
 5. **Run each condition with several loop seeds**, keeping `seeds.root` fixed so evaluations pair up:
    ```bash
    for s in 0 1 2; do

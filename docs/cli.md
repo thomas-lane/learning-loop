@@ -80,6 +80,7 @@ uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
 | [`loop resume`](#loop-resume) | Resume a run from its manifests |
 | [`loop stage`](#loop-stage) | Run one stage of one cycle inside an existing run |
 | [`loop evaluate`](#loop-evaluate) | Evaluate a saved checkpoint on declared panels |
+| [`loop calibrate`](#loop-calibrate) | Measure a checkpoint's success rate per family and difficulty |
 | [`loop edit-replay`](#loop-edit-replay) | Edit and verify saved source trajectories with another editor |
 | [`loop status`](#loop-status) | Print per-cycle stage status |
 | [`loop report`](#loop-report) | Regenerate the run's CSV and markdown reports |
@@ -203,6 +204,34 @@ Side effects: Docker; serving the checkpoint (managed inference).
 | `--panels` `PANELS` ... | yes |  | panel names from the experiment's split file |
 | `--final` |  |  | allow final-test/external panels (use only after method decisions are frozen) |
 | `--run-id` `RUN_ID` |  |  | run directory name (default: `<experiment>-eval-<UTC-stamp>`) |
+| `--set` `KEY=VALUE` ... |  |  | override an experiment value, e.g. --set cycles=1 (YAML-parsed; repeatable; recorded in run.json) |
+
+### loop calibrate
+
+Measure a checkpoint's success rate per family and difficulty.
+
+```text
+loop calibrate [-h] --experiment EXPERIMENT --machines MACHINES [--checkpoint CHECKPOINT] [--family FAMILY] [--difficulty DIFFICULTY] [--instances INSTANCES] [--attempts ATTEMPTS] [--run-id RUN_ID] [--set KEY=VALUE]
+```
+
+Creates a run of kind `calibration`: the checkpoint (normally the planned learner's base model)
+runs on --instances instances per family and difficulty, drawn from the seeds reserved for
+calibration (900000-999999, which no split may use), --attempts times each, with the
+experiment's episode settings. Prints and writes reports/calibration.csv: each family and
+difficulty's success rate against the 20-80% target (episodes that stopped for infrastructure
+reasons are counted apart). Nothing else reads calibration runs; `loop resume` continues one.
+Side effects: Docker; serving the checkpoint (managed inference).
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--experiment` `EXPERIMENT` | yes |  | supplies the learner and episode settings |
+| `--machines` `MACHINES` | yes |  | machine profile YAML |
+| `--checkpoint` `CHECKPOINT` |  | `base` | 'base' (default) or a published checkpoint directory |
+| `--family` `FAMILY` ... |  |  | calibrate only this family (repeatable; default: every family) |
+| `--difficulty` `DIFFICULTY` ... |  |  | calibrate only this difficulty (repeatable; default: every difficulty) |
+| `--instances` `INSTANCES` |  | `6` | instances per family and difficulty (default 6) |
+| `--attempts` `ATTEMPTS` |  | `3` | attempts per instance (default 3) |
+| `--run-id` `RUN_ID` |  |  | run directory name (default: `calibration-<learner>-<UTC-stamp>`) |
 | `--set` `KEY=VALUE` ... |  |  | override an experiment value, e.g. --set cycles=1 (YAML-parsed; repeatable; recorded in run.json) |
 
 ### loop edit-replay

@@ -191,6 +191,7 @@ checkpoints/cNNN-<hash12>/   read-only, published by atomic rename
 |---|---|---|---|
 | `learning` (no `kind` field) | `loop run` | see above | the layout above |
 | `evaluation` | `loop evaluate` | `<experiment>-eval-<stamp>` | `cycles/cycle-000/eval/` only (no `cycle.json`); `run.json` names the checkpoint and panels |
+| `calibration` | `loop calibrate` | `calibration-<learner>-<stamp>` | `cycles/cycle-000/eval/` only, on reserved-seed instances of every family and difficulty (`run.json` names the checkpoint and the `calibration` settings); `reports/calibration.csv` has each family and difficulty's success rate and verdict against the 20-80% target |
 | `edit_replay` | `loop edit-replay` | `<experiment>-editreplay-<stamp>` | `cycles/cycle-000/{edit,verify,dataset}/`; `imported_sources` in `run.json` names the source run, read in place |
 
 ## Other files

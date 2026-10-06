@@ -64,6 +64,17 @@ loop compare runs/baseline --vs runs/learning-seed1 runs/learning-seed2 runs/lea
 Smoke runs and runs with *fixtures* (scripted stand-ins for the learner, editor or trainer, used
 to test the plumbing without a model) never support statistical claims.
 
+**Task difficulty is calibrated before families are used.** A family on which the base learner
+always fails or always succeeds cannot show an effect in either direction. So before a family
+version is used in an experiment, `loop calibrate` runs the planned learner's base checkpoint on
+instances of every family and difficulty, and each difficulty's success rate should fall in
+20-80%. Families outside that range get their difficulty settings adjusted and their `version`
+bumped, which renders new instances. Calibration uses only the seeds reserved for it
+(900000-999999), which split validation rejects. That way, tuning difficulty never looks at an
+instance that is later trained on or evaluated, which would bias those results toward whatever
+the tuning happened to see. Calibration runs are their own run kind, and nothing reads them
+except whoever adjusts the families.
+
 ## One cycle
 
 Cycle *c* starts with learner checkpoint *L_c*, which stays fixed for the whole cycle.
