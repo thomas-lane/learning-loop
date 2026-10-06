@@ -183,3 +183,31 @@ async def test_unparsed_tool_call_stops_as_model_error(tmp_path, instance):
     assert run.core.stop_category == StopCategory.MODEL_ERROR
     turns = load_turns(read_events(tmp_path / "events.jsonl"))
     assert turns[0].malformed
+
+
+async def test_a_tool_call_cut_off_by_the_output_limit_is_a_budget_stop(tmp_path, instance):
+    """An unterminated tool-call block with finish_reason=length ran out of tokens; it is not a malformed call."""
+    from evaluation.agents.tools import ToolConfig
+    from learning_loop.core.interfaces import PolicyDecision
+    from learning_loop.core.records import Usage
+    from learning_loop.episodes.envs.local_session import LocalSession
+    from learning_loop.episodes.episode import run_episode
+    from learning_loop.episodes.events import EventLog
+
+    class CutOff:
+        spec = scripted_spec()
+
+        async def decide(self, messages, tools, seed):
+            msg = {"role": "assistant", "content": '<|tool_call>call:write_file{content:<|"|>import os\n# still writing'}
+            return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="length",
+                                  usage=Usage(input_tokens=10, output_tokens=4096), latency_sec=0.0,
+                                  parse_errors=["unparsed_tool_call: unterminated <|tool_call> block"])
+
+    plan = make_plan(instance, "ep-cutoff")
+    log = EventLog(tmp_path / "events.jsonl", plan.episode_id)
+    files = Path(instance.task_dir) / "environment" / "files"
+    async with LocalSession(files, ToolConfig(workdir="/app", command_timeout_sec=10, max_output_chars=2000)) as session:
+        run = await run_episode(plan, session, CutOff(), log)
+    assert run.core.stop_reason == "budget:output_truncated"
+    assert run.core.stop_category == StopCategory.BUDGET
+    assert load_turns(read_events(tmp_path / "events.jsonl"))[0].malformed  # still recorded as a malformed turn

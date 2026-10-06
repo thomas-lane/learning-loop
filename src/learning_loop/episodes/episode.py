@@ -12,7 +12,8 @@ Loop: [fingerprint] -> request -> response -> execute each tool call in order
     budget:max_turns              BUDGET       assistant turns (incl. replayed prefix + intervention)
     budget:max_episode_tokens     BUDGET       input+output across requests (incl. prefix accounting)
     budget:usage_unavailable      BUDGET       max_episode_tokens is set but a response reported no usage
-    budget:output_truncated       BUDGET       finish_reason=length and no valid tool call
+    budget:output_truncated       BUDGET       finish_reason=length and no valid tool call (including
+                                               a tool-call block the limit cut off)
     safety:agent_timeout          SAFETY       wall-clock limit (budgets.agent_timeout_sec)
     safety:cancelled              SAFETY       cancelled from outside (e.g. Harbor's agent timeout)
     model_error:<msg>             MODEL_ERROR  endpoint rejected the request (4xx, e.g. context overflow)
@@ -539,8 +540,12 @@ class _Episode:
             if d.call_errors or unparsed:
                 self.n_malformed += 1
             if not calls and unparsed:
-                # Only unparseable attempts: an explicit error, not a successful action and not a normal finish.
+                # Only unparseable attempts: an explicit error, not a successful action and not a normal
+                # finish. A block cut off by the output limit (finish_reason=length) is a budget stop:
+                # the model ran out of tokens rather than writing a malformed call.
                 await self.turn_done()
+                if d.finish_reason == "length":
+                    raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
                 raise _StopEpisode("model_error:unparsed_tool_call", StopCategory.MODEL_ERROR)
             if not calls:
                 await self.turn_done()
