@@ -6,8 +6,12 @@ base: pilot.yaml
 name: pilot-12b
 learner:
   model_profile: gemma-4-12b-it
+  max_context_tokens: 131072      # editor requests hold a whole episode, so well above the longest one
 episode:
   sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  agent_timeout_sec: 3600         # reasoning turns take far longer than the E4B pilot's
 editor:
   sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
   assistant_text_policy: keep_reasoning
+training:
+  dpo: {split_pair_backward: true}  # long pairs: one sequence's activations at a time
