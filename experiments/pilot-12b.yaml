@@ -1,0 +1,5 @@
+# The pilot with Gemma-4-12B as the learner (and, through editor.mode initial_policy, as the editor).
+base: pilot.yaml
+name: pilot-12b
+learner:
+  model_profile: gemma-4-12b-it

@@ -1,0 +1,43 @@
+# Primary learner for the main experiment (bf16 weights ~24 GB: serve and train on a CUDA host).
+# Pinned from the hub: google/gemma-4-12B-it at the revision below (config.json: architectures
+# Gemma4UnifiedForConditionalGeneration, model_type gemma4_unified, dtype bfloat16; one
+# model.safetensors of 23.9 GB).
+schema_version: 1
+name: gemma-4-12b-it
+base_model: google/gemma-4-12B-it            # trainable source checkpoint (safetensors, bf16)
+base_revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
+chat_template_sha256: ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4
+chat_template_kwargs:
+  enable_thinking: false
+tool_call_format: gemma4           # same tool-call syntax as gemma-4-e4b-it (renderings compared below)
+training_dtype: bfloat16
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+# Multimodal checkpoint: the projection modules all live under model.language_model; the vision
+# embedder and the audio/vision embedding projections are excluded from adaptation.
+lora_exclude_modules: '.*\.(vision_embedder|embed_audio|embed_vision|audio_tower|vision_tower)\..*'
+supported_train_devices: [cuda]
+seed_supported: true
+serving:
+  hf_transformers:
+    backend: hf_transformers
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: >-
+      learning_loop.serving.hf_server with the gemma4 tool-call parser. Not yet run with this model.
+  vllm:
+    backend: vllm
+    adapter_formats: [peft_lora]
+    status: untested
+    engine_package: vllm==0.30.0
+    launch_args: ['--compilation-config', '{"mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY"}']
+    notes: >-
+      hf_server --engine vllm, as for gemma-4-e4b-it. Whether the pinned vLLM supports the
+      gemma4_unified architecture, and learning_loop.serving.equivalence for this model, are
+      not yet checked.
+notes: >-
+  Same vocabulary (262144 entries) and end-of-turn ids ([1, 106, 50]) as gemma-4-e4b-it. Its chat
+  template differs from E4B's (separate pinned hash) but renders identically for system, user,
+  tool-call and tool-result turns and for the generation prompt after a tool result; the one
+  difference is the first generation prompt after a user turn, which pre-fills an empty thought
+  channel ("<|channel>thought\n<channel|>") when thinking is disabled. 48 layers, sliding-window
+  attention (1024 tokens) on most layers, 262144-token context.
