@@ -137,6 +137,10 @@ def test_lifecycle_launches_hf_server_with_the_vllm_engine(tmp_path):
     assert argv[:2] == ["-m", "learning_loop.serving.hf_server"]
     assert argv[argv.index("--engine") + 1] == "vllm" and argv[argv.index("--engine-package") + 1] == "vllm==0.30.0"
     assert argv[argv.index("--concurrency") + 1] == "4" and json.loads(argv[argv.index("--zero-lora") + 1]) == spec
+    assert "--max-context" not in argv  # the engine's default
+    mgr = lifecycle.InferenceManager(prof, load_model_profile("gemma-4-e4b-it"), tmp_path, zero_lora=spec, max_context=131072)
+    argv = mgr._server_argv(ckpt)
+    assert argv[argv.index("--max-context") + 1] == "131072"
 
 
 def test_equivalence_comparisons():

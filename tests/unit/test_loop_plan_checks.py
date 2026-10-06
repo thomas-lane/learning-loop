@@ -112,3 +112,8 @@ def test_edit_replay_checks_endpoints_against_the_source_cycle(source_run, tmp_p
     with pytest.raises(co.PlanError, match="editor endpoint declares"):
         co.edit_replay(src_dir, 1, EXP, editor_at(initial), run_id="er4", runs_dir=runs, overrides=current)
     co.edit_replay(src_dir, 1, EXP, editor_at(learner_c1), run_id="er5", runs_dir=runs, overrides=current)
+
+
+def test_context_window_reaches_every_managed_server(tmp_path):
+    ctx = co.create_run(EXP, M / "fixture.yaml", run_id="ctx", runs_dir=tmp_path, overrides=["learner.max_context_tokens=131072"])
+    assert ctx.manager("learner").max_context == 131072 and ctx.manager("editor").max_context == 131072

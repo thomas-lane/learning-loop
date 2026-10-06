@@ -116,7 +116,8 @@ class RunContext:
             prof = self.machine.inference if role == "learner" else (self.machine.editor_inference or self.machine.inference)
             model = self.learner_profile if role == "learner" else self.editor_profile
             zero = zero_lora_spec(self.exp, self.learner_profile) if model.name == self.learner_profile.name else None
-            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role, zero_lora=zero)
+            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role, zero_lora=zero,
+                                                   max_context=self.exp.learner.max_context_tokens)
         return self.managers[role]
 
     def pods(self, log: Callable[[str], None] | None = None):

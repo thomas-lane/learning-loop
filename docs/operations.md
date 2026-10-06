@@ -112,7 +112,7 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | `infra:` stops with `vLLM returned HTTP ...` | the vLLM engine rejected or failed a request | read the server log; check that the model profile's `serving.vllm.launch_args` suit its `engine_package` version |
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | stop that process group on the host, then resume |
 | many `infra:` stops (connection errors, timeouts) | the endpoint or tunnel went away, or `inference.request_timeout_sec` is too short | check the server log and tunnel; attempts are retried `runtime.infra_retries` times |
-| `model_error:...context_length_exceeded` | the conversation outgrew the context | lower `episode.max_output_chars` or `episode.max_turns`, or serve a longer context |
+| `model_error:...context_length_exceeded` | the conversation outgrew the server's context window | raise `learner.max_context_tokens` (within the GPU's KV-cache capacity, which vLLM logs at startup), or lower `episode.max_output_chars` or `episode.max_turns` |
 | `model_error:...sampling parameters [...] are not supported` | a `sampling.extra_body` sets a parameter `hf_server` does not apply (e.g. `min_p`, `repetition_penalty`) | remove it; `hf_server` applies `temperature`, `top_p`, `top_k` and `max_output_tokens` only |
 | Hugging Face warning about unauthenticated requests | a model load contacted the hub | harmless |
 
@@ -147,7 +147,7 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 | `no_tool_call`, `multiple_tool_calls:N`, `unknown_editor_tool:...`, `unparsed_tool_call:...`, `response_schema:...`, `identical_replacement` | the editor did not answer with exactly one valid answer-tool call (`unparsed_tool_call` gives the parse error of a malformed call) | try `editor.mode: external` via `edit-replay` |
 | `editor_output_truncated` (with the reasons above) | the editor's reply hit `editor.sampling.max_output_tokens` before a complete answer call | raise `editor.sampling.max_output_tokens` |
 | `editor_infra_error:...` | the editor endpoint failed (connection error, timeout, HTTP 408, 429 or 5xx); the edit item is retried `runtime.infra_retries` times, then becomes `infra_failed`, and the report counts it apart from invalid proposals | check the editor server log and tunnel |
-| `editor_request_error:...` | the editor endpoint rejected the request with another 4xx, e.g. `context_length_exceeded` | read the message; for context errors, serve the editor with a longer context |
+| `editor_request_error:...` | the editor endpoint rejected the request with another 4xx, e.g. `context_length_exceeded` | read the message; for context errors, raise `learner.max_context_tokens` (the editor's request holds the whole episode) |
 | `ungrounded_constant:<value>` | the replacement uses a value seen only later (possible hindsight) | check `proposals.csv` if legitimate edits are rejected |
 | `replay_failed:<branch>:rN` with `replay:observation:...` | a replayed command printed something different | make the task deterministic, or declare a narrow normalizer in the task |
 | `replay:fingerprint:...` | the restored state differs from the source | fix the task's undeclared state |

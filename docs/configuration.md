@@ -120,6 +120,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `learner.model_profile` | str | **required** | Model profile name (`configs/models/<name>.yaml`). |
 | `learner.initial_checkpoint` | str | `base` | `base` or a published checkpoint directory to start from. |
 | `learner.scripted_policy` | str or null | null | FIXTURE only: scripted learner file; requires `inference.mode: scripted` (and vice versa). |
+| `learner.max_context_tokens` | int or null (>= 1024) | null | Context window of managed servers (learner and editor): the longest request, prompt plus `max_output_tokens`. A longer request is refused (`model_error:...context_length_exceeded` for the learner, `editor_request_error:...` for the editor). Editor requests hold a whole episode, so leave room above the longest episode. null: the engine's default (vLLM 65536; transformers the model's maximum). |
 | `cycles` | int (>= 0) | **required** | Training cycles; the run evaluates cycles+1 checkpoints (the last cycle only evaluates). |
 | `seeds` | mapping | **required** | Root and loop seeds. |
 | `seeds.root` | int | **required** | Root seed. Evaluation seeds depend only on this, instance and attempt, so runs compare pairwise. |

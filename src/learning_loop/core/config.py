@@ -256,6 +256,7 @@ class LearnerConfig(Strict):
     model_profile: str = Field(description="Model profile name (configs/models/<name>.yaml).")
     initial_checkpoint: str = Field(default="base", description="`base` or a published checkpoint directory to start from.")
     scripted_policy: str | None = Field(default=None, description="FIXTURE only: scripted learner file; requires `inference.mode: scripted` (and vice versa).")
+    max_context_tokens: int | None = Field(default=None, ge=1024, description="Context window of managed servers (learner and editor): the longest request, prompt plus `max_output_tokens`. A longer request is refused (`model_error:...context_length_exceeded` for the learner, `editor_request_error:...` for the editor). Editor requests hold a whole episode, so leave room above the longest episode. null: the engine's default (vLLM 65536; transformers the model's maximum).")
 
 
 class SeedConfig(Strict):
