@@ -158,12 +158,27 @@ class ReferenceCache:
         atomic_write_json(self._path(key), {"key": key, "chosen": chosen, "rejected": rejected, "meta": meta})
 
 
-def pair_forward(model: Any, kw: dict[str, Any], input_ids: Any, k: int, split: bool) -> Any:
+def takes_shared_kv_states(model: Any) -> bool:
+    """Whether the model's decoder layers take a `shared_kv_states` dict (Gemma 4)."""
+    import inspect
+
+    return any("shared_kv_states" in inspect.signature(m.forward).parameters for m in model.modules() if hasattr(m, "forward"))
+
+
+def pair_forward(model: Any, kw: dict[str, Any], input_ids: Any, k: int, split: bool, kv_dicts: list | None = None) -> Any:
     """The policy forward of one loss step on the completion window (`logits_to_keep=k`). With
     `split`, each batch row (chosen and rejected sequences) runs under its own whole-model
-    checkpoint, so only one row's activations are alive in the backward pass."""
+    checkpoint, so only one row's activations are alive in the backward pass.
+
+    `kv_dicts` (models whose layers take `shared_kv_states`, i.e. Gemma 4): each row gets its own
+    dict, appended here; the caller must clear them after the backward pass. Gemma's layers store
+    K/V tensors in that dict, and inside the nested checkpoints the dict is also among the saved
+    layer arguments, so dict -> K/V -> graph -> saved arguments -> dict is a cycle that otherwise
+    keeps every layer input and attention mask of the step alive. A row reads only its own dict,
+    also when its layers are recomputed in the backward pass."""
     if not split:
         return model(**{**kw, "input_ids": input_ids, "logits_to_keep": k})
+    from collections import UserDict
     from types import SimpleNamespace
 
     import torch
@@ -174,6 +189,9 @@ def pair_forward(model: Any, kw: dict[str, Any], input_ids: Any, k: int, split: 
     for i in range(n):
         row = {key: (v[i : i + 1] if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == n else v) for key, v in kw.items()}
         row.update(input_ids=input_ids[i : i + 1], logits_to_keep=k)
+        if kv_dicts is not None:
+            row["shared_kv_states"] = UserDict()  # UserDict, as Gemma's own default (FSDP2 rebuilds plain dicts)
+            kv_dicts.append(row["shared_kv_states"])
         rows.append(checkpoint(lambda **a: model(**a).logits, use_reentrant=False, **row))
     return SimpleNamespace(logits=torch.cat(rows, dim=0))
 
@@ -183,6 +201,19 @@ def _make_trainer_class(split_pair_backward: bool = False):
 
     class PrecomputedRefDPOTrainer(DPOTrainer):
         """DPOTrainer fed with our tokenized rows and our reference log-probs."""
+
+        def __init__(self, *args, **kwargs):
+            self._kv_supported: bool | None = None  # model takes shared_kv_states (see pair_forward)
+            self._kv_dicts: list = []  # this step's per-row shared_kv_states dicts
+            super().__init__(*args, **kwargs)
+
+        def training_step(self, *args, **kwargs):
+            try:
+                return super().training_step(*args, **kwargs)
+            finally:  # after the backward pass: break pair_forward's reference cycle
+                for d in self._kv_dicts:
+                    d.clear()
+                self._kv_dicts.clear()
 
         def _prepare_dataset(self, dataset, processing_class, args, dataset_name):
             need = {"prompt_ids", "chosen_ids", "rejected_ids", "ref_chosen_logps", "ref_rejected_logps"}
@@ -203,8 +234,14 @@ def _make_trainer_class(split_pair_backward: bool = False):
             full_ids = inputs["input_ids"]
             cropped = {**inputs, "input_ids": full_ids[:, -k:], "completion_mask": inputs["completion_mask"][:, -k:]}
 
+            kv = None
+            if split_pair_backward:
+                if self._kv_supported is None:
+                    self._kv_supported = takes_shared_kv_states(model)
+                kv = self._kv_dicts if self._kv_supported else None
+
             def forward(**kw):
-                return pair_forward(model, kw, full_ids, k, split_pair_backward)
+                return pair_forward(model, kw, full_ids, k, split_pair_backward, kv)
 
             return super()._compute_loss(forward, cropped, return_outputs)
 
