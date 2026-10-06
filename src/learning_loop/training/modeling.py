@@ -152,7 +152,9 @@ def completion_logps(logits: Any, input_ids: Any, completion_mask: Any) -> Any:
 def sequence_logps(model: Any, pairs: list[RenderedPair], device: str, pad_token_id: int) -> list[tuple[float, float]]:
     """Summed completion log-probs (chosen, rejected) per pair, computed exactly like the DPO
     loss (same collator, same completion window, shift and masked log-softmax, float32 logits),
-    in eval mode without grad. Installs the fp32-logits hook on `model` (see `ensure_fp32_logits`)."""
+    in eval mode without grad. Installs the fp32-logits hook on `model` (see `ensure_fp32_logits`).
+    The chosen and rejected rows of the padded pair run one at a time, as the loss does with
+    `dpo.split_pair_backward`: half the peak memory of a long pair, the same values."""
     import torch
     from trl.trainer.dpo_trainer import DataCollatorForPreference
 
@@ -169,9 +171,11 @@ def sequence_logps(model: Any, pairs: list[RenderedPair], device: str, pad_token
                 am = b["attention_mask"].to(device)
                 cm = b["completion_mask"].to(device)
                 k = completion_window(cm)
-                logits = model(input_ids=ids, attention_mask=am, use_cache=False, logits_to_keep=k).logits
-                s = completion_logps(logits, ids[:, -k:], cm[:, -k:]).cpu()
-                out.append((float(s[0]), float(s[1])))
+                s = []
+                for i in range(ids.shape[0]):  # [chosen, rejected]
+                    logits = model(input_ids=ids[i : i + 1], attention_mask=am[i : i + 1], use_cache=False, logits_to_keep=k).logits
+                    s.append(float(completion_logps(logits, ids[i : i + 1, -k:], cm[i : i + 1, -k:]).cpu()[0]))
+                out.append((s[0], s[1]))
     finally:
         if was_training:
             model.train()

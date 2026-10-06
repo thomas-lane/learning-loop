@@ -103,7 +103,7 @@ REFERENCE_IDENTITY_ATOL = 2e-2  # |policy - reference| log-ratio at the first st
 N_CHECK_EXAMPLES = 2
 # Identifies how log-probs are computed; part of the reference cache key so entries made by an
 # older numerical path (e.g. bf16 log-softmax) are never reused.
-LOGP_PATH = "completion_window_fp32_logits_selective_log_softmax_fp32_sum_v2"
+LOGP_PATH = "completion_window_fp32_logits_selective_log_softmax_fp32_sum_per_row_v3"
 
 
 class ReferenceMismatch(RuntimeError):
