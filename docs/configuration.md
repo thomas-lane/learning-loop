@@ -189,7 +189,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `training.data.task_balanced` | bool | `True` | Sample history round-robin over instances. |
 | `training.data.max_examples_per_cycle` | int or null | null | Cap on the training set size per cycle. |
 | `training.fixed_dataset` | str or null | null | `fixed_dataset` condition only: frozen preference export directory used every cycle. |
-| `training.dpo` | mapping | `{'beta': 0.1, 'loss_type': 'sigmoid', 'learning_rate': 5e-06, 'per_device_batch_size': 1, 'gradient_accumulation_steps': 1, 'max_length': 4096, 'warmup_steps': 0, 'max_grad_norm': 1.0, 'gradient_checkpointing': False}` | DPO hyperparameters. |
+| `training.dpo` | mapping | `{'beta': 0.1, 'loss_type': 'sigmoid', 'learning_rate': 5e-06, 'per_device_batch_size': 1, 'gradient_accumulation_steps': 1, 'max_length': 4096, 'warmup_steps': 0, 'max_grad_norm': 1.0, 'gradient_checkpointing': False, 'split_pair_backward': False}` | DPO hyperparameters. |
 | `training.dpo.beta` | float | `0.1` | DPO beta. |
 | `training.dpo.loss_type` | str | `sigmoid` | TRL DPO loss type. |
 | `training.dpo.learning_rate` | float | `5e-06` | Learning rate. |
@@ -199,6 +199,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `training.dpo.warmup_steps` | int | `0` | Learning-rate warmup steps. |
 | `training.dpo.max_grad_norm` | float | `1.0` | Gradient clipping norm. |
 | `training.dpo.gradient_checkpointing` | bool | `False` | Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values. |
+| `training.dpo.split_pair_backward` | bool | `False` | Run each sequence of a pair (chosen, rejected) under its own whole-model checkpoint, so the backward pass recomputes and back-propagates one sequence at a time: about half the activation memory of a pair (each sequence repeats the shared prompt), one extra forward pass per sequence; same loss and gradients. |
 | `training.lora` | mapping | `{'r': 16, 'alpha': 32}` | LoRA shape. |
 | `training.lora.r` | int | `16` | LoRA rank. |
 | `training.lora.alpha` | int | `32` | LoRA alpha. |

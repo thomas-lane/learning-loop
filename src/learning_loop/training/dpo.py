@@ -38,6 +38,13 @@ this module does not rely on its defaults:
   equals TRL's full-logits loss (unit-tested) without float32 logits for every prompt
   token, which is what limits long prompts with a 262k-token vocabulary.
 
+- `dpo.split_pair_backward`: TRL runs a pair as one batch [chosen, rejected], each row the full
+  shared prompt plus its completion, so a step holds two long sequences' activations at once.
+  With the flag, `pair_forward` runs each row under its own non-reentrant
+  `torch.utils.checkpoint`: the forward keeps only each row's completion-window logits, and the
+  backward recomputes and back-propagates one row at a time. TRL's loss, gradients and metrics are
+  unchanged (the rows are the same computations, only scheduled apart).
+
 Optimizer/scheduler are fresh every cycle (new Trainer); adapter weights continue.
 Interrupted stages resume from the stage's own Trainer checkpoint (adapter,
 optimizer, scheduler, python/numpy/torch-CPU(/CUDA) RNG as saved by
@@ -151,7 +158,27 @@ class ReferenceCache:
         atomic_write_json(self._path(key), {"key": key, "chosen": chosen, "rejected": rejected, "meta": meta})
 
 
-def _make_trainer_class():
+def pair_forward(model: Any, kw: dict[str, Any], input_ids: Any, k: int, split: bool) -> Any:
+    """The policy forward of one loss step on the completion window (`logits_to_keep=k`). With
+    `split`, each batch row (chosen and rejected sequences) runs under its own whole-model
+    checkpoint, so only one row's activations are alive in the backward pass."""
+    if not split:
+        return model(**{**kw, "input_ids": input_ids, "logits_to_keep": k})
+    from types import SimpleNamespace
+
+    import torch
+    from torch.utils.checkpoint import checkpoint
+
+    n = input_ids.shape[0]
+    rows = []
+    for i in range(n):
+        row = {key: (v[i : i + 1] if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == n else v) for key, v in kw.items()}
+        row.update(input_ids=input_ids[i : i + 1], logits_to_keep=k)
+        rows.append(checkpoint(lambda **a: model(**a).logits, use_reentrant=False, **row))
+    return SimpleNamespace(logits=torch.cat(rows, dim=0))
+
+
+def _make_trainer_class(split_pair_backward: bool = False):
     from trl import DPOTrainer
 
     class PrecomputedRefDPOTrainer(DPOTrainer):
@@ -177,7 +204,7 @@ def _make_trainer_class():
             cropped = {**inputs, "input_ids": full_ids[:, -k:], "completion_mask": inputs["completion_mask"][:, -k:]}
 
             def forward(**kw):
-                return model(**{**kw, "input_ids": full_ids, "logits_to_keep": k})
+                return pair_forward(model, kw, full_ids, k, split_pair_backward)
 
             return super()._compute_loss(forward, cropped, return_outputs)
 
@@ -383,7 +410,7 @@ class TrlDpoTrainer:
         )
         log_path = work_dir / "train_logs.jsonl"
         t0 = time.time()
-        Trainer = _make_trainer_class()
+        Trainer = _make_trainer_class(cfg.dpo.split_pair_backward)
         trainer = Trainer(
             model=model, args=args, train_dataset=ds, processing_class=tok,
             callbacks=_callbacks(log_path, self._interrupt_after, resumed=resume_ckpt is not None),

@@ -368,6 +368,7 @@ class DpoConfig(Strict):
     warmup_steps: int = Field(default=0, description="Learning-rate warmup steps.")
     max_grad_norm: float = Field(default=1.0, description="Gradient clipping norm.")
     gradient_checkpointing: bool = Field(default=False, description="Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values.")
+    split_pair_backward: bool = Field(default=False, description="Run each sequence of a pair (chosen, rejected) under its own whole-model checkpoint, so the backward pass recomputes and back-propagates one sequence at a time: about half the activation memory of a pair (each sequence repeats the shared prompt), one extra forward pass per sequence; same loss and gradients.")
 
 
 class LoraConfig(Strict):

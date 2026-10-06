@@ -260,8 +260,12 @@ learner sees and what is counted therefore stay the same as with the transformer
   the model repository's own sampling defaults never apply: `temperature`, `top_p` and `top_k`
   come from the experiment's `sampling` blocks (an unset `top_k` is off), and `hf_server`
   rejects sampling parameters it does not apply (`min_p`, penalties, `logit_bias`) instead of
-  ignoring them. Prefix caching is off, because a
-  cached prefix is computed differently from a recomputed one and would change outputs.
+  ignoring them.
+- Prefix caching is on. Every turn of an episode re-sends the whole conversation, so without it
+  each turn would recompute the full context and an episode's compute would grow with the square
+  of its length. A cached prefix is computed in different kernel batches than a recomputed one,
+  so outputs can differ by floating-point noise; batching already does the same, and results are
+  compared statistically across episodes, never bit for bit.
 - In experiments that train LoRA adapters, base checkpoints are served through a
   [zero LoRA](glossary.md) (as with the transformers engine), so every checkpoint pays the same
   adapter overhead.

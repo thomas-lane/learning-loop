@@ -347,7 +347,7 @@ Each run saves what is needed to reproduce it: resolved configuration, code and 
 versions, hardware, task hashes, seeds and checkpoint lineage
 ([run-layout.md](run-layout.md) lists the files).
 
-Results are not bitwise reproducible across hardware, batching or serving versions, nor across
+Results are not bitwise reproducible across hardware, batching, vLLM's prefix cache or serving versions, nor across
 repeated CUDA training runs (on an A100, identical inputs gave adapters differing by up to about
 1e-4 after two steps, from nondeterministic GPU kernels). A resumed training stage matches an
 uninterrupted one only up to that noise.

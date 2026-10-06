@@ -92,7 +92,7 @@ def test_vllm_engine_round_trip_uses_our_rendering_parser_and_counts(qwen, fake_
         assert body["skip_special_tokens"] is False and body["return_token_ids"] is True and eos in body["stop_token_ids"]
         argv = req["argv"]
         assert "--generation-config" in argv and argv[argv.index("--generation-config") + 1] == "vllm"
-        assert "--no-enable-prefix-caching" in argv and argv[argv.index("--max-num-seqs") + 1] == "1"
+        assert "--enable-prefix-caching" in argv and argv[argv.index("--max-num-seqs") + 1] == "1"
         assert any(a.startswith("base:x=") for a in argv)  # the zero adapter is served as a LoRA module
         ch = r["choices"][0]
         assert ch["finish_reason"] == "tool_calls" and json.loads(ch["message"]["tool_calls"][0]["function"]["arguments"]) == {"command": "ls -la"}
