@@ -1,0 +1,21 @@
+# The pilot with Gemma-4-E4B, thinking enabled, under the same settings as pilot-12b: Google's
+# recommended decoding, a 32768-token context cap, and an editor (the initial policy) that keeps a
+# turn's reasoning and replaces only its tool call.
+base: pilot.yaml
+name: pilot-e4b
+learner:
+  model_profile: gemma-4-e4b-it-thinking
+  max_context_tokens: 131072      # server window: editor requests hold a whole episode
+episode:
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  max_context_tokens: 32768       # every learner request (prompt + output) fits; all roles alike
+  max_episode_tokens: null        # the context cap and max_turns bound an episode; no summed-token budget
+  agent_timeout_sec: 3600
+editor:
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  assistant_text_policy: keep_reasoning
+training:
+  dpo:
+    max_length: null
+    max_length_margin: 2048       # room for an edited turn longer than the original
+    split_pair_backward: true

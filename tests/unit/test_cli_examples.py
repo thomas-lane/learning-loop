@@ -23,6 +23,7 @@ CASES = [
     (E / "pilot.yaml", M / "runpod-a100.yaml", []),
     (E / "pilot.yaml", M / "runpod-a100-vllm.yaml", []),
     (E / "pilot-12b.yaml", M / "runpod-a100-vllm.yaml", []),
+    (E / "pilot-e4b.yaml", M / "runpod-a100-vllm.yaml", []),
     (E / "pilot.yaml", M / "runpod-a100.yaml", ["--set", "learner.model_profile=gemma-4-e2b-it"]),
     *[(p, M / "lab-gpu.yaml", []) for p in sorted((E / "ablations").glob("*.yaml"))],
 ]

@@ -323,6 +323,27 @@ def test_gemma4_thinking_turns_roundtrip_and_keep_reasoning_in_both_sides():
         render_completion(tok, after_tool, [{**a1, "reasoning_content": ""}], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
 
 
+def test_gemma4_e4b_thinking_turns_roundtrip_without_a_prefilled_thought():
+    """E4B's template, unlike the 12B's, does not open the thought channel after a tool result: the
+    model opens it itself, so the completion carries the whole thought and needs no prefix."""
+    from learning_loop.serving.tool_parse import generation_prefix, parse_gemma4
+    from learning_loop.training.render import render_text
+
+    prof, tok = _cached("gemma-4-e4b-it-thinking")
+    kw = prof.chat_template_kwargs
+    assert kw.get("enable_thinking") is True
+    eot = end_of_turn_ids(tok, prof)
+    a0 = {**asst(call("call_0", '{"command": "ls"}')), "reasoning_content": "List first."}
+    a1 = {**asst(call("call_1", '{"command": "wc -l a"}')), "reasoning_content": "Now count."}
+    after_tool = [*PROMPT, a0, {"role": "tool", "tool_call_id": "call_0", "content": "a\nb"}]
+    prompt_text = render_text(tok, after_tool, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw)
+    assert generation_prefix("gemma4", prompt_text) == ""
+    rc = render_completion(tok, after_tool, [a1], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
+    assert rc.completion_text.startswith("<|channel>thought\nNow count.\n<channel|><|tool_call>")
+    parsed = parse_gemma4(tok.decode(rc.completion_ids[:-1], skip_special_tokens=False), "s")
+    assert parsed.reasoning_content == "Now count." and parsed.content == "" and len(parsed.tool_calls) == 1
+
+
 def test_template_pin_is_enforced(qwen):
     prof, _ = qwen
     bad = prof.model_copy(update={"chat_template_sha256": "0" * 64})
