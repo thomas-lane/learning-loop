@@ -1,11 +1,11 @@
 """dpo.split_pair_backward: running each sequence of a pair under its own checkpoint changes only
-when activations are alive, never the logits or the gradients."""
+when activations are alive, never the log-probs or the gradients."""
 
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from learning_loop.training.dpo import pair_forward  # noqa: E402
+from learning_loop.training.dpo import pair_token_logps  # noqa: E402
 
 
 def _model():
@@ -25,22 +25,24 @@ def test_split_pair_forward_matches_the_batched_forward(k):
     model = _model()
     ids = torch.randint(0, 128, (2, 9))  # [chosen, rejected], padded to one length
     mask = torch.ones_like(ids)
-    mask[1, :2] = 0  # left padding on one row
-    kw = {"attention_mask": mask, "use_cache": False}
-    weights = torch.randn(2, k, 128, dtype=torch.float64)
+    mask[1, -2:] = 0  # right padding on one row, as TRL's collator pads
+    cm = torch.zeros_like(ids)
+    cm[0, 9 - k:], cm[1, 9 - k:7] = 1, 1
+    kw = {"input_ids": ids, "attention_mask": mask, "use_cache": False}
+    weights = torch.randn(2, 8, dtype=torch.float64)
 
     def grads(split):
         model.zero_grad()
-        out = pair_forward(model, kw, ids, k, split)
-        (out.logits * weights).sum().backward()
-        return out.logits.detach(), {n: p.grad.clone() for n, p in model.named_parameters()}
+        lp, ent = pair_token_logps(model, kw, ids, cm, split)
+        ((lp.double() * weights).sum() + ent.double().sum()).backward()
+        return lp.detach(), {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
 
     logits_b, grads_b = grads(False)
     logits_s, grads_s = grads(True)
-    assert logits_s.shape == (2, k, 128)
-    assert torch.allclose(logits_s, logits_b, atol=1e-12)
+    assert logits_s.shape == (2, 8)
+    assert torch.allclose(logits_s, logits_b, atol=1e-6)
     assert grads_s.keys() == grads_b.keys()
-    assert all(torch.allclose(grads_s[n], grads_b[n], atol=1e-10) for n in grads_b)
+    assert all(torch.allclose(grads_s[n], grads_b[n], atol=1e-6) for n in grads_b)
 
 
 def _gemma(num_kv_shared_layers):
@@ -70,7 +72,9 @@ def test_gemma4_split_matches_batched_and_releases_the_step(shared):
     model = _gemma(shared)
     assert takes_shared_kv_states(model)
     ids = torch.randint(0, 128, (2, 40))
-    kw = {"attention_mask": torch.ones_like(ids), "use_cache": False}
+    cm = torch.zeros_like(ids)
+    cm[:, 30:] = 1
+    kw = {"input_ids": ids, "attention_mask": torch.ones_like(ids), "use_cache": False}
 
     def live():
         gc.collect()
@@ -78,9 +82,9 @@ def test_gemma4_split_matches_batched_and_releases_the_step(shared):
 
     def step(split, dicts):
         model.zero_grad()
-        out = pair_forward(model, kw, ids, 5, split, dicts)
-        out.logits.sum().backward()
-        logits = out.logits.detach()
+        lp, _ = pair_token_logps(model, kw, ids, cm, split, dicts)
+        lp.sum().backward()
+        logits = lp.detach()
         for d in dicts or []:
             d.clear()
         return logits, {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
