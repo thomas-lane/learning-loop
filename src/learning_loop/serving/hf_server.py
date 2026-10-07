@@ -440,4 +440,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Run the importable module, not this `__main__` copy: the vLLM engine imports
+    # learning_loop.serving.hf_server, and a second copy would define a second ApiError that the
+    # handler's `except ApiError` does not catch (deliberate 4xx errors would reach clients as 500).
+    from learning_loop.serving import hf_server as _canonical
+
+    sys.exit(_canonical.main())

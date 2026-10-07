@@ -184,3 +184,18 @@ def test_hf_engine_applies_top_k_and_greedy_ignores_sampling():
     assert applied["top_k"] == 64
     eng.generate([1, 2], validate_request({"messages": [{"role": "user"}], "temperature": 0, "top_k": 64}, "m"), 8)
     assert seen[1].do_sample is False
+
+
+def test_running_the_module_uses_the_importable_copy():
+    """`python -m learning_loop.serving.hf_server` must run the importable module: the vLLM engine
+    imports it, and a separate `__main__` copy would define a second ApiError that the HTTP handler
+    does not catch, turning every deliberate 4xx into a 500."""
+    import subprocess
+    import sys
+
+    code = ("import runpy, sys, learning_loop.serving.hf_server as m\n"
+            "m.main = lambda: print('canonical main') or 0\n"
+            "sys.argv = ['hf_server']\n"
+            "runpy.run_module('learning_loop.serving.hf_server', run_name='__main__')\n")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and "canonical main" in r.stdout, r.stderr[-500:]
