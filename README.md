@@ -1,5 +1,7 @@
 # Learning Loop
 
+![The learning loop: collect attempts, verify a cheaper edit, train the learner](docs/assets/readme-banner.png)
+
 Can an LLM agent learn from its own experience by updating its own weights? This repository runs
 one repeatable loop. Each pass is a **cycle**:
 
