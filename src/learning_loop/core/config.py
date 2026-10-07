@@ -438,7 +438,8 @@ class ExperimentConfig(Strict):
         if dpo.max_length_margin is not None:
             if cap is None:
                 raise ValueError("training.dpo.max_length_margin requires episode.max_context_tokens")
-            if dpo.max_length is not None:
+            # A resolved config (run.json) already holds cap + margin; anything else is a conflict.
+            if dpo.max_length is not None and dpo.max_length != cap + dpo.max_length_margin:
                 raise ValueError("set training.dpo.max_length: null when using training.dpo.max_length_margin")
             dpo.max_length = cap + dpo.max_length_margin
         elif dpo.max_length is None:

@@ -122,6 +122,8 @@ def test_context_cap_and_training_length_margin():
     cfg = ExperimentConfig.model_validate({**MINIMAL, "episode": ep,
                                            "training": {"optimizer_steps": 2, "dpo": {"max_length": None, "max_length_margin": 2048}}})
     assert cfg.training.dpo.max_length == 34816  # cap + margin, what the trainer receives
+    again = ExperimentConfig.model_validate(cfg.model_dump(mode="json"))  # run.json holds the resolved config
+    assert again.training.dpo.max_length == 34816
     bad = [
         {"training": {"optimizer_steps": 2, "dpo": {"max_length": None, "max_length_margin": 2048}}},  # margin without a cap
         {"episode": ep, "training": {"optimizer_steps": 2, "dpo": {"max_length_margin": 2048}}},  # explicit max_length and margin
