@@ -20,6 +20,7 @@
 | **Held-out family** | A family in a split file's `held_out_families`: it may have no train-split instance, so it measures transfer to families never trained on. |
 | **Exposure schedule** | `tasks.exposure_schedule`: which families collection uses from which cycle on, for studying retention of earlier families. |
 | **Artifact** | A file listed in `task.toml` `artifacts` (e.g. `/app/answer.txt`); the only thing copied from the learner's container to the verifier container. |
+| **Context cap** | `episode.max_context_tokens`: the context window of every learner request, prompt plus output. The server lowers each request's output limit to what fits; a full context stops the episode as `budget:max_context`. It is a budget, not the server's window (`learner.max_context_tokens`), which can be larger, e.g. for editor requests ([why](experiment.md#episodes)). |
 | **Complete success** | `reward >= success_threshold` (in `task.toml`; 1.0 for all shipped tasks). Only this counts as success, makes an episode editable, or passes acceptance. |
 | **Partial reward** | The verifier's `reward` value from 0 to 1, e.g. 0.33 when a third of fix-stats' hidden checks pass. Reported next to success; a value below the threshold is not success. |
 | **Oracle / nop** | Harbor agents that run the reference solution (must score 1.0) / do nothing (the baseline score). |

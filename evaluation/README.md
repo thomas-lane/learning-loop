@@ -288,6 +288,7 @@ them](../docs/operations.md#episodes-and-stages)):
 | `budget:max_turns`, `budget:max_episode_tokens` | budget | experimental budgets |
 | `budget:usage_unavailable` | budget | `max_episode_tokens` is set but a response reported no usage |
 | `budget:output_truncated` | budget | `finish_reason=length` and no valid tool call, including a tool-call block the limit cut off |
+| `budget:max_context` | budget | the conversation fills `episode.max_context_tokens`: the prompt alone fills it, or a reply cut off as above when the cap had lowered its output limit |
 | `safety:agent_timeout` | safety | the plan's wall-clock limit (`agent_timeout_sec`) |
 | `safety:cancelled` | safety | cancelled from outside, e.g. by Harbor's `[agent].timeout_sec` in CLI mode |
 | `model_error:<msg>` | model_error | the endpoint rejected the request (4xx other than 408/429, e.g. context overflow) |

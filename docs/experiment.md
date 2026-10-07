@@ -139,9 +139,21 @@ The learner acts only through `bash`, `read_file` and `write_file` in a task con
 tests run in a separate verifier container ([evaluation/README.md](../evaluation/README.md)).
 Each episode has two kinds of limits, recorded as different stop categories:
 
-- **Budgets**, part of the experiment: `episode.max_turns` and `episode.max_episode_tokens`. An
-  endpoint that reports no usage under a token budget stops the episode
-  (`budget:usage_unavailable`). Per-command timeouts are capped at `episode.tool_timeout_sec`.
+- **Budgets**, part of the experiment: `episode.max_turns`, `episode.max_episode_tokens` and
+  `episode.max_context_tokens`. An endpoint that reports no usage under a token budget stops the
+  episode (`budget:usage_unavailable`). Per-command timeouts are capped at
+  `episode.tool_timeout_sec`.
+
+**The context cap** (`episode.max_context_tokens`) works like a model's own context window:
+every learner request's prompt plus output must fit it. The server (`hf_server`) knows each
+rendered prompt's exact length, so it lowers that request's output limit to what still fits, at
+most `episode.sampling.max_output_tokens`. A reply cut off by the lowered limit, or a prompt that
+already fills the cap, stops the episode as `budget:max_context`. The cap applies to every
+episode role (evaluation, collection, verification branches, calibration), so all of them run in
+the same context regime. Why cap the context instead of letting episodes grow to the server's
+window? Training can only fit pairs up to `training.dpo.max_length`. Without the cap, edits late
+in long episodes would be too long to train, so the learner would be evaluated on decisions it is
+never trained on. With the cap, every turn of every episode fits it, so every edit can be trained.
 - **Safety limit:** the wall-clock timeout `episode.agent_timeout_sec`.
 
 An episode ends normally when the learner replies without a tool call; then it is graded. A
@@ -304,7 +316,10 @@ families, or fixture pairs mixed with verified ones.
 Rendering uses the learner's pinned tokenizer and chat template. The rendered prompt must be an
 exact token prefix of both full renders. Only the completion tokens (through end-of-turn) carry
 loss, and chosen and rejected must differ there. Examples longer than `training.dpo.max_length`
-are dropped with a recorded reason, never truncated.
+are dropped with a recorded reason, never truncated. With a context cap, the limit is set as
+the cap plus `training.dpo.max_length_margin`: a pair's prompt and its rejected turn (the
+original) fit the cap, and the margin is room for an edited turn longer than the original, such as
+one command that replaces several steps.
 
 **The DPO reference.** For each example, let log π(turn) be the summed log-probability of the
 turn's tokens given the prompt. DPO minimizes

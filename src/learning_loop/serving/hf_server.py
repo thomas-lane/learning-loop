@@ -18,6 +18,9 @@
   0 = greedy; top_p default 1.0; top_k default 0 (off). Any other sampling parameter
   (min_p, penalties, logit_bias, ...) is rejected rather than ignored. `seed` seeds torch
   before generation.
+- `max_context_tokens` (optional, not OpenAI): the request's context window. The output limit
+  is lowered to what fits (`learning_loop.context_capped` then true); a prompt that already fills
+  it is refused with code `context_budget_exhausted`.
 - Usage is exact from the tokenizer: prompt tokens as rendered; completion tokens
   as generated, including the end-of-turn token when one was produced.
 - Serial: one request at a time (single-threaded HTTPServer).
@@ -93,6 +96,9 @@ def validate_request(body: dict[str, Any], served_model: str) -> dict[str, Any]:
     if temperature < 0 or not (0 < top_p <= 1) or not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 0:
         raise ApiError(400, "invalid temperature/top_p/top_k")
     max_tokens = body.get("max_completion_tokens", body.get("max_tokens"))
+    cap = body.get("max_context_tokens")
+    if cap is not None and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 1):
+        raise ApiError(400, "max_context_tokens must be a positive integer")
     seed = body.get("seed")
     if seed is not None and not isinstance(seed, int):
         raise ApiError(400, "seed must be an integer")
@@ -103,6 +109,7 @@ def validate_request(body: dict[str, Any], served_model: str) -> dict[str, Any]:
         "top_p": top_p,
         "top_k": top_k,
         "max_tokens": None if max_tokens is None else int(max_tokens),
+        "max_context_tokens": cap,
         "seed": seed,
     }
 
@@ -187,6 +194,13 @@ class ServingCore:
         except RenderError as e:
             raise ApiError(400, f"cannot render messages: {e}") from e
         max_new = req["max_tokens"] or self.default_max_tokens
+        cap = req["max_context_tokens"]
+        capped = False
+        if cap is not None:  # the request's own context window (an episode budget), as a model's window
+            if len(ids) >= cap:
+                raise ApiError(400, f"the prompt ({len(ids)} tokens) fills the context cap ({cap} tokens)", "context_budget_exhausted")
+            capped = len(ids) + max_new > cap
+            max_new = min(max_new, cap - len(ids))
         if len(ids) + max_new > self.max_context:
             raise ApiError(
                 400,
@@ -220,6 +234,8 @@ class ServingCore:
             "learning_loop": {
                 "raw_completion_text": text,
                 "generation_prefix": prefix,
+                "max_tokens_applied": max_new,
+                "context_capped": capped,
                 "parse_errors": parsed.parse_errors,
                 "seed": req["seed"],
                 "seed_applied": req["seed"] is not None,

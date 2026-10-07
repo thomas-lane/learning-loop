@@ -117,6 +117,23 @@ def test_invalid_experiments_rejected(patch):
         ExperimentConfig.model_validate({**MINIMAL, **patch})
 
 
+def test_context_cap_and_training_length_margin():
+    ep = {**MINIMAL["episode"], "max_context_tokens": 32768}
+    cfg = ExperimentConfig.model_validate({**MINIMAL, "episode": ep,
+                                           "training": {"optimizer_steps": 2, "dpo": {"max_length": None, "max_length_margin": 2048}}})
+    assert cfg.training.dpo.max_length == 34816  # cap + margin, what the trainer receives
+    bad = [
+        {"training": {"optimizer_steps": 2, "dpo": {"max_length": None, "max_length_margin": 2048}}},  # margin without a cap
+        {"episode": ep, "training": {"optimizer_steps": 2, "dpo": {"max_length_margin": 2048}}},  # explicit max_length and margin
+        {"episode": ep, "training": {"optimizer_steps": 2, "dpo": {"max_length": None}}},  # no limit at all
+        {"episode": ep, "training": {"optimizer_steps": 2, "dpo": {"max_length": 16384}}},  # limit below the cap
+        {"episode": ep, "learner": {"model_profile": "qwen3-0.6b", "max_context_tokens": 16384}},  # server window below the cap
+    ]
+    for patch in bad:
+        with pytest.raises(ValidationError):
+            ExperimentConfig.model_validate({**MINIMAL, **patch})
+
+
 def test_base_inheritance_one_level(tmp_path):
     (tmp_path / "base.yaml").write_text(yaml.safe_dump(MINIMAL))
     (tmp_path / "child.yaml").write_text(yaml.safe_dump({"base": "base.yaml", "name": "child", "verification": {"continuations_per_branch": 2}}))

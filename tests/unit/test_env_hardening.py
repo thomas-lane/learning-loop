@@ -50,7 +50,7 @@ class _ListPolicy:
     def __init__(self, steps):
         self.steps = list(steps)
 
-    async def decide(self, messages, tools, seed):
+    async def decide(self, messages, tools, seed, max_context_tokens=None):
         if self.steps:
             msg, usage, perr = self.steps.pop(0)
         else:

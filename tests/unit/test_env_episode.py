@@ -168,7 +168,7 @@ async def test_unparsed_tool_call_stops_as_model_error(tmp_path, instance):
     class Unparsed:
         spec = scripted_spec()
 
-        async def decide(self, messages, tools, seed):
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
             msg = {"role": "assistant", "content": '<tool_call>{"name": "bash", "arguments": {"command": "ls \\*"}}</tool_call>'}
             return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="stop",
                                   usage=Usage(input_tokens=10, output_tokens=5), latency_sec=0.0,
@@ -197,7 +197,7 @@ async def test_a_tool_call_cut_off_by_the_output_limit_is_a_budget_stop(tmp_path
     class CutOff:
         spec = scripted_spec()
 
-        async def decide(self, messages, tools, seed):
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
             msg = {"role": "assistant", "content": '<|tool_call>call:write_file{content:<|"|>import os\n# still writing'}
             return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="length",
                                   usage=Usage(input_tokens=10, output_tokens=4096), latency_sec=0.0,
@@ -211,3 +211,55 @@ async def test_a_tool_call_cut_off_by_the_output_limit_is_a_budget_stop(tmp_path
     assert run.core.stop_reason == "budget:output_truncated"
     assert run.core.stop_category == StopCategory.BUDGET
     assert load_turns(read_events(tmp_path / "events.jsonl"))[0].malformed  # still recorded as a malformed turn
+
+
+async def _run_with(policy, instance, tmp_path, **budgets):
+    from evaluation.agents.tools import ToolConfig
+    from learning_loop.episodes.envs.local_session import LocalSession
+    from learning_loop.episodes.episode import run_episode
+    from learning_loop.episodes.events import EventLog
+
+    plan = make_plan(instance, "ep-cap", **budgets)
+    log = EventLog(tmp_path / "events.jsonl", plan.episode_id)
+    files = Path(instance.task_dir) / "environment" / "files"
+    async with LocalSession(files, ToolConfig(workdir="/app", command_timeout_sec=10, max_output_chars=2000)) as session:
+        return await run_episode(plan, session, policy, log)
+
+
+async def test_the_context_cap_is_sent_and_a_full_context_is_a_budget_stop(tmp_path):
+    from learning_loop.core.interfaces import PolicyDecision
+    from learning_loop.core.records import Usage
+
+    instance = count_errors_instance(tmp_path)
+    seen = []
+
+    class Full:
+        spec = scripted_spec()
+
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
+            seen.append(max_context_tokens)
+            return PolicyDecision(raw_request={}, raw_response={"error": {"status": 400}}, history_message={}, finish_reason=None,
+                                  usage=Usage(source="none"), latency_sec=0.0, request_error="400 the prompt fills the context cap",
+                                  context_exhausted=True)
+
+    run = await _run_with(Full(), instance, tmp_path, max_context_tokens=32768)
+    assert seen == [32768]
+    assert (run.core.stop_reason, run.core.stop_category) == ("budget:max_context", StopCategory.BUDGET)
+
+
+async def test_a_reply_cut_off_by_the_context_cap_is_a_max_context_stop(tmp_path):
+    from learning_loop.core.interfaces import PolicyDecision
+    from learning_loop.core.records import Usage
+
+    instance = count_errors_instance(tmp_path)
+
+    class CutByCap:
+        spec = scripted_spec()
+
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
+            msg = {"role": "assistant", "content": "", "reasoning_content": "still thinking when the window filled"}
+            return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="length",
+                                  usage=Usage(input_tokens=30000, output_tokens=2768), latency_sec=0.0, context_capped=True)
+
+    run = await _run_with(CutByCap(), instance, tmp_path, max_context_tokens=32768)
+    assert (run.core.stop_reason, run.core.stop_category) == ("budget:max_context", StopCategory.BUDGET)

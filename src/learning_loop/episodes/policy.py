@@ -142,7 +142,20 @@ def _decision(
         repairs=repairs,
         seed_sent=seed_sent,
         call_errors=call_errors,
+        context_capped=bool(((raw_response or {}).get("learning_loop") or {}).get("context_capped")),
     )
+
+
+CONTEXT_EXHAUSTED_CODE = "context_budget_exhausted"  # hf_server: the prompt fills the request's context cap
+
+
+def _error_code(body: Any) -> str | None:
+    """`code` of an OpenAI-style error body (the SDK passes either the body or its `error` member)."""
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error") if isinstance(body.get("error"), dict) else body
+    code = err.get("code")
+    return code if isinstance(code, str) else None
 
 
 def _error_decision(raw_request: dict[str, Any], seed_sent: int | None, latency: float | None, *, request_error: str | None = None, infra_error: str | None = None, raw: dict[str, Any] | None = None) -> PolicyDecision:
@@ -156,6 +169,7 @@ def _error_decision(raw_request: dict[str, Any], seed_sent: int | None, latency:
         request_error=request_error,
         infra_error=infra_error,
         seed_sent=seed_sent,
+        context_exhausted=request_error is not None and _error_code(((raw or {}).get("error") or {}).get("body")) == CONTEXT_EXHAUSTED_CODE,
     )
 
 
@@ -209,7 +223,7 @@ class OpenAIChatPolicy:
             return self.spec.checkpoint.checkpoint_id
         return "default"
 
-    def build_request(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> tuple[dict[str, Any], int | None]:
+    def build_request(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> tuple[dict[str, Any], int | None]:
         s = self.spec.sampling
         req: dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:  # some servers reject an empty tools array (e.g. editor requests)
@@ -226,12 +240,14 @@ class OpenAIChatPolicy:
         extra = dict(s.extra_body)
         if s.top_k is not None:  # not an OpenAI parameter, so it travels in the request body
             extra["top_k"] = s.top_k
+        if max_context_tokens is not None:  # the episode's context cap, enforced by hf_server
+            extra["max_context_tokens"] = max_context_tokens
         if extra:
             req["extra_body"] = extra
         return req, seed_sent
 
-    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision:
-        req, seed_sent = self.build_request(messages, tools, seed)
+    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> PolicyDecision:
+        req, seed_sent = self.build_request(messages, tools, seed, max_context_tokens)
         limit = self.spec.max_concurrent_requests
         if limit is not None:
             async with endpoint_semaphore(self.spec.api_base or "", limit):
@@ -399,7 +415,8 @@ class ScriptedPolicy:
             return i, rule, groups
         return None
 
-    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision:
+    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> PolicyDecision:
+        # FIXTURE: scripted replies have no tokens, so the context cap does not apply.
         seed_sent = seed if (self.spec.send_seed and seed is not None) else None
         raw_request = {"model": self.spec.served_model_name or "scripted", "messages": messages, "tools": tools, "seed": seed_sent, "scripted": True}
         t0 = time.monotonic()

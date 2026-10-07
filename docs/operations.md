@@ -113,6 +113,7 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | stop that process group on the host, then resume |
 | many `infra:` stops (connection errors, timeouts) | the endpoint or tunnel went away, or `inference.request_timeout_sec` is too short | check the server log and tunnel; attempts are retried `runtime.infra_retries` times |
 | `model_error:...context_length_exceeded` | the conversation outgrew the server's context window | raise `learner.max_context_tokens` (within the GPU's KV-cache capacity, which vLLM logs at startup), or lower `episode.max_output_chars` or `episode.max_turns` |
+| `episode.max_context_tokens needs the hf_transformers or vllm backend` | the cap is enforced by this repository's server, which another server would ignore | serve the learner with `hf_transformers` or `vllm`, or remove the cap |
 | `model_error:...sampling parameters [...] are not supported` | a `sampling.extra_body` sets a parameter `hf_server` does not apply (e.g. `min_p`, `repetition_penalty`) | remove it; `hf_server` applies `temperature`, `top_p`, `top_k` and `max_output_tokens` only |
 | Hugging Face warning about unauthenticated requests | a model load contacted the hub | harmless |
 
@@ -121,6 +122,7 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | Symptom | Cause | Action |
 |---|---|---|
 | frequent `budget:output_truncated` | replies hit `max_output_tokens` mid tool call or mid thought | raise `episode.sampling.max_output_tokens` |
+| frequent `budget:max_context` | episodes fill `episode.max_context_tokens` | expected for long tasks; it is a budget like `max_turns`. Raising it needs room in training memory too (`training.dpo.max_length` follows it), see [runpod.md](runpod.md) |
 | `model_error:unparsed_tool_call` | the reply's only tool calls were unparseable | none: model behavior, counted as a malformed turn |
 | `budget:usage_unavailable` | `max_episode_tokens` is set but the endpoint reports no usage | use an endpoint that reports usage, or drop the token budget |
 | `infra:RewardFileNotFoundError` and the trial's `verifier/test-stdout.txt` says `environment probe failed; not grading: <checks>` | the verifier container does not match the task's profile: `egress:dns`/`egress:tcp` (it has network), `env:<NAME>`, `tool:<name>`, `hostname` or `process:<name>` | for egress, check that the task directory was rendered by the current renderer (its `tests/docker-compose.yaml` sets `network_mode: "none"`) and that nothing overrides it; otherwise compare the image with the profile in `src/learning_loop/tasks/spec.py` |

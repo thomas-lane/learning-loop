@@ -188,6 +188,7 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
     if uses_model_editor and exp.editor.mode == "current_learner" and ed_inf is not None and ed_inf.mode == "external":
         raise PlanError("editor=current_learner changes every cycle; a fixed external editor endpoint cannot serve it")
     check_endpoints(machine, learner, editor, initial_id, editor_checkpoint_id(exp, editor, initial_id, initial_id) if uses_model_editor else None)
+    check_context_cap(exp, machine)
     if exp.condition == "learning" and exp.cycles >= 1 and learner.chat_template_kwargs.get("enable_thinking") and exp.editor.assistant_text_policy == "reject_nonempty":
         raise PlanError(f"{learner.name} reasons on every turn (enable_thinking), so editor.assistant_text_policy reject_nonempty would leave "
                         "almost no editable turns; use keep_reasoning")
@@ -242,6 +243,15 @@ def check_serving_backend(inf: InferenceProfile, model: ModelProfile, role: str)
     sb = model.serving.get(inf.backend) if inf.mode != "scripted" else None
     if sb is not None and sb.status == "unsupported":
         raise PlanError(f"configs/models/{model.name}.yaml marks serving backend {inf.backend!r} unsupported; the {role} cannot be served with it")
+
+
+def check_context_cap(exp: ExperimentConfig, machine: MachineProfile) -> None:
+    """`episode.max_context_tokens` is enforced by this repository's server (hf_server), which
+    lowers each request's output limit; another server would ignore the request field."""
+    inf = machine.inference
+    if exp.episode.max_context_tokens is not None and inf.mode != "scripted" and inf.backend not in ("hf_transformers", "vllm"):
+        raise PlanError(f"episode.max_context_tokens needs the hf_transformers or vllm backend (learning_loop.serving.hf_server); "
+                        f"the learner's endpoint is {inf.backend!r}")
 
 
 def check_endpoints(machine: MachineProfile, learner: ModelProfile, editor: ModelProfile, learner_id: str, editor_id: str | None) -> None:
@@ -603,6 +613,7 @@ def episode_budgets(exp: ExperimentConfig) -> EpisodeBudgets:
     return EpisodeBudgets(
         max_turns=e.max_turns,
         max_episode_tokens=e.max_episode_tokens,
+        max_context_tokens=e.max_context_tokens,
         tool_timeout_sec=e.tool_timeout_sec,
         max_output_chars=e.max_output_chars,
         agent_timeout_sec=e.agent_timeout_sec,
@@ -1271,6 +1282,7 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
     if ckpt.model_profile != learner.name:
         raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
     check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
+    check_context_cap(exp, machine)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-eval-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
@@ -1327,6 +1339,7 @@ def calibrate(exp_path: str | Path, machine_path: str | Path, checkpoint: str, f
     if ckpt.model_profile != learner.name:
         raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
     check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
+    check_context_cap(exp, machine)
     defs = task_mod.calibration_ids(families or sorted(FAMILIES), difficulties, instances_per_difficulty)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"calibration-{learner.name}-{stamp}"
@@ -1429,6 +1442,7 @@ def edit_replay(source_run: Path, cycle: int, exp_path: str | Path, machine_path
     src_initial_id = read_json(src.run_dir / "run.json")["initial_checkpoint"]["checkpoint_id"]
     editor_id = None if exp.editor.mode == "scripted" else editor_checkpoint_id(exp, editor, src_learner.checkpoint_id, src_initial_id)
     check_endpoints(machine, learner, editor, src_learner.checkpoint_id, editor_id)
+    check_context_cap(exp, machine)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-editreplay-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id

@@ -14,6 +14,9 @@ Loop: [fingerprint] -> request -> response -> execute each tool call in order
     budget:usage_unavailable      BUDGET       max_episode_tokens is set but a response reported no usage
     budget:output_truncated       BUDGET       finish_reason=length and no valid tool call (including
                                                a tool-call block the limit cut off)
+    budget:max_context            BUDGET       the conversation fills the context cap
+                                               (budgets.max_context_tokens): the prompt alone fills
+                                               it, or a reply cut off as above ran into it
     safety:agent_timeout          SAFETY       wall-clock limit (budgets.agent_timeout_sec)
     safety:cancelled              SAFETY       cancelled from outside (e.g. Harbor's agent timeout)
     model_error:<msg>             MODEL_ERROR  endpoint rejected the request (4xx, e.g. context overflow)
@@ -209,6 +212,11 @@ class _StopEpisode(Exception):
     def __init__(self, reason: str, category: StopCategory):
         self.reason = reason
         self.category = category
+
+
+def _length_stop(d: Any) -> tuple[str, StopCategory]:
+    """A reply cut off by its output limit: the context cap when that is what lowered the limit."""
+    return ("budget:max_context" if d.context_capped else "budget:output_truncated"), StopCategory.BUDGET
 
 
 class _Episode:
@@ -488,7 +496,7 @@ class _Episode:
                 t,
             )
             self.n_requests += 1
-            d = await self.policy.decide(list(self.messages), plan.tools, seed)
+            d = await self.policy.decide(list(self.messages), plan.tools, seed, plan.budgets.max_context_tokens)
             self.seed_flags.append(d.seed_sent is not None)
             if d.latency_sec is not None:
                 self.endpoint_sec += d.latency_sec
@@ -504,6 +512,8 @@ class _Episode:
                     {"request_index": req_idx, "raw": d.raw_response, "history_message": None, "finish_reason": None, "usage": None, "latency_sec": d.latency_sec, "seed_sent": d.seed_sent, "error": d.request_error},
                     t,
                 )
+                if d.context_exhausted:  # the conversation fills the episode's context cap
+                    raise _StopEpisode("budget:max_context", StopCategory.BUDGET)
                 raise _StopEpisode(f"model_error:{d.request_error}", StopCategory.MODEL_ERROR)
             self.emit(
                 EventKind.RESPONSE,
@@ -545,19 +555,19 @@ class _Episode:
                 # the model ran out of tokens rather than writing a malformed call.
                 await self.turn_done()
                 if d.finish_reason == "length":
-                    raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
+                    raise _StopEpisode(*_length_stop(d))
                 raise _StopEpisode("model_error:unparsed_tool_call", StopCategory.MODEL_ERROR)
             if not calls:
                 await self.turn_done()
                 if d.finish_reason == "length":
-                    raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
+                    raise _StopEpisode(*_length_stop(d))
                 raise _StopEpisode("model_finished", StopCategory.MODEL)
             for j, c in enumerate(calls):
                 raw = original_raw.get(c["id"], c["function"]["arguments"])
                 await self.run_call(t, j, c, d.call_errors.get(c["id"]), raw, d.finish_reason)
             await self.turn_done()
             if d.finish_reason == "length" and all(c["id"] in d.call_errors for c in calls):
-                raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
+                raise _StopEpisode(*_length_stop(d))
 
     # -- result ------------------------------------------------------------- #
 

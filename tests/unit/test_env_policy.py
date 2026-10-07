@@ -147,3 +147,24 @@ def test_sampling_fields_cannot_be_duplicated_in_extra_body():
         SamplingConfig(top_k=64, extra_body={"top_k": 20})
     with pytest.raises(ValueError, match="temperature"):
         SamplingConfig(extra_body={"temperature": 1.0})
+
+
+async def test_context_cap_is_sent_and_its_exhaustion_recognized():
+    body = {"error": {"message": "the prompt (40 tokens) fills the context cap (32 tokens)", "type": "context_budget_exhausted",
+                      "code": "context_budget_exhausted"}}
+    pol, seen = _policy(lambda r: httpx.Response(400, json=body))
+    d = await pol.decide(MSGS, TOOLS, 1, max_context_tokens=32)
+    assert seen[0]["max_context_tokens"] == 32
+    assert d.request_error is not None and d.context_exhausted
+    other, _ = _policy(lambda r: httpx.Response(400, json={"error": {"message": "x", "code": "context_length_exceeded"}}))
+    d = await other.decide(MSGS, TOOLS, 1)
+    assert d.request_error is not None and not d.context_exhausted
+
+
+async def test_a_capped_reply_is_flagged():
+    msg = {"role": "assistant", "content": "partial"}
+    raw = {**_completion(msg, {"prompt_tokens": 30, "completion_tokens": 2, "total_tokens": 32}), "learning_loop": {"context_capped": True}}
+    raw["choices"][0]["finish_reason"] = "length"
+    pol, _ = _policy(lambda r: httpx.Response(200, json=raw))
+    d = await pol.decide(MSGS, TOOLS, 1, max_context_tokens=32)
+    assert d.context_capped and d.finish_reason == "length"

@@ -245,6 +245,7 @@ class EpisodeBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_turns: int
     max_episode_tokens: int | None = None  # input+output across requests
+    max_context_tokens: int | None = None  # context window of every request (prompt + output)
     tool_timeout_sec: int
     max_output_chars: int
     agent_timeout_sec: float  # safety wall clock

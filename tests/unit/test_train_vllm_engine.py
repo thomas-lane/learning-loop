@@ -183,3 +183,26 @@ def test_concurrent_requests_share_the_engine_safely(qwen, fake_vllm):
     assert {r["choices"][0]["message"]["content"] for r in results} == {"done"}
     assert len({tuple(r["request"]["prompt"]) for r in _requests(fake_vllm)}) == 8  # each request rendered its own prompt
     assert "--max-num-seqs" in _requests(fake_vllm)[0]["argv"] and _requests(fake_vllm)[0]["argv"][_requests(fake_vllm)[0]["argv"].index("--max-num-seqs") + 1] == "8"
+
+
+def test_context_cap_lowers_the_output_limit_and_refuses_a_full_prompt(qwen, fake_vllm):
+    from learning_loop.serving.hf_server import ApiError
+    from learning_loop.training.render import encode, render_text
+
+    prof, tok = qwen
+    eos = tok.convert_tokens_to_ids("<|im_end|>")
+    (fake_vllm / "script.json").write_text(json.dumps({"token_ids": encode(tok, "hi"), "stop": eos}))
+    eng = vllm_engine.VllmEngine(prof, None, "vllm==0.30.0", base_checkpoint_id="base:x", start_timeout_sec=30)
+    try:
+        msgs = [{"role": "user", "content": "list files"}]
+        n = len(encode(tok, render_text(tok, msgs, None, add_generation_prompt=True, chat_template_kwargs=prof.chat_template_kwargs)))
+        r = eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n + 10})
+        assert _requests(fake_vllm)[-1]["request"]["max_tokens"] == 10  # what still fits the request's window
+        assert r["learning_loop"]["context_capped"] is True and r["learning_loop"]["max_tokens_applied"] == 10
+        r = eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n + 100})
+        assert _requests(fake_vllm)[-1]["request"]["max_tokens"] == 64 and r["learning_loop"]["context_capped"] is False
+        with pytest.raises(ApiError) as e:
+            eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n})
+        assert e.value.status == 400 and e.value.code == "context_budget_exhausted"
+    finally:
+        eng.close()

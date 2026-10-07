@@ -117,3 +117,11 @@ def test_edit_replay_checks_endpoints_against_the_source_cycle(source_run, tmp_p
 def test_context_window_reaches_every_managed_server(tmp_path):
     ctx = co.create_run(EXP, M / "fixture.yaml", run_id="ctx", runs_dir=tmp_path, overrides=["learner.max_context_tokens=131072"])
     assert ctx.manager("learner").max_context == 131072 and ctx.manager("editor").max_context == 131072
+
+
+def test_context_cap_needs_this_repositorys_server():
+    exp, _, mac, learner, editor = co.load_all(EXP, M / "mac-local.yaml", REAL_LEARNER + ["episode.max_context_tokens=4096"])
+    co.check_compatibility(exp, mac, learner, editor)  # hf_transformers: hf_server enforces it
+    llama = mac.model_copy(update={"inference": mac.inference.model_copy(update={"mode": "external", "backend": "llama_cpp"})})
+    with pytest.raises(co.PlanError, match="needs the hf_transformers or vllm backend"):
+        co.check_context_cap(exp, llama)

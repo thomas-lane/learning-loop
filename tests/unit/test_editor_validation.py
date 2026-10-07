@@ -263,7 +263,7 @@ class FakePolicy:
         self.infra_error = infra_error
         self.calls = []
 
-    async def decide(self, messages, tools, seed):
+    async def decide(self, messages, tools, seed, max_context_tokens=None):
         self.calls.append((messages, tools, seed))
         return PolicyDecision(
             raw_request={}, raw_response={"id": "r"}, history_message=self.answer,

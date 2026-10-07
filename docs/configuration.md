@@ -51,6 +51,10 @@ exits 2 before anything starts.
   to profiles by file name while checkpoint ids and `checkpoint.json` record the `name`.
 - Each `serving.<key>.backend` in a model profile must equal its key, because machine profiles
   look up `serving.<inference.backend>`.
+- `training.dpo.max_length_margin` requires `episode.max_context_tokens` and `training.dpo.max_length:
+  null`; the limit becomes the cap plus the margin. Otherwise `training.dpo.max_length` is required
+  and, with a cap, at least the cap, so that edits at the end of a full context can be trained.
+  `learner.max_context_tokens`, when set, must be at least `episode.max_context_tokens`.
 - A `sampling` block's `extra_body` must not set `temperature`, `top_p`, `top_k`, `max_tokens` or
   `seed`, so each setting has one place and is recorded under its own name.
 
@@ -76,6 +80,8 @@ is any `editor.mode` except `scripted`.
   editor's checkpoint; an `external` `editor_inference` cannot be used with `editor.mode:
   current_learner`, whose checkpoint changes every cycle; a scripted learner needs
   `editor_inference`.
+- `episode.max_context_tokens` needs a learner endpoint with the `hf_transformers` or `vllm`
+  backend (scripted fixtures excepted): `hf_server` enforces the cap per request.
 - In a learning run with `cycles` ≥ 1, a learner whose model profile sets
   `chat_template_kwargs.enable_thinking: true` needs `editor.assistant_text_policy:
   keep_reasoning`, because it reasons on every turn and `reject_nonempty` would leave almost no
@@ -146,6 +152,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `episode.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `episode.max_turns` | int (>= 1) | **required** | Experimental budget: model turns per episode (a branch's prefix and intervention count). |
 | `episode.max_episode_tokens` | int or null | null | Experimental budget: input+output tokens over all requests; an endpoint without usage then stops the episode (`budget:usage_unavailable`). |
+| `episode.max_context_tokens` | int or null (>= 1024) | null | Experimental budget: context window of every learner request, prompt plus output, enforced like a model's own window. Each request's output limit is lowered to what still fits (at most `sampling.max_output_tokens`); a full context stops the episode (`budget:max_context`). Needs this repository's server (`hf_transformers` or `vllm` backend). null: no cap below the server's window. |
 | `episode.tool_timeout_sec` | int | `60` | Per-command timeout; the model cannot raise it. |
 | `episode.agent_timeout_sec` | float | `600.0` | Safety wall-clock limit per episode (a safety stop, not a budget). |
 | `episode.max_output_chars` | int | `8000` | Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded). |
@@ -195,7 +202,8 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `training.dpo.learning_rate` | float | `5e-06` | Learning rate. |
 | `training.dpo.per_device_batch_size` | int | `1` | Pairs per device step. |
 | `training.dpo.gradient_accumulation_steps` | int | `1` | Micro-batches per optimizer step. |
-| `training.dpo.max_length` | int | `4096` | Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. |
+| `training.dpo.max_length` | int or null | `4096` | Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. null together with `max_length_margin`. |
+| `training.dpo.max_length_margin` | int or null (>= 0) | null | Set the limit to `episode.max_context_tokens` plus this many tokens (with `max_length: null`). A pair's prompt and rejected turn fit the context cap; the margin is room for an edited turn longer than the original. |
 | `training.dpo.warmup_steps` | int | `0` | Learning-rate warmup steps. |
 | `training.dpo.max_grad_norm` | float | `1.0` | Gradient clipping norm. |
 | `training.dpo.gradient_checkpointing` | bool | `False` | Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values. |

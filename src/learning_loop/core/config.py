@@ -297,6 +297,7 @@ class EpisodeConfig(Strict):
     sampling: SamplingConfig = Field(description="Learner decoding for evaluation and collection.")
     max_turns: int = Field(ge=1, description="Experimental budget: model turns per episode (a branch's prefix and intervention count).")
     max_episode_tokens: int | None = Field(default=None, description="Experimental budget: input+output tokens over all requests; an endpoint without usage then stops the episode (`budget:usage_unavailable`).")
+    max_context_tokens: int | None = Field(default=None, ge=1024, description="Experimental budget: context window of every learner request, prompt plus output, enforced like a model's own window. Each request's output limit is lowered to what still fits (at most `sampling.max_output_tokens`); a full context stops the episode (`budget:max_context`). Needs this repository's server (`hf_transformers` or `vllm` backend). null: no cap below the server's window.")
     tool_timeout_sec: int = Field(default=60, description="Per-command timeout; the model cannot raise it.")
     agent_timeout_sec: float = Field(default=600.0, description="Safety wall-clock limit per episode (a safety stop, not a budget).")
     max_output_chars: int = Field(default=8000, description="Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded).")
@@ -364,7 +365,8 @@ class DpoConfig(Strict):
     learning_rate: float = Field(default=5e-6, description="Learning rate.")
     per_device_batch_size: int = Field(default=1, description="Pairs per device step.")
     gradient_accumulation_steps: int = Field(default=1, description="Micro-batches per optimizer step.")
-    max_length: int = Field(default=4096, description="Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated.")
+    max_length: int | None = Field(default=4096, description="Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. null together with `max_length_margin`.")
+    max_length_margin: int | None = Field(default=None, ge=0, description="Set the limit to `episode.max_context_tokens` plus this many tokens (with `max_length: null`). A pair's prompt and rejected turn fit the context cap; the margin is room for an edited turn longer than the original.")
     warmup_steps: int = Field(default=0, description="Learning-rate warmup steps.")
     max_grad_norm: float = Field(default=1.0, description="Gradient clipping norm.")
     gradient_checkpointing: bool = Field(default=False, description="Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values.")
@@ -432,6 +434,21 @@ class ExperimentConfig(Strict):
             raise ValueError("condition=fixed_dataset requires training.fixed_dataset")
         if self.condition != "fixed_dataset" and self.training.fixed_dataset:
             raise ValueError("training.fixed_dataset is only valid with condition=fixed_dataset")
+        dpo, cap = self.training.dpo, self.episode.max_context_tokens
+        if dpo.max_length_margin is not None:
+            if cap is None:
+                raise ValueError("training.dpo.max_length_margin requires episode.max_context_tokens")
+            if dpo.max_length is not None:
+                raise ValueError("set training.dpo.max_length: null when using training.dpo.max_length_margin")
+            dpo.max_length = cap + dpo.max_length_margin
+        elif dpo.max_length is None:
+            raise ValueError("training.dpo.max_length is required unless training.dpo.max_length_margin is set")
+        elif cap is not None and dpo.max_length < cap:
+            raise ValueError(f"training.dpo.max_length ({dpo.max_length}) is below episode.max_context_tokens ({cap}): "
+                             "edits late in long episodes could never be trained")
+        window = self.learner.max_context_tokens
+        if cap is not None and window is not None and window < cap:
+            raise ValueError(f"learner.max_context_tokens ({window}) is below episode.max_context_tokens ({cap})")
         return self
 
 
