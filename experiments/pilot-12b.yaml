@@ -10,6 +10,7 @@ learner:
 episode:
   sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
   max_context_tokens: 32768       # every learner request (prompt + output) fits; all roles alike
+  max_episode_tokens: null        # the context cap and max_turns bound an episode; no summed-token budget
   agent_timeout_sec: 3600         # reasoning turns take far longer than the E4B pilot's
 editor:
   sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
