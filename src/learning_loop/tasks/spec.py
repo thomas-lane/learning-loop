@@ -148,14 +148,22 @@ class ParsedAnswer:
     "dotenv" (KEY=VALUE lines into a dict; duplicate keys fail), "lines" (non-empty stripped
     lines, in order), "line-set" (the same, sorted) or "crontab" (each job as the times it
     runs, so equivalent cron syntax compares equal; build `expected` with
-    `runtime.grade.parse_crontab`)."""
+    `runtime.grade.parse_crontab`). `numbers="value"` compares numbers by value (`23` equals
+    `23.0`); the default compares JSON/TOML types too, for tasks whose instruction requires an
+    integer."""
 
     path: str
     format: str
     expected: Any
+    numbers: str = "type"
 
     def key(self) -> dict[str, Any]:
-        return {"kind": "parsed", "path": self.path, "format": self.format, "expected": self.expected}
+        key = {"kind": "parsed", "path": self.path, "format": self.format, "expected": self.expected}
+        if self.numbers != "type":
+            if self.numbers != "value":
+                raise ValueError(f"numbers must be 'type' or 'value', not {self.numbers!r}")
+            key["numbers"] = "value"
+        return key
 
     @property
     def artifacts(self) -> list[str]:
@@ -165,8 +173,9 @@ class ParsedAnswer:
 @dataclass(frozen=True)
 class FileTree:
     """The regular files under the directory `root` are exactly `expected`:
-    {relative path: {"sha256": hex, optional "mode": "0644"}}. Reward = correct entries /
-    (expected + unexpected entries). Build `expected` with `tree_entry`."""
+    {relative path: {"sha256": hex, optional "mode": "0644", optional "text": true}}. Reward =
+    correct entries / (expected + unexpected entries). Build `expected` with `tree_entry`; a
+    `text` entry ignores how the file ends (trailing newlines)."""
 
     root: str
     expected: Mapping[str, Mapping[str, str]]
@@ -179,9 +188,16 @@ class FileTree:
         return [self.root]
 
 
-def tree_entry(content: str | bytes, mode: int | None = None) -> dict[str, str]:
+def tree_entry(content: str | bytes, mode: int | None = None, text: bool = False) -> dict[str, Any]:
+    """A FileTree entry. `text=True`: the file's content is compared with its trailing newlines
+    normalized to one (`runtime.grade.text_sha256`), for files the agent writes whose ending the
+    instruction does not specify; otherwise byte for byte."""
+    from .runtime.grade import text_sha256
+
     data = content.encode() if isinstance(content, str) else content
-    entry = {"sha256": hashlib.sha256(data).hexdigest()}
+    entry: dict[str, Any] = {"sha256": text_sha256(data) if text else hashlib.sha256(data).hexdigest()}
+    if text:
+        entry["text"] = True
     if mode is not None:
         entry["mode"] = f"{mode:04o}"
     return entry

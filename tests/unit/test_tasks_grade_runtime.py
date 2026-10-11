@@ -39,6 +39,47 @@ def test_parsed_json_ignores_key_order_only(text, reward):
     assert g.grade(key, reader({"/app/a": text}))[0] == reward
 
 
+def test_parsed_numbers_compare_by_type_unless_the_task_says_by_value():
+    key = {"kind": "parsed", "format": "json", "path": "/app/a", "expected": {"mean": 23.0, "n": 4, "ok": True}}
+    files = reader({"/app/a": b'{"mean": 23, "n": 4.0, "ok": true}'})
+    assert g.grade(key, files)[0] == 0.0  # default: an integer is not a float (e.g. "a converted value is an integer")
+    assert g.grade({**key, "numbers": "value"}, files)[0] == 1.0
+    assert g.grade({**key, "numbers": "value"}, reader({"/app/a": b'{"mean": 23, "n": 4, "ok": 1}'}))[0] == 0.0  # bools stay bools
+
+
+def test_crontab_compares_when_jobs_run():
+    def same(a, b):
+        return g.parse_crontab(a) == g.parse_crontab(b)
+
+    assert same("*/15 * * * * job\n", "*/15 * 1-31 * * job\n")  # one restricted day field: both must match
+    assert same("*/15 * * * * job\n", "0-59/15 * * * 0-6 job\n")
+    assert same("0 3 * * 1 job\n", "0 3 * * mon job\n") and same("0 3 * * 0 job\n", "0 3 * * 7 job\n")
+    assert same("* * 1-31 * 1 job\n", "* * * * * job\n")  # both restricted: either matches, so every day
+    assert not same("* * * * 1 job\n", "* * * * * job\n")  # only Mondays
+    assert not same("0 3 1 * 1 job\n", "0 3 1 * * job\n")  # the 1st or a Monday, against the 1st only
+    assert same("MAILTO = ops@example.com\nFOO=1\n0 3 * * * job\n", "0 3 * * * job\n")
+
+
+def test_tree_text_entries_ignore_how_the_file_ends():
+    from learning_loop.tasks.spec import tree_entry
+
+    key = {"kind": "tree", "root": "/app/c", "expected": {"a.conf": tree_entry("x = 1\n", text=True), "b.bin": tree_entry(b"x\n")}}
+    ok = {"/app/c/a.conf": b"x = 1", "/app/c/b.bin": b"x\n"}
+    assert g.grade(key, reader(ok))[0] == 1.0
+    assert g.grade(key, reader({**ok, "/app/c/a.conf": b"x = 1\n\n"}))[0] == 1.0
+    assert g.grade(key, reader({**ok, "/app/c/a.conf": b"x = 2\n"}))[0] == 0.5
+    assert g.grade(key, reader({**ok, "/app/c/b.bin": b"x"}))[0] == 0.5  # byte-exact entries stay byte-exact
+
+
+def test_raises_accepts_a_subclass_of_the_named_exception():
+    checks = [{"name": "r", "func": "f", "kind": "raises", "args": [], "exception": "ValueError"}]
+    sub = {"raised": "ParseError", "value_error": True, "classes": ["ParseError", "ValueError", "Exception", "BaseException", "object"]}
+    other = {"raised": "KeyError", "value_error": False, "classes": ["KeyError", "LookupError", "Exception", "BaseException", "object"]}
+    assert g.judge(checks, {"r": sub}) == {"r": True}
+    assert g.judge(checks, {"r": other}) == {"r": False}
+    assert g.judge(checks, {"r": {"raised": "ValueError", "value_error": True}}) == {"r": False}  # wrong shape
+
+
 def test_checks_in_process_accepts_only_plain_observations():
     good = b"def add(a, b):\n    if a is None:\n        raise ValueError('empty')\n    return a + b\n"
     assert g.grade(CHECKS, reader({"/app/calc.py": good}), trusted=True)[0] == 1.0
@@ -49,7 +90,7 @@ def test_checks_in_process_accepts_only_plain_observations():
 
 def test_judge_rejects_observations_of_the_wrong_shape():
     checks = CHECKS["checks"]
-    assert g.judge(checks, {"add": {"value": 5}, "add_empty_raises": {"raised": "ValueError", "value_error": True}}) == {"add": True, "add_empty_raises": True}
+    assert g.judge(checks, {"add": {"value": 5}, "add_empty_raises": {"raised": "ValueError", "value_error": True, "classes": ["ValueError", "Exception", "BaseException", "object"]}}) == {"add": True, "add_empty_raises": True}
     assert g.judge(checks, {"add": {"value": True}}) == {"add": False, "add_empty_raises": False}  # bool is not a number
     assert g.judge(checks, {"add": {"value": 5, "extra": 1}})["add"] is False
     assert g.judge(checks, "not a dict") == {"add": False, "add_empty_raises": False}
@@ -137,7 +178,7 @@ def test_judge_rejects_every_forged_observation_shape():
         {"name": "r", "func": "mean", "kind": "raises", "args": [[]]},
         {"name": "m", "func": "median", "kind": "no_mutation", "args": [[3, 1, 2]]},
     ]
-    good = {"v": {"value": 1.5}, "r": {"raised": "ValueError", "value_error": True}, "m": {"after": [3, 1, 2]}}
+    good = {"v": {"value": 1.5}, "r": {"raised": "ValueError", "value_error": True, "classes": ["ValueError", "Exception", "BaseException", "object"]}, "m": {"after": [3, 1, 2]}}
     assert g.judge(checks, good) == {"v": True, "r": True, "m": True}
     forged = [
         {"v": {"value": True}, "r": {"raised": "X", "value_error": 1}, "m": {"after": [1, 2, 3]}},

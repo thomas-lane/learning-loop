@@ -47,6 +47,7 @@ import json
 import math
 import os
 import pwd
+import re
 import shutil
 import signal
 import stat
@@ -158,6 +159,19 @@ def _canon(v):
     return json.dumps(v, sort_keys=True, separators=(",", ":"))
 
 
+def _by_value(v):
+    """`v` with every integral float as an int, so that numbers compare by value (`23` == `23.0`)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, dict):
+        return {k: _by_value(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_by_value(x) for x in v]
+    return v
+
+
 # --------------------------------------------------------------------------- #
 # Answer kinds
 # --------------------------------------------------------------------------- #
@@ -227,16 +241,21 @@ def _cron_field(text, lo, hi, names):
     return values
 
 
+_CRON_VAR = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*=")
+
+
 def parse_crontab(text):
-    """Sorted [[minutes, hours, days-of-month, months, days-of-week, dom_star, dow_star, command]]
-    for the job lines of a crontab (comments, blank lines and VAR=value lines ignored). Each field
-    becomes the sorted values it matches; day-of-week 7 is Sunday (0). Whether day-of-month and
-    day-of-week were written starting with `*` is kept, because cron runs a job when either
-    matches if both are restricted, and only on the restricted one otherwise."""
+    """Sorted [[minutes, hours, months, days, command]] for the job lines of a crontab (comments,
+    blank lines and `NAME=value` lines, spaces around `=` allowed, ignored): when each job actually
+    runs, so any two spellings that run a job at the same times compare equal. Minutes, hours and
+    months are the sorted values each field matches. `days` is the sorted [day-of-month,
+    day-of-week] pairs (1-31 x 0-6, 7 is Sunday) on which the job runs: cron runs it when both
+    fields match if either field is written starting with `*`, and when either matches otherwise,
+    so `* * 1-31 * 1` runs every day while `* * * * 1` runs on Mondays only."""
     jobs = []
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or ("=" in line.split()[0] and not line.startswith("@")):
+        if not line or line.startswith("#") or (not line.startswith("@") and _CRON_VAR.match(line)):
             continue
         if line.startswith("@"):
             alias, _, command = line.partition(" ")
@@ -247,9 +266,11 @@ def parse_crontab(text):
             parts = line.split(None, 5)
         if len(parts) != 6 or not parts[5]:
             raise ValueError("not a cron line: %r" % line[:100])
-        fields = [sorted(_cron_field(parts[i], lo, hi, names)) for i, (_, lo, hi, names) in enumerate(_CRON_FIELDS)]
-        fields[4] = sorted({0 if d == 7 else d for d in fields[4]})
-        jobs.append(fields + [parts[2].startswith("*"), parts[4].startswith("*"), parts[5].strip()])
+        fields = [_cron_field(parts[i], lo, hi, names) for i, (_, lo, hi, names) in enumerate(_CRON_FIELDS)]
+        dom, dow = fields[2], {0 if d == 7 else d for d in fields[4]}
+        either = not parts[2].startswith("*") and not parts[4].startswith("*")
+        days = [[d, w] for d in range(1, 32) for w in range(7) if ((d in dom) or (w in dow) if either else (d in dom) and (w in dow))]
+        jobs.append([sorted(fields[0]), sorted(fields[1]), sorted(fields[3]), days, parts[5].strip()])
     return sorted(jobs, key=_canon)
 
 
@@ -292,8 +313,22 @@ def grade_parsed(key, view):
         value = parse_text(text, key["format"])
     except (ValueError, TypeError) as e:
         return 0.0, ["does not parse as %s: %s" % (key["format"], e)]
-    ok = _canon(value) == _canon(key["expected"])
-    return (1.0 if ok else 0.0), ["expected: " + _canon(key["expected"])[:500], "actual:   " + _canon(value)[:500]]
+    expected = key["expected"]
+    if key.get("numbers") == "value":
+        value, expected = _by_value(value), _by_value(expected)
+    ok = _canon(value) == _canon(expected)
+    return (1.0 if ok else 0.0), ["expected: " + _canon(expected)[:2000], "actual:   " + _canon(value)[:2000]]
+
+
+def text_sha256(data):
+    """sha256 of text content with its trailing newlines normalized to exactly one, for tree
+    entries whose instruction does not specify how a written file ends."""
+    return hashlib.sha256(data.rstrip(b"\n") + b"\n").hexdigest()
+
+
+def _text_sha(view, root, rel):
+    data = view.read(root.rstrip("/") + "/" + rel)
+    return None if data is None else text_sha256(data)
 
 
 def grade_tree(key, view):
@@ -304,7 +339,7 @@ def grade_tree(key, view):
         got = actual.get(rel)
         if got is None:
             log.append("missing: " + rel)
-        elif got[0] != "F" or got[1] != want["sha256"]:
+        elif got[0] != "F" or (_text_sha(view, key["root"], rel) if want.get("text") else got[1]) != want["sha256"]:
             log.append("wrong content or not a regular file: " + rel)
         elif "mode" in want and "%04o" % got[2] != want["mode"]:
             log.append("wrong mode %04o (expected %s): %s" % (got[2], want["mode"], rel))
@@ -424,7 +459,8 @@ def observe(lib, checks):
         try:
             got = fn(*args)
         except BaseException as e:  # anything the artifact raises is an observation
-            out[c["name"]] = {"raised": type(e).__name__[:200], "value_error": isinstance(e, ValueError)}
+            out[c["name"]] = {"raised": type(e).__name__[:200], "value_error": isinstance(e, ValueError),
+                              "classes": [k.__name__[:200] for k in type(e).__mro__[:32]]}
             continue
         if c["kind"] == "no_mutation":
             p = plain(args[0])
@@ -447,7 +483,7 @@ def judge(checks, observations):
 
     Check kinds: `value` (a number within `abs_tol`, default 1e-9 relative), `equal` (the
     return value equals `expected` as JSON, so 1 and 1.0 or True and 1 differ), `raises`
-    (raises `exception` by class name, default any ValueError) and `no_mutation` (the first
+    (raises `exception` or a subclass of it, by class name; default any ValueError) and `no_mutation` (the first
     argument is unchanged after the call)."""
 
     def num(x):
@@ -460,8 +496,8 @@ def judge(checks, observations):
         ok = False
         if isinstance(o, dict):
             if c["kind"] == "raises":
-                if set(o) == {"raised", "value_error"}:
-                    ok = o["raised"] == c["exception"] if "exception" in c else o["value_error"] is True
+                if set(o) == {"raised", "value_error", "classes"} and isinstance(o["classes"], list):
+                    ok = c["exception"] in o["classes"] if "exception" in c else o["value_error"] is True
             elif c["kind"] == "no_mutation":
                 ok = set(o) == {"after"} and _canon(o["after"]) == _canon(c["args"][0])
             elif c["kind"] == "equal":
