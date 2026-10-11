@@ -96,7 +96,8 @@ def test_vllm_engine_round_trip_uses_our_rendering_parser_and_counts(qwen, fake_
         assert any(a.startswith("base:x=") for a in argv)  # the zero adapter is served as a LoRA module
         ch = r["choices"][0]
         assert ch["finish_reason"] == "tool_calls" and json.loads(ch["message"]["tool_calls"][0]["function"]["arguments"]) == {"command": "ls -la"}
-        assert r["usage"] == {"prompt_tokens": len(want), "completion_tokens": len(gen) + 1, "total_tokens": len(want) + len(gen) + 1}
+        assert r["usage"] == {"prompt_tokens": len(want), "completion_tokens": len(gen) + 1, "total_tokens": len(want) + len(gen) + 1,
+                              "completion_tokens_details": {"reasoning_tokens": 0}}
         assert eng.info()["engine"] == "vllm" and r["learning_loop"]["engine"] == "vllm"
     finally:
         eng.close()

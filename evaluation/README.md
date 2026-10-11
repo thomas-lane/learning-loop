@@ -58,7 +58,12 @@ task, how the data is built, and every trap and shortcut; this table is the inde
 
 Families are grouped into seven **clusters** of related skills (`Family.cluster`), five each,
 so held-out sets can leave out single families (near) or whole clusters (far). Difficulties
-are `easy`, `medium` and `hard`: more files, more traps and fewer hints.
+are `easy`, `medium` and `hard`. A family's instruction is the same text at every difficulty
+(only values drawn for the instance, such as file or function names, differ): it states every
+rule that applies at any level, and the data decides which ones matter. Harder levels have more
+and larger inputs and more traps. Why not tell easy instances less? Then each level would be a
+different task, and a policy could learn the wording instead of the skill; each family's unit
+tests check that its instruction is one template at every level.
 
 | cluster | family | the agent must | grader |
 |---|---|---|---|
@@ -88,7 +93,7 @@ are `easy`, `medium` and `hard`: more files, more traps and fewer hints.
 | | `refactor-preserve` | extract duplicated parsing into one helper, keep behavior, then extend it | `Checks` |
 | | `cli-flags` | add options to an argparse script as specified | `Commands` |
 | config-repair | `fix-json-config` | repair a hand-edited JSON config so its validator accepts it, keeping every value | `ParsedAnswer` (json) |
-| | `resolve-conflicts` | resolve merge-conflict blocks by per-section rules | `ExactAnswer` / `FileTree` |
+| | `resolve-conflicts` | resolve merge-conflict blocks by per-section rules | `FileTree` (text entries) |
 | | `env-reconcile` | rewrite a `.env` from a template, the current file and overrides | `ParsedAnswer` (dotenv) |
 | | `cron-translate` | translate schedule descriptions into crontab lines | `ParsedAnswer` (crontab) |
 | | `toml-migrate` | migrate a TOML config between schemas by following a changelog | `ParsedAnswer` (toml) |
@@ -186,7 +191,10 @@ wall time when a server has to start. A failure stops the run before any episode
 and every coordinator start that runs episodes, including `loop resume` (which may run on
 another host) and `loop stage` for an episode stage, records one line in the run's
 `logs/preflight.jsonl`. Local-fixture runs record a skip, since they
-start no containers.
+start no containers. Before the trials, the preflight also refuses a run directory on a
+case-insensitive filesystem (the macOS default): Harbor copies each episode's files out through
+it, where `URGENT/` and `urgent/` would merge, so the same agent output could be graded
+differently on different hosts.
 
 ## Environment guarantees
 
@@ -202,14 +210,18 @@ construction for every task. Its unit tests check each one on the rendered files
 | Fixed modes and file times | file modes come from the spec (0644 by default) and every directory is 0755, whatever the host's umask; every rendered file and directory gets the mtime 2026-01-01T00:00:00Z plus a sub-second part derived from its content; Docker's `COPY` keeps it | `ls -l` and `stat` show the same times on every host and re-render. The sub-second part differs between files with different content because BuildKit sends a build context incrementally and skips a file whose path, size and mtime match a copy it already holds, even from another task's build; with one constant mtime, two same-sized answer keys were built from the stale copy. BuildKit keys that copy by the context directory's name, not its path, and Harbor names every context `environment/` or `tests/`; this is intended upstream behavior ([docker/buildx#3232](https://github.com/docker/buildx/issues/3232)) and `--no-cache` does not affect it |
 | The answer stays hidden | the answer key (`tests/key.json`), grader and probe are only in the verifier's build context; the agent's context is `environment/` | the learner cannot read the answer |
 | The verifier grades its own files | `task.toml`'s `[verifier] env` carries `LL_TESTS_SHA256`, a digest of `grade.py`, `probe.py` and `key.json`; `grade.py` recomputes it and refuses to grade on a mismatch | `task.toml` reaches the container without passing through the image build, so even a stale build (above) cannot grade with another task's key |
-| Both containers check their environment | `runtime/probe.py` checks that DNS and a TCP connection to a public address fail, the `ENV` values, the hostname, the required tools and that only Harbor's `sh -c "sleep infinity"` is running. The verifier runs it from `tests/test.sh` (`grade.py --probe '<profile expectation>'`) and writes no reward on a failure. Every episode runs it in the agent container before turn 0 (and before a branch's replay) with the task's `env_probe` from `[metadata.learning_loop]`, which adds `app_digest`: the digest of `environment/files/` that `/app` must match; a failure stops the episode as `infra:env_probe:<checks>` before the model is called | an episode runs and a grade is written only in a container that matches the profile and holds exactly the rendered files, so a stale image build (above) stops the episode instead of running on another task's data |
+| Both containers check their environment | `runtime/probe.py` checks that DNS and a TCP connection to a public address fail, the `ENV` values, the hostname, that the required tools are on `PATH` and the tools listed as absent are not, and that only Harbor's `sh -c "sleep infinity"` is running. The verifier runs it from `tests/test.sh` (`grade.py --probe '<profile expectation>'`) and writes no reward on a failure. Every episode runs it in the agent container before turn 0 (and before a branch's replay) with the task's `env_probe` from `[metadata.learning_loop]`, which adds `app_digest`: the digest of `environment/files/` that `/app` must match; a failure stops the episode as `infra:env_probe:<checks>` before the model is called | an episode runs and a grade is written only in a container that matches the profile and holds exactly the rendered files, so a stale image build (above) stops the episode instead of running on another task's data |
 | Fixed resource limits | the profile's `cpus` and `memory_mb` in `[environment]` | every container gets the same CPU and memory limits, whatever the host has |
 
 A **profile** (`PROFILES` in `spec.py`) is one container environment: base image, `ENV`,
-hostname, required tools, resources and allowed processes. Today there is one, `python@1`
-(`python:3.12-slim`). It has bash, coreutils (including `timeout`), gzip, awk, grep, sed, find,
-tar, diff and Python 3.12 with `sqlite3`, `csv`, `json` and `tomllib`. It has no git, sqlite3
-CLI, make, patch, jq or curl.
+hostname, required tools, tools that must be absent, the description of the environment the
+agent is given, resources and allowed processes. Today there is one, `python@1`
+(`python:3.12-slim`): Python 3.12 (standard library only), perl, bash, coreutils, grep, sed,
+find, diff, cmp, tar, gzip, and mawk as `awk`; no jq, bc, gawk, sqlite3 CLI, git, curl, unzip,
+xxd, file, ps, tree, make or patch (the full lists are in `spec.py`). The agent's system prompt
+states this (`{environment}` in `agents/system_prompt.md`, filled from the profile's
+`agent_environment`), and the probe checks both lists in every container, so what the agent is
+told about its tools is true in every episode.
 
 ## How a trial runs
 
@@ -269,12 +281,32 @@ earlier assistant message and tool result. Tool output over `max_output_chars` k
 tail. Returned `reasoning_content` is sent back verbatim; the chat template decides whether it
 becomes tokens (Gemma 4's and Qwen3's keep it for every turn after the last user message).
 
-**Tools:** `bash` (fresh `bash -c` per call in `/app`), `read_file` (numbered lines, 200 per
-page) and `write_file` (uploads the content). A requested `timeout_sec` is capped at the budget
+**Tools** (`agents/tools.py`; each schema's description tells the model the same):
+
+- `bash`: a fresh `bash -c` per call in `/app`, with empty standard input. The observation is
+  `[exit code N]`, the command's standard output, then `[stderr]` and its standard error. The
+  command runs inside a wrapper that writes its stderr to a file and prints it after the
+  command ends, because Harbor's exec merges stderr into stdout in an order that changes from
+  run to run (and replay compares observations exactly). Output that does not end with a
+  newline is followed by a note saying so, because otherwise that is invisible and some files
+  are graded byte for byte.
+- `read_file`: the file's lines exactly as they are, 200 per page by default, after a header
+  `[<path>: lines a-b of N]`; a footer gives the next `start_line` when more lines follow, or
+  says that the file does not end with a newline. A page ends early, at a whole line, to fit
+  `max_output_chars`. It shows no line-number gutter: models mistook a tab after the number
+  for the file's own separator and copied the numbers into files they wrote. Missing files,
+  directories and other non-regular files get an `[error]` naming the reason.
+- `write_file`: writes exactly the given content (creating parent directories). An existing
+  file keeps its mode; a new file gets 0644 and the container user as owner (an upload through
+  the host would otherwise leave the host's owner and mode 0600).
+
+Arguments of the wrong type (a non-string command or path, a NUL byte, a path ending in `/`) come
+back as `[error]` observations. A requested `timeout_sec` is capped at the budget
 (`episode.tool_timeout_sec` in plan mode, `command_timeout_sec` in CLI mode, both 60 s by
 default); the result records the effective `timeout_sec` and `timed_out`. In Docker each command
 runs under coreutils `timeout` when the image has it, so a timed-out command does not keep
-running and change the state that replay compares. Failing commands, unknown tools and bad
+running and change the state that replay compares. A command that exits with code 124 itself is
+not reported as a timeout: only a wrapper killed before it printed the exit code is. Failing commands, unknown tools and bad
 arguments come back as `[error] ...` observations. An environment failure (Harbor exec/upload
 exception or backstop timeout) raises `EnvInfraError` and stops the episode as `infra:...`,
 also during replay.
@@ -297,12 +329,22 @@ them](../docs/operations.md#episodes-and-stages)):
 | `replay:<mismatch>` | replay | branch episodes only: the restored state differs from the source ([replay contract](#replay-contract-metadatalearning_loop)) |
 
 **Malformed tool calls** (arguments that are not a JSON object, or a block the server reports as
-`unparsed_tool_call`) are not executed; the model gets an `[error] ...` observation and the turn
-is marked malformed. The editor rejects a malformed turn (`malformed_turn`), so it never becomes
-the rejected side of a preference pair. Invalid arguments are replaced by `"{}"` in the history,
-because llama.cpp re-parses past arguments to render the chat template and would fail every later
-request; the original is kept in a `repair` event. A turn with only unparsed blocks stops as
-`model_error:unparsed_tool_call`.
+`unparsed_tool_call`) are not executed; the model gets an `[error] ...` observation, the episode
+goes on, and the turn is marked malformed. The editor rejects a malformed turn
+(`malformed_turn`), so it never becomes the rejected side of a preference pair. Invalid arguments
+are replaced by `"{}"` in the history, because llama.cpp re-parses past arguments to render the
+chat template and would fail every later request. An unparsed block becomes a call in the history
+with the tool name recovered from the block (or `unparsed_call`) and arguments `{}`. Text the
+model wrote alongside tool calls is left out of the history, because Gemma 4's chat template
+renders it after the tool results, out of order in every later prompt. Each of these changes is
+kept in a `repair` event with the original. A tool-call block cut off by the output limit is a
+budget stop (`budget:output_truncated`), not a malformed call.
+
+**After the episode**, the agent gives the owner read access to any file under `/app` that lacks
+it and rwx to any directory that lacks it, because Harbor copies artifacts out through the host,
+which could not read such a file back and silently drops the contents of such a directory.
+Directory modes are never graded. A file its owner cannot read is never a valid answer, so such
+an episode is scored 0 and its summary names the files (`unreadable_artifact`).
 
 **Modes.** *CLI mode* takes the options in `configs/local-llama.yaml` (`max_tokens` covers
 reasoning plus the tool call, hence 8192), sends no request seed and relies on Harbor's

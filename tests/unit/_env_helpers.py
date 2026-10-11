@@ -13,7 +13,7 @@ from learning_loop.tasks import instances
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "env"
 COUNT_POLICY = FIXTURES / "count_errors_policy.yaml"
-SYSTEM_PROMPT = (REPO_ROOT / "evaluation" / "agents" / "system_prompt.md").read_text().format(workdir="/app")
+SYSTEM_PROMPT = (REPO_ROOT / "evaluation" / "agents" / "system_prompt.md").read_text().format(workdir="/app", environment="").replace("\n\n\n", "\n\n")
 
 
 def count_errors_instance(dest: Path, instance_id: str = "count-errors/easy/s1") -> TaskInstance:

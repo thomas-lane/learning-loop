@@ -301,7 +301,7 @@ class EpisodeConfig(Strict):
     tool_timeout_sec: int = Field(default=60, description="Per-command timeout; the model cannot raise it.")
     agent_timeout_sec: float = Field(default=600.0, description="Safety wall-clock limit per episode (a safety stop, not a budget).")
     max_output_chars: int = Field(default=8000, description="Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded).")
-    system_prompt: str = Field(default="evaluation/agents/system_prompt.md", description="System prompt file; `{workdir}` is filled in.")
+    system_prompt: str = Field(default="evaluation/agents/system_prompt.md", description="System prompt file; `{workdir}` and `{environment}` (the task image's tools, from its profile) are filled in.")
 
 
 class EditorConfig(Strict):

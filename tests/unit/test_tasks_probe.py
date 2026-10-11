@@ -68,3 +68,19 @@ def test_app_content_mismatch_is_a_violation(tmp_path):
     assert probe.run(expect)["violations"] == []
     (tmp_path / "f").write_text("y")
     assert probe.run(expect)["violations"] == ["app_content"]
+
+
+def test_a_tool_the_profile_lists_as_absent_is_a_violation():
+    expect = {"tools": ["sh"], "absent_tools": ["sh", "definitely-not-a-tool-x9"]}
+    assert probe.check(probe.observe(expect), expect) == ["present:sh"]
+
+
+def test_the_agent_is_told_about_every_present_and_absent_tool():
+    """The system prompt's environment note comes from the profile; the probe enforces both tool
+    lists in every container, so the note cannot drift from the image."""
+    from learning_loop.tasks.spec import PROFILES
+
+    for prof in PROFILES.values():
+        note = prof.agent_environment
+        assert all(t in note for t in prof.absent_tools), [t for t in prof.absent_tools if t not in note]
+        assert all(t in note for t in prof.tools if t != "mawk"), [t for t in prof.tools if t not in note]

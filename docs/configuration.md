@@ -156,7 +156,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `episode.tool_timeout_sec` | int | `60` | Per-command timeout; the model cannot raise it. |
 | `episode.agent_timeout_sec` | float | `600.0` | Safety wall-clock limit per episode (a safety stop, not a budget). |
 | `episode.max_output_chars` | int | `8000` | Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded). |
-| `episode.system_prompt` | str | `evaluation/agents/system_prompt.md` | System prompt file; `{workdir}` is filled in. |
+| `episode.system_prompt` | str | `evaluation/agents/system_prompt.md` | System prompt file; `{workdir}` and `{environment}` (the task image's tools, from its profile) are filled in. |
 | `editor` | mapping | **required** | Editor condition. |
 | `editor.mode` | `initial_policy` or `current_learner` or `external` or `scripted` | **required** | `initial_policy` (the learner's initial checkpoint, fixed for the whole run), `current_learner` (the learner of each cycle, so it changes every cycle), `external` (a fixed separate model) or `scripted` (fixture). |
 | `editor.model_profile` | str or null | null | `external` only: the editor's model profile. |

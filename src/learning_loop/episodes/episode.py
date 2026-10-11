@@ -305,12 +305,13 @@ class _Episode:
         if te.executed:
             self.cpu.append(te.cpu_time_sec)
 
-    async def run_call(self, turn: int, order: int, call: dict[str, Any], error: str | None, original_raw: str | None, finish_reason: str | None) -> ToolExecution:
+    async def run_call(self, turn: int, order: int, call: dict[str, Any], error: str | None, original_raw: str | None, finish_reason: str | None,
+                       applied_limit: int | None = None) -> ToolExecution:
         cid = call["id"]
         name = call["function"]["name"]
         if error is not None:
             if finish_reason == "length":
-                limit = self.plan.policy.sampling.max_output_tokens
+                limit = applied_limit or self.plan.policy.sampling.max_output_tokens
                 obs = (
                     f"[error] your response hit the max_tokens limit ({limit}) and this tool call was cut off, "
                     "so it was not run. Keep reasoning shorter or split large writes into smaller pieces."
@@ -564,7 +565,8 @@ class _Episode:
                 raise _StopEpisode("model_finished", StopCategory.MODEL)
             for j, c in enumerate(calls):
                 raw = original_raw.get(c["id"], c["function"]["arguments"])
-                await self.run_call(t, j, c, d.call_errors.get(c["id"]), raw, d.finish_reason)
+                applied = ((d.raw_response or {}).get("learning_loop") or {}).get("max_tokens_applied")
+                await self.run_call(t, j, c, d.call_errors.get(c["id"]), raw, d.finish_reason, applied)
             await self.turn_done()
             if d.finish_reason == "length" and all(c["id"] in d.call_errors for c in calls):
                 raise _StopEpisode(*_length_stop(d))

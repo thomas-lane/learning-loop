@@ -28,7 +28,7 @@ def test_cli_kwargs_from_existing_job_config(tmp_path):
     plan = a._cli_plan("Do the task.")
     assert plan.policy.api_base == "http://localhost:9931/v1" and plan.policy.send_seed is False
     assert plan.policy.sampling.max_output_tokens == 8192 and plan.budgets.max_turns == 30
-    assert plan.system_prompt == (REPO_ROOT / "evaluation/agents/system_prompt.md").read_text().format(workdir="/app")
+    assert plan.system_prompt == (REPO_ROOT / "evaluation/agents/system_prompt.md").read_text().format(workdir="/app", environment="").replace("\n\n\n", "\n\n")
     assert [t["function"]["name"] for t in plan.tools] == ["bash", "read_file", "write_file"]
     assert plan.record_fingerprints is False and plan.state_spec.fingerprint_paths == []
 

@@ -163,7 +163,7 @@ class ToolAgent(BaseAgent):
                 max_output_chars=opts.max_output_chars,
                 agent_timeout_sec=NO_WALL_CLOCK_LIMIT_SEC,
             ),
-            system_prompt=prompt_path.read_text().format(workdir=opts.workdir),
+            system_prompt=prompt_path.read_text().format(workdir=opts.workdir, environment="").replace("\n\n\n", "\n\n"),
             instruction=instruction,
             tools=tool_schemas(),
             state_spec=StateSpec(),
@@ -230,9 +230,27 @@ class ToolAgent(BaseAgent):
 
         try:
             await run_episode(plan, session, policy, log, on_turn=flush, on_end=finish)
-            context.metadata = (context.metadata or {}) | {"dir_modes_restored": await self._restore_dir_modes(environment, plan.workdir)}
+            unreadable = await self._unreadable_files(environment, plan.workdir)
+            atomic_write_json(record_dir / "post_episode.json", {"unreadable_files": unreadable})
+            context.metadata = (context.metadata or {}) | {"dir_modes_restored": await self._restore_dir_modes(environment, plan.workdir),
+                                                           "unreadable_files": unreadable}
         finally:
             await asyncio.shield(policy.aclose())
+
+    @staticmethod
+    async def _unreadable_files(environment: BaseEnvironment, workdir: str) -> list[str] | str:
+        """Regular files under the workdir that their owner cannot read, made owner-readable.
+        Harbor copies artifacts through the host, where such a file cannot be read back, so the
+        upload to the verifier would fail and the episode would look like an infrastructure
+        failure. No task's answer is a file its owner cannot read, so the backend scores such an
+        episode 0 (`unreadable_artifact`); adding the bit only lets the copy (and so the record of
+        what the agent left) complete. Returns the files changed, or "failed: ..."."""
+        cmd = f"find {shlex.quote(workdir)} -type f ! -perm -u=r -print -exec chmod u+r {{}} + 2>/dev/null; true"
+        try:
+            r = await environment.exec(cmd, cwd="/", timeout_sec=60)
+        except Exception as e:
+            return f"failed: {type(e).__name__}: {e}"
+        return (r.stdout or "").split("\n")[:100] if (r.stdout or "").strip() else []
 
     @staticmethod
     async def _restore_dir_modes(environment: BaseEnvironment, workdir: str) -> list[str] | str:

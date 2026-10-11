@@ -12,6 +12,15 @@ import pytest
 
 from learning_loop.core.records import TaskInstance
 from learning_loop.orchestration.preflight import PreflightError, preflight_instances, preflight_while_serving, run_preflight
+from learning_loop.orchestration.preflight import case_sensitive as REAL_CASE_SENSITIVE
+
+
+@pytest.fixture(autouse=True)
+def _case_sensitive_run_dirs(monkeypatch):
+    """Temporary directories on a Mac are case-insensitive; the refusal has its own test."""
+    from learning_loop.orchestration import preflight
+
+    monkeypatch.setattr(preflight, "case_sensitive", lambda d: True)
 
 
 def _ctx(tmp_path, backend="harbor_docker"):
@@ -84,3 +93,24 @@ async def test_a_failing_server_start_cancels_the_preflight(tmp_path):
     with pytest.raises(RuntimeError, match="healthy"):
         await preflight_while_serving(_ctx(tmp_path), lambda m: None, warm=warm, trial=trial)
     assert time.monotonic() - t0 < 2
+
+
+
+
+async def test_a_case_insensitive_run_directory_is_refused(tmp_path):
+    calls = []
+
+    async def trial(task_dir, trials_dir):
+        calls.append(task_dir)
+        return {"reward": 1.0, "error": None, "verifier_mode": "separate", "trial_dir": "t"}
+
+    with pytest.raises(PreflightError, match="case-insensitive"):
+        await run_preflight(_ctx(tmp_path), lambda m: None, trial, fs_case_sensitive=lambda d: False)
+    assert calls == []  # refused before any trial
+
+
+def test_the_case_probe_reports_the_filesystem(tmp_path):
+    (tmp_path / "Probe").touch()
+    insensitive = (tmp_path / "probe").exists()
+    (tmp_path / "Probe").unlink()
+    assert REAL_CASE_SENSITIVE(tmp_path / "d") is not insensitive and not list((tmp_path / "d").iterdir())

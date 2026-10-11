@@ -22,7 +22,8 @@
   is lowered to what fits (`learning_loop.context_capped` then true); a prompt that already fills
   it is refused with code `context_budget_exhausted`.
 - Usage is exact from the tokenizer: prompt tokens as rendered; completion tokens
-  as generated, including the end-of-turn token when one was produced.
+  as generated, including the end-of-turn token when one was produced; reasoning tokens
+  (a subset of completion tokens) from the opening through the closing reasoning marker.
 - Serial: one request at a time (single-threaded HTTPServer).
 - GET /health, GET /v1/models, POST /v1/chat/completions. Extra diagnostics are in
   the response's `learning_loop` field (raw completion text, parse errors, sampling).
@@ -44,7 +45,7 @@ from typing import Any, Protocol
 from ..core.config import ModelProfile, load_model_profile
 from ..core.records import CheckpointRecord
 from ..core.storage import read_json
-from .tool_parse import PARSERS, generation_prefix, parse_completion
+from .tool_parse import PARSERS, generation_prefix, parse_completion, reasoning_token_count
 
 
 class ApiError(Exception):
@@ -230,7 +231,8 @@ class ServingCore:
             "model": self.served_model,
             "system_fingerprint": f"{self.engine_name}:{self.profile.name}:{self.served_model}",
             "choices": [{"index": 0, "message": parsed.message(), "finish_reason": finish, "logprobs": None}],
-            "usage": {"prompt_tokens": len(ids), "completion_tokens": len(new), "total_tokens": len(ids) + len(new)},
+            "usage": {"prompt_tokens": len(ids), "completion_tokens": len(new), "total_tokens": len(ids) + len(new),
+                      "completion_tokens_details": {"reasoning_tokens": reasoning_token_count(self.profile.tool_call_format, new, self.tok, bool(prefix))}},
             "learning_loop": {
                 "raw_completion_text": text,
                 "generation_prefix": prefix,

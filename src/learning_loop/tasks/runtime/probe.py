@@ -4,7 +4,7 @@ Standard-library only: the renderer copies this file into every task's `tests/` 
 (the grader runs it before grading), and the episode runs the same source in the agent
 container before turn 0. The expectation comes from the task's profile:
 
-    {"network": "none", "env": {"TZ": "UTC", ...}, "tools": ["python3", "timeout"],
+    {"network": "none", "env": {"TZ": "UTC", ...}, "tools": ["python3", "timeout"], "absent_tools": ["jq"],
      "hostname": "task", "allowed_processes": ["sh", "sleep"],
      "app_digest": {"path": "/app", "sha256": "..."}}            # agent container only
 
@@ -16,6 +16,9 @@ Checks, each reported as one violation string when it fails:
                              public address must both fail
     env:<NAME>               the variable has exactly the expected value
     tool:<name>              the tool is on PATH
+    present:<name>           a tool the profile lists as absent is on PATH (the agent is told
+                             which tools are missing, so an image with more tools would make
+                             that statement false)
     hostname                 the container hostname is the expected one
     process:<comm>           every process other than this probe and its ancestors (the exec
                              chain) has an allowed command name; `/proc` is required
@@ -120,6 +123,7 @@ def observe(expect):
         "egress": {"dns": _dns_open(), "tcp": _tcp_open()} if network == "none" else None,
         "env": {k: os.environ.get(k) for k in sorted(expect.get("env", {}))},
         "tools": {t: shutil.which(t) for t in expect.get("tools", [])},
+        "absent_tools": {t: shutil.which(t) for t in expect.get("absent_tools", [])},
         "hostname": socket.gethostname(),
         "processes": _processes(),
         "app_digest": tree_digest(expect["app_digest"]["path"]) if "app_digest" in expect else None,
@@ -135,6 +139,7 @@ def check(observed, expect):
         if observed["env"].get(k) != want:
             v.append("env:" + k)
     v += ["tool:" + t for t, path in sorted(observed["tools"].items()) if not path]
+    v += ["present:" + t for t, path in sorted((observed.get("absent_tools") or {}).items()) if path]
     if "hostname" in expect and observed["hostname"] != expect["hostname"]:
         v.append("hostname")
     if "allowed_processes" in expect:

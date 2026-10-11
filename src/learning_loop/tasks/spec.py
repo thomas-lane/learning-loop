@@ -48,6 +48,10 @@ class Profile:
     base_image: str  # pinned by digest
     env: Mapping[str, str]
     tools: tuple[str, ...]  # must be on PATH; checked by the probe
+    absent_tools: tuple[str, ...] = ()  # must NOT be on PATH; checked by the probe
+    # Told to the agent in its system prompt (`{environment}`); a unit test checks it names every
+    # tool in `tools` and `absent_tools`, and the probe enforces both lists in every container.
+    agent_environment: str = ""
     hostname: str = "task"
     cpus: int = 1
     memory_mb: int = 1024
@@ -58,6 +62,8 @@ class Profile:
             "network": "none",
             "env": dict(self.env),
             "tools": list(self.tools),
+            "absent_tools": list(self.absent_tools),
+            "agent_environment": self.agent_environment,  # not checked: carried to the system prompt
             "hostname": self.hostname,
             "allowed_processes": list(self.allowed_processes),
         }
@@ -80,7 +86,19 @@ PROFILES: dict[str, Profile] = {
             "PYTHONDONTWRITEBYTECODE": "1",
             "HOME": "/root",
         },
-        tools=("bash", "python3", "timeout", "gzip", "zcat", "awk", "sort", "grep", "sed", "find", "tar", "diff"),
+        tools=("bash", "python3", "perl", "timeout", "gzip", "zcat", "tar", "awk", "mawk", "sed", "grep", "find", "sort", "uniq",
+               "cut", "tr", "wc", "head", "tail", "xargs", "comm", "join", "paste", "diff", "cmp", "od", "stat", "date",
+               "mktemp", "sha256sum"),
+        absent_tools=("jq", "bc", "gawk", "sqlite3", "git", "curl", "wget", "unzip", "zip", "xxd", "hexdump", "file", "ps",
+                      "less", "column", "tree", "make", "patch", "vim", "nano"),
+        agent_environment=(
+            "The container runs Debian with Python 3.12 (standard library only; no extra packages). Command-line tools: "
+            "bash, python3, perl, coreutils (sort, uniq, cut, tr, wc, head, tail, xargs, comm, join, paste, od, stat, date, "
+            "mktemp, sha256sum, timeout, …), grep, sed, find, diff, cmp, tar, gzip and zcat. `awk` is mawk (no gawk "
+            "extensions such as `asort` or `strftime`). Not installed: jq, bc, gawk, sqlite3, git, curl, wget, unzip, zip, "
+            "xxd, hexdump, file, ps, less, column, tree, make, patch, vim, nano; use python3 instead (it has json, csv, "
+            "sqlite3, gzip, tarfile, zipfile, tomllib and decimal). There is no network access."
+        ),
     ),
 }
 

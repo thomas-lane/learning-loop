@@ -157,8 +157,8 @@ never trained on. With the cap, every turn of every episode fits it, so every ed
 - **Safety limit:** the wall-clock timeout `episode.agent_timeout_sec`.
 
 An episode ends normally when the learner replies without a tool call; then it is graded. A
-reply whose only tool calls the server could not parse also has no tool call, so it stops as an
-error instead (`model_error:unparsed_tool_call`).
+tool call the server could not parse is not a reply without a tool call: it is answered with an
+`[error]` observation and the episode goes on ([evaluation/README.md](../evaluation/README.md#the-agent-agentstool_agentpy)).
 
 An *infrastructure failure* is an error outside the learner's control: the container or a Harbor
 command fails, or the model endpoint is unreachable, times out or returns a server error. The

@@ -24,6 +24,7 @@ an output format changes the learner's inputs: treat it as a new experiment.
 
 from __future__ import annotations
 
+import json
 import shlex
 import tempfile
 from dataclasses import dataclass
@@ -121,66 +122,175 @@ def effective_timeout(args: dict[str, Any], cfg: ToolConfig) -> int:
     return max(1, min(value, budget))
 
 
+def _string_arg(args: dict[str, Any], name: str) -> str:
+    """A required string argument; a wrong type or a NUL byte is the model's error (an
+    observation), never a transport failure."""
+    value = args[name]
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string, got {type(value).__name__}")
+    if "\x00" in value:
+        raise ValueError(f"{name} must not contain a NUL byte")
+    return value
+
+
+def _ends(text: str, what: str) -> str:
+    """`text` as shown to the model: verbatim, plus a note when it does not end with a newline
+    (otherwise invisible, and it matters when a file is graded byte for byte)."""
+    return text if text.endswith("\n") else text + f"\n[{what} does not end with a newline]\n"
+
+
+# The command runs in its own bash with stderr captured to a file; the wrapper then prints this
+# marker, the command's exit code and the captured stderr. Harbor's exec merges a command's
+# stderr into stdout in no fixed order, so without the wrapper errors and data would interleave
+# differently from run to run (and replays compare observations exactly). A missing marker means
+# the wrapper itself was killed: the per-call timeout, never the command's own exit code 124.
+_MARK = "\x1fLL-EXIT:"
+_WRAP = (
+    '__ll_err=$(mktemp) || exit 125; bash -c {cmd} 2>"$__ll_err"; __ll_rc=$?; '
+    "printf '\\n\\037LL-EXIT:%d\\n' \"$__ll_rc\"; cat \"$__ll_err\"; rm -f \"$__ll_err\"; exit 0"
+)
+
+
 async def bash(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutput:
-    command = args["command"]
+    command = _string_arg(args, "command")
     try:
         timeout = effective_timeout(args, cfg)
     except ValueError as e:
         return ToolOutput(raw_output=f"[error] {e}", error=str(e), executed=False)
     try:
-        result = await _env_call(env.exec(command, cwd=cfg.workdir, timeout_sec=timeout))
+        result = await _env_call(env.exec(_WRAP.format(cmd=shlex.quote(command)), cwd=cfg.workdir, timeout_sec=timeout))
     except TimeoutError as e:  # a target that enforces the timeout by raising (not exit 124)
         msg = f"command timed out after {timeout}s" + (f" ({e})" if str(e) else "")
         return ToolOutput(raw_output=f"[error] {msg}", error=msg, timeout_sec=timeout, timed_out=True)
-    header = f"[exit code {result.return_code}]"
-    # Exec targets that enforce the timeout inside the environment (so no
-    # process outlives its call) report it as exit code 124, like coreutils.
-    timed_out = result.return_code == 124 and bool(getattr(env, "enforces_timeout", False))
-    if timed_out:
-        header += f" [command timed out after {timeout}s]"
-    parts = [header]
-    if result.stdout:
-        parts.append(result.stdout.rstrip("\n"))
-    if result.stderr:
-        parts.append(f"[stderr]\n{result.stderr.rstrip()}")
-    return ToolOutput(
-        raw_output="\n".join(parts), exit_code=result.return_code, stdout=result.stdout, stderr=result.stderr, timeout_sec=timeout, timed_out=timed_out
-    )
+    out = result.stdout or ""
+    cut = out.rfind("\n" + _MARK)
+    if cut >= 0:  # the command finished: its own exit code and its separate stderr
+        stdout = out[:cut]
+        rc_line, _, stderr = out[cut + 1 + len(_MARK):].partition("\n")
+        rc = int(rc_line) if rc_line.strip().lstrip("-").isdigit() else result.return_code
+        stderr += result.stderr or ""
+        timed_out = False
+        header = f"[exit code {rc}]"
+    else:  # killed before the marker: the per-call timeout (exit 124) or the wrapper failed
+        stdout, stderr, rc = out, result.stderr or "", result.return_code
+        timed_out = rc == 124 and bool(getattr(env, "enforces_timeout", False))
+        header = f"[exit code {rc}]" + (f" [command timed out after {timeout}s]" if timed_out else "")
+    parts = [header + "\n"]
+    if stdout:
+        parts.append(_ends(stdout, "output"))
+    if stderr:
+        parts.append("[stderr]\n" + _ends(stderr, "stderr"))
+    return ToolOutput(raw_output="".join(parts).rstrip("\n"), exit_code=rc, stdout=stdout, stderr=stderr, timeout_sec=timeout, timed_out=timed_out)
+
+
+# Runs with the container's python3 (part of every task profile): one page of a regular file,
+# cut at whole lines to fit the output limit, as JSON for the formatter below.
+_READ_PAGE = r"""
+import json, os, stat, sys
+path, start, count, cap = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+def out(**kw):
+    print(json.dumps(kw)); sys.exit(0)
+try:
+    st = os.stat(path)
+except FileNotFoundError:
+    out(error="no such file")
+except PermissionError:
+    out(error="permission denied")
+except OSError as e:
+    out(error=e.strerror or str(e))
+if stat.S_ISDIR(st.st_mode):
+    out(error="is a directory")
+if not stat.S_ISREG(st.st_mode):
+    out(error="not a regular file")
+try:
+    with open(path, "rb") as f:
+        data = f.read()
+except PermissionError:
+    out(error="permission denied")
+text = data.decode("utf-8", "replace")
+lines = text.splitlines(keepends=True)
+total = len(lines)
+if start > total:
+    out(total=total, start=start, lines=[], final_newline=text.endswith("\n"), binary=b"\0" in data)
+page, size = [], 0
+for line in lines[start - 1:start - 1 + count]:
+    if page and size + len(line) > cap:
+        break
+    page.append(line[:cap] if not page else line)
+    size += len(page[-1])
+out(total=total, start=start, lines=page, final_newline=text.endswith("\n"), binary=b"\0" in data)
+"""
 
 
 async def read_file(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutput:
-    path = args["path"]
-    start = int(args.get("start_line") or 1)
-    n = int(args.get("num_lines") or 200)
-    # cat -n style numbering makes follow-up edits easier to target.
-    cmd = f"awk 'NR>={start} && NR<{start + n} {{ printf \"%6d\\t%s\\n\", NR, $0 }}' {shlex.quote(path)}"
-    result = await _env_call(env.exec(cmd, cwd=cfg.workdir))
-    if result.return_code != 0:
-        err = (result.stderr or "").strip() or "could not read file"
+    path = _string_arg(args, "path")
+    if not path.startswith("/"):
+        path = f"{cfg.workdir.rstrip('/')}/{path}"
+    try:
+        start = 1 if args.get("start_line") is None else int(args["start_line"])
+        count = 200 if args.get("num_lines") is None else int(args["num_lines"])
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("start_line and num_lines must be integers") from None
+    if start < 1 or count < 1:
+        raise ValueError("start_line and num_lines must be at least 1")
+    cap = max(200, cfg.max_output_chars - 400)  # room for the header and footer lines
+    cmd = f"python3 -I -c {shlex.quote(_READ_PAGE)} {shlex.quote(path)} {start} {count} {cap}"
+    result = await _env_call(env.exec(cmd, cwd=cfg.workdir, timeout_sec=60))
+    try:
+        page = json.loads((result.stdout or "").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        err = ((result.stdout or "") + (result.stderr or "")).strip()[-300:] or "could not read file"
         return ToolOutput(raw_output=f"[error] {err}", exit_code=result.return_code, stdout=result.stdout, stderr=result.stderr, error=err)
-    return ToolOutput(raw_output=result.stdout or "[empty]", exit_code=0, stdout=result.stdout, stderr=result.stderr)
+    if "error" in page:
+        err = f"{path}: {page['error']}"
+        return ToolOutput(raw_output=f"[error] {err}", exit_code=1, error=err)
+    total, lines = page["total"], page["lines"]
+    if total == 0:
+        return ToolOutput(raw_output=f"[{path}: empty file]", exit_code=0, stdout="")
+    if not lines:
+        return ToolOutput(raw_output=f"[{path}: {total} lines; start_line {start} is past the end]", exit_code=0, stdout="")
+    end = start + len(lines) - 1
+    text = "".join(lines)
+    shown = [f"[{path}: lines {start}-{end} of {total}" + (" (binary data shown as text)" if page["binary"] else "") + "]\n", text if text.endswith("\n") else text + "\n"]
+    if end < total:
+        shown.append(f"[{total - end} more lines; next start_line={end + 1}]")
+    elif not page["final_newline"]:
+        shown.append("[the file does not end with a newline]")
+    return ToolOutput(raw_output="".join(shown).rstrip("\n"), exit_code=0, stdout=text)
 
 
 async def write_file(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutput:
-    path = args["path"]
+    path = _string_arg(args, "path")
     content = args["content"]
     if not isinstance(content, str):
-        raise TypeError("content must be a string")
+        raise ValueError("content must be a string")
+    if not path or path.endswith("/"):
+        raise ValueError(f"path must name a file, got {path!r}")
     if not path.startswith("/"):
         path = f"{cfg.workdir.rstrip('/')}/{path}"
     # Upload via a temp file instead of shell-escaping arbitrary content.
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".tmp") as f:
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".tmp", encoding="utf-8", newline="") as f:
         f.write(content)
         local = Path(f.name)
     try:
         # Command-level problems (parent is a file, target is a directory) are observations;
-        # a failing upload after this check is a transport failure.
+        # a failing upload after this check is a transport failure. An existing file's mode is
+        # kept; the upload itself would leave the host temp file's 0600 and the host's owner.
         q = shlex.quote(path)
-        pre = await _env_call(env.exec(f"mkdir -p {shlex.quote(str(Path(path).parent))} && [ ! -d {q} ]"))
+        pre = await _env_call(env.exec(
+            f"mkdir -p {shlex.quote(str(Path(path).parent))} || exit 1; if [ -d {q} ]; then echo 'is a directory'; exit 1; fi; "
+            f"if [ -e {q} ]; then python3 -I -c 'import os, sys; print(format(os.stat(sys.argv[1]).st_mode & 0o7777, \"o\"))' {q}; fi",
+            cwd=cfg.workdir, timeout_sec=60))
         if pre.return_code != 0:
-            err = (pre.stderr or "").strip() or f"cannot write {path}: its directory could not be created or it is a directory"
+            reason = ((pre.stdout or "") + (pre.stderr or "")).strip()[-300:] or "its directory could not be created"
+            err = f"cannot write {path}: {reason}"
             return ToolOutput(raw_output=f"[error] {err}", exit_code=pre.return_code, stdout=pre.stdout, stderr=pre.stderr, error=err, executed=False)
+        mode = (pre.stdout or "").strip() or "644"
         await _env_call(env.upload_file(local, path))
+        post = await _env_call(env.exec(f'chown "$(id -u):$(id -g)" {q} && chmod {shlex.quote(mode)} {q}', cwd=cfg.workdir, timeout_sec=60))
+        if post.return_code != 0:
+            reason = ((post.stdout or "") + (post.stderr or "")).strip()[-300:]
+            raise EnvInfraError(f"could not set owner and mode of {path}: {reason}")
     finally:
         local.unlink(missing_ok=True)
     return ToolOutput(raw_output=f"Wrote {len(content)} characters to {path}")
@@ -194,9 +304,10 @@ TOOLS: list[Tool] = [
     Tool(
         name="bash",
         description=(
-            "Run a shell command in the task's Linux container and return its exit "
-            "code, stdout and stderr. Each call is a fresh shell: `cd` and exported "
-            "variables do not persist between calls. Non-interactive only."
+            "Run a shell command in the task's Linux container. Returns the command's exit code, its "
+            "standard output, and its standard error after a `[stderr]` line. Each call is a fresh bash "
+            "shell started in /app: `cd` and exported variables do not persist between calls. "
+            "Non-interactive: standard input is empty. Long output keeps its beginning and end."
         ),
         parameters={
             "type": "object",
@@ -204,7 +315,7 @@ TOOLS: list[Tool] = [
                 "command": {"type": "string", "description": "The bash command to run."},
                 "timeout_sec": {
                     "type": "integer",
-                    "description": "Optional timeout in seconds (default 60).",
+                    "description": "Optional timeout in seconds. It cannot exceed the episode's limit, which is also the default.",
                 },
             },
             "required": ["command"],
@@ -213,7 +324,11 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="read_file",
-        description="Read a text file with line numbers. Use start_line/num_lines to page through large files.",
+        description=(
+            "Read a text file. Shows its lines exactly as they are, after a header with the line range "
+            "and the total number of lines; when more lines follow, a final note gives the next "
+            "start_line. A page also ends early to fit the output limit."
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -227,7 +342,12 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="write_file",
-        description="Create or overwrite a file with the given content.",
+        description=(
+            "Create or overwrite a file with exactly the given content (nothing is added: end the "
+            "content with a newline if the file should end with one). Missing parent directories are "
+            "created. An existing file keeps its permissions; a new file gets mode 644. A relative "
+            "path is relative to /app."
+        ),
         parameters={
             "type": "object",
             "properties": {

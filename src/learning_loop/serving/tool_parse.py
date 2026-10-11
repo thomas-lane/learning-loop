@@ -223,6 +223,28 @@ def parse_gemma4(text: str, id_seed: str) -> ParsedCompletion:
 
 PARSERS = {"qwen3_xml": parse_qwen3, "gemma4": parse_gemma4}
 
+# The tokens that open and close a reasoning block in each format.
+REASONING_MARKERS = {"qwen3_xml": ("<think>", "</think>"), "gemma4": ("<|channel>", "<channel|>")}
+
+
+def reasoning_token_count(tool_call_format: str, ids: list[int], tok: Any, inside: bool) -> int:
+    """Generated tokens that belong to reasoning: from each opening marker through its closing
+    marker, both included. `inside`: the prompt already opened a reasoning block
+    (`generation_prefix`), so the completion starts inside it."""
+    markers = REASONING_MARKERS.get(tool_call_format)
+    if markers is None:
+        return 0
+    open_id, close_id = (tok.convert_tokens_to_ids(m) for m in markers)
+    n = 0
+    for i in ids:
+        if not inside and i == open_id:
+            inside = True
+        if inside:
+            n += 1
+            if i == close_id:
+                inside = False
+    return n
+
 
 def parse_bare_call(text: str, names: set[str]) -> tuple[str, dict[str, Any]] | None:
     """A reply that is exactly one tool call written without the format's call markers, to one of

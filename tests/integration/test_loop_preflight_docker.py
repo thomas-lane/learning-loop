@@ -29,6 +29,14 @@ if not _docker_ok():  # pragma: no cover
     pytest.skip("Docker daemon not available", allow_module_level=True)
 
 
+@pytest.fixture(autouse=True)
+def _case_sensitive_host(tmp_path):
+    from learning_loop.orchestration.preflight import case_sensitive
+
+    if not case_sensitive(tmp_path / "probe"):  # pragma: no cover - macOS default volume
+        pytest.skip("the preflight refuses a case-insensitive run directory; run these on a Linux host")
+
+
 def _ctx(tmp_path: Path, name: str) -> SimpleNamespace:
     task = tmp_path / name  # unique: Harbor names the image after the directory
     params = render(FAMILIES["count-errors"], "easy", 3, task)

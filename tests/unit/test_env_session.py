@@ -38,7 +38,53 @@ async def test_virtual_workdir_mapping(session):
     assert te.observation == "Wrote 2 characters to /app/out/x.txt"
     assert (session.real_workdir / "out" / "x.txt").read_text() == "hi"
     te = await session.execute("c3", "read_file", {"path": "/app/out/x.txt"}, None)
-    assert te.observation == "     1\thi\n"
+    assert te.observation == "[/app/out/x.txt: lines 1-1 of 1]\nhi\n[the file does not end with a newline]"
+
+
+async def test_bash_separates_stderr_and_reports_the_commands_own_exit_code(session):
+    te = await session.execute("c", "bash", {"command": "echo out1; echo err1 >&2; echo out2; echo err2 >&2; exit 3"}, None)
+    assert te.observation == "[exit code 3]\nout1\nout2\n[stderr]\nerr1\nerr2"
+    te = await session.execute("c2", "bash", {"command": "printf x"}, None)
+    assert te.observation == "[exit code 0]\nx\n[output does not end with a newline]"
+    te = await session.execute("c3", "bash", {"command": "exit 124"}, None)  # the command's own 124 is not a timeout
+    assert te.exit_code == 124 and "timed out" not in te.observation
+
+
+async def test_tool_arguments_of_the_wrong_type_are_observations(session):
+    for name, args in [("bash", {"command": 123}), ("bash", {"command": "echo a\x00b"}), ("read_file", {"path": ["x"]}),
+                       ("write_file", {"path": "out/", "content": "x"}), ("read_file", {"path": "data/app.log", "start_line": 0})]:
+        te = await session.execute("c", name, args, None)
+        assert te.observation.startswith("[error]") and not te.executed, (name, args, te.observation)
+
+
+async def test_read_file_pages_and_explains_what_it_shows(session):
+    w = session.real_workdir
+    (w / "big.txt").write_text("".join(f"line {i}\n" for i in range(1, 451)))
+    te = await session.execute("c", "read_file", {"path": "big.txt"}, None)
+    lines = te.observation.splitlines()
+    assert lines[0] == "[/app/big.txt: lines 1-200 of 450]" and lines[1] == "line 1" and lines[200] == "line 200"
+    assert lines[-1] == "[250 more lines; next start_line=201]"
+    te = await session.execute("c", "read_file", {"path": "big.txt", "start_line": 401}, None)
+    assert te.observation.splitlines()[0] == "[/app/big.txt: lines 401-450 of 450]" and te.observation.endswith("line 450")
+    te = await session.execute("c", "read_file", {"path": "big.txt", "start_line": 500}, None)
+    assert te.observation == "[/app/big.txt: 450 lines; start_line 500 is past the end]"
+    (w / "empty.txt").write_text("")
+    assert (await session.execute("c", "read_file", {"path": "empty.txt"}, None)).observation == "[/app/empty.txt: empty file]"
+    assert (await session.execute("c", "read_file", {"path": "nope.txt"}, None)).observation == "[error] /app/nope.txt: no such file"
+    assert (await session.execute("c", "read_file", {"path": "data"}, None)).observation == "[error] /app/data: is a directory"
+    (w / "wide.txt").write_text("".join("x" * 100 + "\n" for _ in range(200)))  # 20,200 characters > the 8000 limit
+    te = await session.execute("c", "read_file", {"path": "wide.txt"}, None)
+    assert len(te.observation) <= 8000 and te.observation.splitlines()[-1].startswith("[") and "next start_line=" in te.observation
+
+
+async def test_write_file_keeps_an_existing_files_mode_and_creates_new_files_644(session):
+    w = session.real_workdir
+    (w / "run.sh").write_text("#!/bin/sh\necho old\n")
+    os.chmod(w / "run.sh", 0o755)
+    await session.execute("c", "write_file", {"path": "run.sh", "content": "#!/bin/sh\necho new\n"}, None)
+    assert oct(os.stat(w / "run.sh").st_mode & 0o777) == "0o755" and (w / "run.sh").read_text().endswith("new\n")
+    await session.execute("c", "write_file", {"path": "new/file.txt", "content": "a"}, None)
+    assert oct(os.stat(w / "new" / "file.txt").st_mode & 0o777) == "0o644" and (w / "new" / "file.txt").read_text() == "a"
 
 
 async def test_command_timeout_kills_process(session):

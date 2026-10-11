@@ -138,8 +138,24 @@ async def test_server_reported_unparsed_tool_call_is_a_parse_error():
     body["learning_loop"] = {"parse_errors": ["invalid JSON in <tool_call> block"]}
     pol, _ = _policy(lambda r: httpx.Response(200, json=body))
     d = await pol.decide(MSGS, TOOLS, None)
-    assert "tool_calls" not in d.history_message
     assert d.parse_errors == ["unparsed_tool_call: invalid JSON in <tool_call> block"]
+    # The block becomes an attempted call that is not run: the model gets an [error] observation
+    # for it and the episode goes on, as for a call with invalid arguments.
+    (call,) = d.history_message["tool_calls"]
+    assert call["function"] == {"name": "bash", "arguments": "{}"} and call["id"] in d.call_errors
+    assert "could not parse this tool call" in d.call_errors[call["id"]]
+    assert d.history_message["content"] == ""  # text with calls is not kept (templates render it after the results)
+    assert {r["field"] for r in d.repairs} == {"tool_call", "content"}
+
+
+async def test_gemma_block_name_is_recovered_and_an_empty_thought_is_kept():
+    msg = {"role": "assistant", "content": "<|tool_call>call{write_file{path:<|\"|>a<|\"|>}<tool_call|>", "reasoning_content": ""}
+    body = _completion(msg, {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, "stop")
+    body["learning_loop"] = {"parse_errors": ["tool_call 0: tool call must start with 'call:'"]}
+    pol, _ = _policy(lambda r: httpx.Response(200, json=body))
+    d = await pol.decide(MSGS, TOOLS, None)
+    assert d.history_message["tool_calls"][0]["function"]["name"] == "write_file"
+    assert d.history_message["reasoning_content"] == ""  # so the editor's empty_reasoning rule can see it
 
 
 def test_sampling_fields_cannot_be_duplicated_in_extra_body():

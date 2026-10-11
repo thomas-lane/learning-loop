@@ -625,7 +625,8 @@ def make_plan(ctx: RunContext, inst: TaskInstance, role: EpisodeRole, episode_id
 
     state = load_state_spec(Path(inst.task_dir))
     workdir = "/app"
-    system_prompt = repo_path(ctx.exp.episode.system_prompt).read_text().format(workdir=workdir)
+    environment = (state.env_probe or {}).get("agent_environment") or ""
+    system_prompt = repo_path(ctx.exp.episode.system_prompt).read_text().format(workdir=workdir, environment=environment).replace("\n\n\n", "\n\n")
     instruction = (Path(inst.task_dir) / "instruction.md").read_text()
     return EpisodePlan(
         episode_id=episode_id,

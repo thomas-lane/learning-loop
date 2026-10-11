@@ -63,13 +63,33 @@ def preflight_instances(instances: dict[str, TaskInstance]) -> dict[str, TaskIns
     return out
 
 
-async def run_preflight(ctx: "RunContext", log: Callable[[str], None], trial: TrialFn = harbor_oracle_trial) -> dict[str, Any]:
+def case_sensitive(directory: Path) -> bool:
+    """Whether the filesystem holding `directory` tells apart names that differ only in case."""
+    directory.mkdir(parents=True, exist_ok=True)
+    probe = directory / ".CaseProbe"
+    probe.touch()
+    try:
+        return not (directory / ".caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+async def run_preflight(ctx: "RunContext", log: Callable[[str], None], trial: TrialFn = harbor_oracle_trial,
+                        fs_case_sensitive: Callable[[Path], bool] | None = None) -> dict[str, Any]:
     record: dict[str, Any] = {"started_at": now_iso(), "backend": ctx.machine.environment_backend}
     appender = JsonlAppender(ctx.run_dir / "logs" / "preflight.jsonl")
     if ctx.machine.environment_backend != "harbor_docker":
         record |= {"status": "skipped", "reason": "the local fixture backend runs no containers", "finished_at": now_iso()}
         appender.append(record)
         return record
+    if not (fs_case_sensitive or case_sensitive)(ctx.run_dir):
+        # Harbor copies each episode's files out through the run directory: on a case-insensitive
+        # filesystem, paths an agent created that differ only in case (`URGENT/`, `urgent/`) merge,
+        # so the grade would depend on the host.
+        record |= {"status": "failed", "reason": "case-insensitive run directory", "finished_at": now_iso()}
+        appender.append(record)
+        raise PreflightError(f"{ctx.run_dir} is on a case-insensitive filesystem; agent files that differ only in letter case "
+                             "would merge when copied out for grading. Run on a case-sensitive filesystem (e.g. a Linux host).")
     picks = preflight_instances(ctx.instances)
     trials_dir = ctx.run_dir / "preflight" / record["started_at"].replace(":", "")
     gate = asyncio.Semaphore(ctx.backend_concurrency())
