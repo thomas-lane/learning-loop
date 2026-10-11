@@ -1,13 +1,17 @@
 """resolve-conflicts: resolve the merge-conflict blocks in service config files per stated rules.
 
 Task: the files under `/app/config/` (INI-style service settings) contain conflict blocks
-(`<<<<<<< HEAD` ... `=======` ... `>>>>>>> branch`). The instruction gives one rule per
-section: `[release]` keeps ours (HEAD), `[dependencies]` keeps theirs, `[allowed_hosts]`
-keeps both (ours, then the theirs lines not already in ours). Everything outside the blocks
-stays byte for byte. Easy has one file (ExactAnswer on it); medium has three plus a
-`README.md` and hard four plus the README, one of them in `legacy/` (FileTree over
-`/app/config`, so a stray backup file also fails). Hard writes every block in diff3 style
-(a `||||||| merged common ancestors` section with the base lines, which are never kept).
+(`<<<<<<< HEAD` ... `=======` ... `>>>>>>> branch`). The instruction, the same at every
+difficulty, gives one rule per section: `[release]` keeps ours (HEAD), `[dependencies]` keeps
+theirs, `[allowed_hosts]` keeps both (ours, then the theirs lines not already in ours); it also
+explains diff3 blocks and says to look in subdirectories. Everything outside the blocks stays
+as it is. The grader is a FileTree over `/app/config` at every level, so a stray backup file
+fails; each entry is a text entry (`tree_entry(..., text=True)`), so a resolved file is right
+however many newlines it ends with, since the instruction does not say how a file must end.
+
+Difficulty comes from the data only: easy has one file; medium three plus a `README.md`; hard
+four plus the README, one of them in `legacy/`, and writes every block in diff3 style (a
+`||||||| merged common ancestors` section with the base lines, which are never kept).
 
 Construction: every instance has a `[release]` block whose sides differ (taking theirs
 everywhere fails), a `[dependencies]` block whose sides differ (taking ours everywhere fails)
@@ -32,7 +36,7 @@ model forms; `keep-both` is the sed one-liner with a line-by-line model of it.
 
 import re
 
-from learning_loop.tasks.spec import ExactAnswer, Family, FileTree, Solution, TaskSpec, tree_entry
+from learning_loop.tasks.spec import Family, FileTree, Solution, TaskSpec, tree_entry
 
 SERVICES = ["billing", "orders", "search", "notify", "ledger", "gateway", "catalog", "auth", "media", "reports"]
 CODENAMES = ["falcon", "heron", "otter", "lynx", "marten", "osprey", "badger", "ibis"]
@@ -40,9 +44,9 @@ PACKAGES = ["requests", "urllib3", "sqlalchemy", "pydantic", "redis", "celery", 
 HOSTS = ["api", "cdn", "admin", "status", "partners", "metrics", "auth", "uploads", "billing", "search", "docs", "hooks", "edge", "mail"]
 BRANCHES = ["feature/upgrade-deps", "release/next", "feature/new-hosts", "hotfix/pin-versions", "feature/edge-routing"]
 
-INSTRUCTION = """A merge left conflict blocks in {where}. Resolve every conflict in place.
+INSTRUCTION = """A merge left conflict blocks in the files under `/app/config/` (including its subdirectories). Resolve every conflict in place.
 
-A conflict block starts with a `<<<<<<< HEAD` line and ends with a `>>>>>>> <branch>` line. **Ours** are the lines after `<<<<<<< HEAD` up to the next marker line; **theirs** are the lines between the `=======` line and the `>>>>>>>` line.{diff3} Resolve each block by the section (`[name]` header) it is in:
+A conflict block starts with a `<<<<<<< HEAD` line and ends with a `>>>>>>> <branch>` line. **Ours** are the lines after `<<<<<<< HEAD` up to the next marker line; **theirs** are the lines between the `=======` line and the `>>>>>>>` line. A block may also show the common ancestor's lines, after a `||||||| merged common ancestors` line and before `=======`; those lines are never kept. Resolve each block by the section (`[name]` header) it is in:
 
 - `[release]`: keep **ours**.
 - `[dependencies]`: keep **theirs**.
@@ -50,8 +54,6 @@ A conflict block starts with a `<<<<<<< HEAD` line and ends with a `>>>>>>> <bra
 
 Remove every marker line and keep every line outside the conflict blocks exactly as it is. Leave no other files (such as backups) in `/app/config/`.
 """
-
-DIFF3 = " Some blocks also show the common ancestor's lines, after a `||||||| merged common ancestors` line and before `=======`; those lines are never kept."
 
 README = """Service configuration
 =====================
@@ -289,12 +291,7 @@ def build(ctx):
     if p["readme"]:
         files["config/README.md"] = README
         resolved["README.md"] = README
-    if p["n_files"] == 1:
-        where = f"`/app/config/{names[0]}`"
-        grader = ExactAnswer(f"/app/config/{names[0]}", resolved[names[0]].strip())
-    else:
-        where = "the files under `/app/config/`" + (" (including its subdirectories)" if p["subdir"] else "")
-        grader = FileTree("/app/config", {rel: tree_entry(text) for rel, text in sorted(resolved.items())})
+    grader = FileTree("/app/config", {rel: tree_entry(text, text=True) for rel, text in sorted(resolved.items())})
     shortcuts = {m: _solution(m) for m in ("all-ours", "all-theirs", "union-duplicates")}
     shortcuts["keep-both"] = Solution(KEEP_BOTH, _keep_both)
     if p["diff3"]:
@@ -302,7 +299,7 @@ def build(ctx):
     if p["subdir"]:
         shortcuts["top-level-only"] = _solution("top-level-only")
     return TaskSpec(
-        instruction=INSTRUCTION.format(where=where, diff3=DIFF3 if p["diff3"] else ""),
+        instruction=INSTRUCTION,
         files=files,
         grader=grader,
         oracle=_solution("oracle"),
@@ -313,7 +310,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="resolve-conflicts",
-    version=1,
+    version=2,
     cluster="config-repair",
     category="config",
     skills=("merge-conflicts", "text-editing", "config-repair"),

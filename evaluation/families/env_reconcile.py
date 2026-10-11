@@ -2,12 +2,14 @@
 
 Task: `/app/.env.example` lists the allowed keys with their defaults (an empty default marks a
 required key); `/app/.env` is the current file, with stale unknown keys and some empty
-values; the overrides (easy/medium `/app/deploy/overrides.env`; hard `deploy/common.env` and
-`deploy/production.env`) hold deployment values. The instruction states the rules: exactly
-the template's keys, each once; value from the highest source that sets it (overrides, then
-the current file, then the template default); an empty value counts as not set in every file;
-`KEY=value` lines. The grader parses the result as dotenv (duplicate keys fail) and compares
-it with the expected mapping.
+values; the override files under `/app/deploy/` hold deployment values. Their names start with
+a number (easy/medium `10-overrides.env`; hard `10-common.env` and `20-production.env`), and a
+higher number takes precedence. The instruction, the same at every difficulty, states the
+rules: exactly the template's keys, each once; value from the highest source that sets it
+(the override files from the highest number down, then the current file, then the template
+default); an empty value counts as not set in every file; an `export ` prefix in the current
+file sets the key after it; `KEY=value` lines. The grader parses the result as dotenv
+(duplicate keys fail) and compares it with the expected mapping.
 
 Construction: keys are dealt roles that plant each trap: a key set differently in the
 overrides and the current file, a key only the current file sets (differently from its
@@ -15,7 +17,8 @@ default), a key empty in the current file whose default applies, required keys f
 the current file and from the overrides, and unknown keys in the current file. DATABASE_URL
 is always present and every value of it contains `=` (`?sslmode=...`). Medium adds an
 unknown key in the overrides and an override with an empty value; hard has two override
-layers that disagree on a key and `export ` prefixes in the current file.
+layers that disagree on a key and `export ` prefixes in the current file (one on a key whose
+value comes from the current file).
 
 Traps (declared shortcuts, all failing by construction):
 - `env-wins`: the current file beats the overrides;
@@ -25,7 +28,7 @@ Traps (declared shortcuts, all failing by construction):
 - `append-overrides`: `cat overrides >> .env`, which leaves duplicate keys;
 - `awk-split`: an awk merge with `-F=` that reads only `$2`, cutting values at their second `=`;
 - medium/hard `override-empty-clears`: an empty override empties the key;
-- hard `common-wins`: the override layers in the wrong order;
+- hard `common-wins`: the override layers in the wrong order (the lower number wins);
 - hard `export-as-unknown`: `export KEY=...` lines read as an unknown key `export KEY`.
 
 The Python methods are one source (`SOLVER`) run with a mode, as in csv-revenue; `awk-split`
@@ -65,16 +68,16 @@ UNKNOWN_GEN = lambda rng, app: rng.choice([f"{rng.choice(WORDS)}.internal", str(
 
 TEMPLATE_HEADER = "every supported setting, with its default"
 
-INSTRUCTION = """Bring `/app/.env` in line with the template `/app/.env.example` and the deployment overrides in {layers}. Rewrite `/app/.env` in place so that:
+INSTRUCTION = """Bring `/app/.env` in line with the template `/app/.env.example` and the deployment overrides, which are the `.env` files in `/app/deploy/`. Each override file's name starts with a number, and a file with a higher number takes precedence over one with a lower number. Rewrite `/app/.env` in place so that:
 
 - it sets exactly the keys listed in `/app/.env.example`, each once; a key that is not in the template is dropped, even when another file sets it;
-- each key's value comes from the first of these that sets it: {precedence};
+- each key's value comes from the first of these that sets it: the override files, from the highest number down, then the current `/app/.env`, then the default in `/app/.env.example`;
 - an empty value (`KEY=`) counts as not set, in every file;
 - template keys with an empty value have no default (they are required); each of them is set in one of the other files;
-- every line is `KEY=value`, with no quotes, no `export` and no spaces around `=` (comment lines and blank lines are allowed).{export}
-"""
+- every line is `KEY=value`, with no quotes, no `export` and no spaces around `=` (comment lines and blank lines are allowed).
 
-EXPORT = "\n\nThe current `/app/.env` is also sourced by a shell script, so some of its lines start with `export `; such a line sets the key after `export`."
+The current `/app/.env` is also sourced by a shell script, so some of its lines may start with `export `; such a line sets the key after `export`.
+"""
 
 SOLVER = r'''
 def parse(text, strip_export=True):
@@ -200,7 +203,9 @@ def _roles(rng, p):
     if p["override_extras"]:
         roles += ["override_empty"]
     if p["layers"] == 2:
-        roles += ["layer_order", "export_env_value"]
+        roles += ["layer_order"]
+    if p["exports"]:
+        roles += ["export_env_value"]
     while len(roles) < p["n_keys"]:
         roles.append(rng.choice(["default_only", "default_only", "env_value", "override_only", "env_same"]))
     rng.shuffle(roles)
@@ -268,7 +273,7 @@ def build(ctx):
         current.insert(rng.randint(0, len(current)), (key, UNKNOWN_GEN(rng, app)))
     if p["override_extras"]:
         layers[-1].insert(rng.randint(0, len(layers[-1])), (rng.choice([k for k in UNKNOWN if k not in dict(current)]), UNKNOWN_GEN(rng, app)))
-    if p["layers"] == 2:
+    if p["exports"]:
         exported |= {k for k, _ in current if rng.random() < 0.4}
     rng.shuffle(current)
     for lay in layers:
@@ -282,18 +287,13 @@ def build(ctx):
             lines.append(f"{'export ' if k in exports else ''}{k}={v}")
         return "\n".join(lines) + "\n"
 
-    layer_files = ["deploy/overrides.env"] if n_layers == 1 else ["deploy/common.env", "deploy/production.env"]
+    layer_files = ["deploy/10-overrides.env"] if n_layers == 1 else ["deploy/10-common.env", "deploy/20-production.env"]
     files = {
         ".env.example": render(template, TEMPLATE_HEADER),
         ".env": render(current, f"local settings for {app} (edited by hand)", exported),
     }
     for rel, lay in zip(layer_files, layers):
         files[rel] = render(lay, f"deployment overrides ({rel.split('/')[-1]})")
-    if n_layers == 1:
-        layers_text, precedence = "`/app/deploy/overrides.env`", "`/app/deploy/overrides.env`, then the current `/app/.env`, then the default in `/app/.env.example`"
-    else:
-        layers_text = "`/app/deploy/common.env` and `/app/deploy/production.env`"
-        precedence = "`/app/deploy/production.env`, then `/app/deploy/common.env`, then the current `/app/.env`, then the default in `/app/.env.example`"
     shortcuts = {m: _solution(m, layer_files) for m in ("env-wins", "ignore-current", "empty-is-set", "keep-unknown")}
     shortcuts["append-overrides"] = _append_model(layer_files)
     shortcuts["awk-split"] = _awk_model(layer_files)
@@ -301,9 +301,10 @@ def build(ctx):
         shortcuts["override-empty-clears"] = _solution("override-empty-clears", layer_files)
     if n_layers == 2:
         shortcuts["common-wins"] = _solution("common-wins", layer_files)
+    if exported:
         shortcuts["export-as-unknown"] = _solution("export-as-unknown", layer_files)
     return TaskSpec(
-        instruction=INSTRUCTION.format(layers=layers_text, precedence=precedence, export=EXPORT if exported else ""),
+        instruction=INSTRUCTION,
         files=files,
         grader=ParsedAnswer("/app/.env", "dotenv", expected),
         oracle=_solution("oracle", layer_files),
@@ -314,14 +315,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="env-reconcile",
-    version=1,
+    version=2,
     cluster="config-repair",
     category="config",
     skills=("dotenv", "precedence", "config-repair", "shell"),
     difficulties={
-        "easy": {"n_keys": 7, "layers": 1, "unknown_keys": 1, "override_extras": False},
-        "medium": {"n_keys": 10, "layers": 1, "unknown_keys": 2, "override_extras": True},
-        "hard": {"n_keys": 13, "layers": 2, "unknown_keys": 3, "override_extras": True},
+        "easy": {"n_keys": 7, "layers": 1, "unknown_keys": 1, "override_extras": False, "exports": False},
+        "medium": {"n_keys": 10, "layers": 1, "unknown_keys": 2, "override_extras": True, "exports": False},
+        "hard": {"n_keys": 13, "layers": 2, "unknown_keys": 3, "override_extras": True, "exports": True},
     },
     build=build,
 )

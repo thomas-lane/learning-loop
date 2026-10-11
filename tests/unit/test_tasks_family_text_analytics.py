@@ -1,6 +1,6 @@
-"""The text-analytics families latency-p95, session-count and error-burst: deterministic
-rendering, a clean randomness lint, and their traps re-derived here from the rendered files,
-independently of each family's own solver source."""
+"""The text-analytics families: one instruction at every difficulty, and their traps
+re-derived here from the rendered files, independently of each family's own solver source
+(count-errors' and log-triage's basic traps are in test_tasks_families.py)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import importlib.util
 import itertools
 import json
 import math
+import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -17,9 +18,12 @@ from pathlib import Path
 import pytest
 
 from learning_loop.core.config import REPO_ROOT
+from learning_loop.tasks.generate import generate_spec
 from learning_loop.tasks.render import render
 
 MODULES = {
+    "count-errors": REPO_ROOT / "evaluation" / "families" / "count_errors.py",
+    "log-triage": REPO_ROOT / "evaluation" / "families" / "log_triage.py",
     "latency-p95": REPO_ROOT / "evaluation" / "families" / "latency_p95.py",
     "session-count": REPO_ROOT / "evaluation" / "families" / "session_count.py",
     "error-burst": REPO_ROOT / "evaluation" / "families" / "error_burst.py",
@@ -30,11 +34,11 @@ def _load(path: Path):
     spec = importlib.util.spec_from_file_location(f"_family_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.FAMILY
+    return module
 
 
-FAMILIES = {name: _load(path) for name, path in MODULES.items()}
-CASES = [(name, d) for name, fam in FAMILIES.items() for d in fam.difficulties]
+LOADED = {name: _load(path) for name, path in MODULES.items()}
+FAMILIES = {name: module.FAMILY for name, module in LOADED.items()}
 SEEDS = [1, 2, 3]
 
 
@@ -56,6 +60,96 @@ def _unique_max(scores: dict):
     if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
         return None
     return ranked[0][0]
+
+
+@pytest.mark.parametrize("name", list(MODULES))
+@pytest.mark.parametrize("seed", SEEDS)
+def test_instruction_is_the_same_at_every_difficulty(name, seed):
+    """Difficulty comes from the data alone: these instructions draw no instance values, so
+    every level gets the module's one INSTRUCTION, which states every rule of every level."""
+    fam = FAMILIES[name]
+    texts = {d: generate_spec(fam, d, seed).spec.instruction for d in fam.difficulties}
+    assert set(texts.values()) == {LOADED[name].INSTRUCTION}, name
+
+
+@pytest.mark.parametrize(
+    "name,phrases",
+    [
+        ("count-errors", ["including any subdirectories", "inside a longer word", "counts once"]),
+        ("log-triage", ["gzip-compressed and archived logs in any subdirectories"]),
+        ("latency-p95", ["gzip-compressed and archived logs in any subdirectories"]),
+        ("session-count", ["separated by single spaces", "The files overlap in time", "not necessarily in time order", "never affect each other's sessions"]),
+        ("error-burst", ["`2026-01-31T09:05:00+02:00` is 07:05 UTC", "declares, in its first line, the UTC offset", "gzip-compressed"]),
+    ],
+)
+def test_instruction_states_every_level_s_rules(name, phrases):
+    """Rules that used to appear only at some levels (subdirectories, compressed files, the
+    header offset, the worked offset example, session clarifications) appear at every level."""
+    fam = FAMILIES[name]
+    for d in fam.difficulties:
+        text = generate_spec(fam, d, 1).spec.instruction
+        assert all(p in text for p in phrases), (d, [p for p in phrases if p not in text])
+
+
+# --------------------------------------------------------------------------- #
+# count-errors
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["count-errors"].difficulties))
+@pytest.mark.parametrize("seed", SEEDS)
+def test_count_errors_in_word_and_twice_error_lines(tmp_path, difficulty, seed):
+    """Medium and hard have lines with `ERROR` only inside a longer word and lines with it
+    twice, so whole-word matching, the level field and occurrence counts all miss; easy has
+    neither, and only hard has a log in a subdirectory."""
+    render(FAMILIES["count-errors"], difficulty, seed, tmp_path)
+    files, expected = _files(tmp_path, "data"), int(_expected(tmp_path))
+    logs = [ln for n, t in files.items() if n.endswith(".log") for ln in t.splitlines()]
+    assert sum("ERROR" in ln for ln in logs) == expected
+    in_word = [ln for ln in logs if "ERROR" in ln and not re.search(r"\bERROR\b", ln)]
+    twice = [ln for ln in logs if ln.count("ERROR") > 1]
+    whole_word = sum(re.search(r"\bERROR\b", ln) is not None for ln in logs)
+    level = sum(ln.split()[1] == "ERROR" for ln in logs)
+    occurrences = sum(ln.count("ERROR") for ln in logs)
+    assert any("/" in n for n in files) == (difficulty == "hard")
+    if difficulty == "easy":
+        assert not in_word and not twice and whole_word == level == occurrences == expected
+    else:
+        assert in_word and twice
+        assert whole_word < expected and level < expected and occurrences > expected
+
+
+# --------------------------------------------------------------------------- #
+# log-triage
+# --------------------------------------------------------------------------- #
+
+
+def _ip_top(lines, take):
+    return _unique_max(Counter(ln.split()[0] for ln in lines if take(ln)))
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["log-triage"].difficulties))
+@pytest.mark.parametrize("seed", SEEDS)
+def test_log_triage_size_decoy_is_graded(tmp_path, difficulty, seed):
+    """The size decoy grades with difficulty: none on easy; 4-digit sizes 5000-5999 on medium,
+    so only a grep not anchored after the status fails; 3-digit sizes 500-599 on hard, so a
+    grep with spaces on both sides fails too. No other response size starts with 5."""
+    render(FAMILIES["log-triage"], difficulty, seed, tmp_path)
+    files, expected = _files(tmp_path, "logs"), _expected(tmp_path)
+    lines = [ln for t in files.values() for ln in t.splitlines()]
+    decoy_sizes = [int(ln.split()[9]) for ln in lines if ln.split()[8] == "200" and ln.split()[9].startswith("5")]
+    assert all(not ln.split()[9].startswith("5") for ln in lines if ln.split()[8] != "200")
+    assert _ip_top(lines, lambda ln: ln.split()[8].startswith("5")) == expected
+    unanchored = _ip_top(lines, lambda ln: re.search(r" 5[0-9]{2}", ln) is not None)
+    spaced = _ip_top(lines, lambda ln: re.search(r" 5[0-9]{2} ", ln) is not None)
+    if difficulty == "easy":
+        assert not decoy_sizes and unanchored == spaced == expected
+    elif difficulty == "medium":
+        assert decoy_sizes and all(5000 <= s <= 5999 for s in decoy_sizes)
+        assert unanchored != expected and spaced == expected
+    else:
+        assert decoy_sizes and all(500 <= s <= 599 for s in decoy_sizes)
+        assert unanchored != expected and spaced != expected
 
 
 # --------------------------------------------------------------------------- #
@@ -169,6 +263,10 @@ def _truth(evs):
 def test_session_count_traps(tmp_path, difficulty, seed):
     render(FAMILIES["session-count"], difficulty, seed, tmp_path)
     files, expected = _files(tmp_path, "events"), _expected(tmp_path)
+    for text in files.values():  # the line format the instruction states: single-space fields
+        for line in text.splitlines():
+            fields = line.split(" ")
+            assert "" not in fields and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", fields[0]) and fields[1].startswith("user=")
     evs = _events(files)
     truth = _truth(evs)
     assert truth == expected

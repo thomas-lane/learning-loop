@@ -4,27 +4,37 @@
 end, adding months, ISO week; medium adds business days, hard adds age and ISO weeks per
 year), and 1 / 2 / 4 of them carry a bug from a catalog of classic calendar mistakes:
 leap-year rules, December and year wrap-around, month-end clamping, ISO week-year
-boundaries, weekends and holidays. The functions take every date as an argument and never
-read the clock, so the hidden checks are reproducible. The visible tests in
-`/app/test_dates.py` expose all / half / a quarter of the bugs; a function with a bug no
-visible test exposes gets no visible test. Hidden checks use fresh seed-specific dates
-chosen to hit each boundary: century years, 31st-of-month moves, December targets, dates
-whose ISO year differs from the calendar year, spans that cross a weekend without landing on
-it, weekday holidays inside a span, birthdays a few days away after decades of leap days.
+boundaries, weekends and holidays, birthdays. Each function's bug is drawn uniformly from
+its catalog entries. The functions take every date as an argument and never read the
+clock, so the hidden checks are reproducible. The instruction is the same at every
+difficulty apart from the function list: some results are wrong in calendar edge cases
+"such as month ends, leap years and year boundaries" (every level has a bug in one of the
+first four functions, which these describe), some visible tests fail, and they may not
+cover every bug.
+
+`/app/test_dates.py` holds two visible tests per function, of different kinds and at least
+one of them not an error check, so neither the tested functions nor their number of tests
+say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
+test of that function fails because of its bug, both with that bug alone and with every bug
+in place. Every other function's tests pass on the module as given; for a function with a
+*hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
+only the hidden bugs are left. Hidden checks use fresh seed-specific dates (never a visible
+test's) chosen to hit each boundary: century years, 31st-of-month moves, December targets,
+dates whose ISO year differs from the calendar year, spans that cross a weekend without
+landing on it, weekday holidays inside a span, birthdays a few days away after decades of
+leap days, a later month with an earlier day.
 
 Traps, each declared as a shortcut that must fail:
-- `visible-bugs-only` (when some bug has no visible test): fix only the bugs the visible
-  tests expose;
-- `hardcode-visible`: return the visible tests' expected values for their exact inputs and
-  keep the buggy code for everything else;
-- `wrong-fix-<function>`: every bug fixed correctly except one, which gets a plausible wrong
-  fix from the catalog (e.g. `year % 4 == 0` as the leap rule, `min(day, 28)` as month-end
-  clamping, `strftime("%Y-W%V")` for the ISO week, `(on - born).days // 365` for an age).
+- `visible-bugs-only` (when some bug is hidden): fix only the bugs the visible tests expose;
+- `wrong-fix-<function>`, for every bug: every bug fixed correctly except this one, which
+  gets a plausible wrong fix from the catalog (e.g. `year % 4 == 0` as the leap rule,
+  `min(day, 28)` as month-end clamping, `int(.../12)` instead of floor division for the
+  year, `strftime("%Y-W%V")` for the ISO week, `isoweekday() < 5` for business days,
+  `(on - born).days // 365` for an age).
 
 Expected values come from reference code independent of the module's source (the
 `calendar` module, day-by-day loops), and `build` checks that the correct module passes
-every hidden check. `build` redraws a visible test until it exposes its function's bug (or,
-for a function without a visible bug, passes with the hidden-only bugs still in place).
+every hidden check.
 """
 
 import calendar
@@ -117,7 +127,8 @@ _LEAP = "leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)"
 _AGE = "    years = d.year - b.year\n    if (d.month, d.day) < (b.month, b.day):\n        years -= 1\n    return years\n"
 _ISO = '    year, week, _ = date.fromisoformat(day).isocalendar()\n    return f"{year}-W{week:02d}"\n'
 
-# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix, or None}
+# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix}.
+# Every bug has a wrong fix, so the bug is drawn uniformly among its function's bugs.
 BUGS = {
     "days_in_month": {
         "every_fourth_year": {
@@ -157,7 +168,12 @@ BUGS = {
                     "    year = d.year + (d.month + months) // 12\n    month = (d.month + months) % 12 or 12\n",
                 )
             ],
-            "naive": None,
+            "naive": [
+                (
+                    "    year, month0 = divmod(d.year * 12 + d.month - 1 + months, 12)\n    month = month0 + 1\n",
+                    "    year = d.year + int((d.month - 1 + months) / 12)\n    month = (d.month - 1 + months) % 12 + 1\n",
+                )
+            ],
         },
     },
     "iso_week": {
@@ -196,7 +212,7 @@ BUGS = {
         },
         "saturday_counts": {
             "bug": [("if d.weekday() < 5 and", "if d.weekday() < 6 and")],
-            "naive": None,
+            "naive": [("if d.weekday() < 5 and", "if d.isoweekday() < 5 and")],
         },
         "ignores_holidays": {
             "bug": [("if d.weekday() < 5 and d.isoformat() not in off:", "if d.weekday() < 5:")],
@@ -213,7 +229,7 @@ BUGS = {
         },
         "month_only": {
             "bug": [("if (d.month, d.day) < (b.month, b.day):", "if d.month < b.month:")],
-            "naive": None,
+            "naive": [("if (d.month, d.day) < (b.month, b.day):", "if d.month < b.month or d.day < b.day:")],
         },
     },
     "weeks_in_year": {
@@ -228,7 +244,12 @@ BUGS = {
                     "    return date(year, 12, 31).isocalendar()[1]\n",
                 )
             ],
-            "naive": None,
+            "naive": [
+                (
+                    "    jan1 = date(year, 1, 1).weekday()  # Monday is 0\n    leap = days_in_month(year, 2) == 29\n    return 53 if jan1 == 3 or (leap and jan1 == 2) else 52\n",
+                    "    return date(year, 12, 24).isocalendar()[1]  # the last full week\n",
+                )
+            ],
         },
     },
 }
@@ -293,6 +314,11 @@ def _weekday(rng, lo, hi, weekdays):
             return d
 
 
+# Kinds of check whose input is the same in every instance, so a visible test and a hidden
+# check of that kind may share it (hard-coding it gives the specified answer anyway).
+FIXED_INPUTS = ()
+
+
 def _cases(rng, func):
     """The hidden checks for `func`, with fresh inputs; the visible tests draw from the same kinds."""
     lo, hi = date(1990, 1, 1), date(2060, 1, 1)
@@ -347,8 +373,11 @@ def _cases(rng, func):
         early_day = jan1 + timedelta(days=rng.randint(0, 6 - jan1.weekday()))
         small = date(rng.randint(1990, 2059), 2, rng.randint(1, 20))
         mid = date(mid_year, rng.randint(3, 10), rng.randint(1, 28))
+        monday_year = rng.choice(_years(1990, 2060, lambda yy: date(yy, 1, 1).weekday() == 0))
+        in_monday_year = date(monday_year, rng.randint(2, 11), rng.randint(1, 28))  # week numbers agree with %W
         return [
             _eq("iso_week_mid_year", func, [mid.isoformat()], _iso(mid)),
+            _eq("iso_week_year_starting_monday", func, [in_monday_year.isoformat()], _iso(in_monday_year)),
             _eq("iso_week_late_december", func, [late_day.isoformat()], _iso(late_day)),
             _eq("iso_week_early_january", func, [early_day.isoformat()], _iso(early_day)),
             _eq("iso_week_padded", func, [small.isoformat()], _iso(small)),
@@ -373,11 +402,12 @@ def _cases(rng, func):
             _raises("business_days_negative", func, [start.isoformat(), -rng.randint(1, 5), []]),
         ]
     if func == "age":
-        born = date(rng.randint(1940, 1990), rng.randint(1, 12), rng.randint(10, 28))
+        born = date(rng.randint(1940, 1990), rng.randint(1, 11), rng.randint(10, 28))
         years = rng.randint(30, 60)
         birthday = born.replace(year=born.year + years)
         before = birthday - timedelta(days=rng.randint(1, 3))
         same_month = birthday.replace(day=born.day - rng.randint(1, 9))
+        later_month = date(birthday.year, rng.randint(born.month + 1, 12), rng.randint(1, born.day - 1))
         leap_born = date(rng.choice(_years(1940, 1992, lambda yy: yy % 4 == 0)), 2, 29)
         later = rng.choice(_years(leap_born.year + 20, leap_born.year + 60, lambda yy: not _is_leap(yy)))
         feb28 = date(later, 2, 28)
@@ -385,6 +415,7 @@ def _cases(rng, func):
             _eq("age_days_before_birthday", func, [born.isoformat(), before.isoformat()], _age(born, before)),
             _eq("age_on_birthday", func, [born.isoformat(), birthday.isoformat()], years),
             _eq("age_earlier_in_birth_month", func, [born.isoformat(), same_month.isoformat()], _age(born, same_month)),
+            _eq("age_later_month_earlier_day", func, [born.isoformat(), later_month.isoformat()], years),
             _eq("age_leap_day_birthday", func, [leap_born.isoformat(), feb28.isoformat()], _age(leap_born, feb28)),
             _raises("age_on_before_born", func, [born.isoformat(), (born - timedelta(days=rng.randint(1, 400))).isoformat()]),
         ]
@@ -400,6 +431,9 @@ def _cases(rng, func):
 # --------------------------------------------------------------------------- #
 # The fix-code engine: buggy module, visible tests, shortcuts
 # --------------------------------------------------------------------------- #
+
+VISIBLE_PER_FUNCTION = 2  # visible tests per function, each of a different kind
+DRAWS_PER_KIND = 20
 
 
 def _apply(func, swaps):
@@ -441,7 +475,7 @@ def _test_function(c):
     else:  # no_mutation
         rest = "".join(", " + repr(a) for a in c["args"][1:])
         body = f"    arg = {c['args'][0]!r}\n    {c['func']}(arg{rest})\n    assert arg == {c['args'][0]!r}, \"the argument was modified\"\n"
-    return f"def test_{c['func']}():\n{body}"
+    return f"def test_{c['name'][len('visible_'):]}():\n{body}"
 
 
 TEST_RUNNER = """
@@ -460,18 +494,39 @@ if __name__ == "__main__":
 """
 
 
-def _hardcoded(src, visible):
-    """`src` plus wrappers that answer the given visible tests from their expectations."""
-    for c in visible:
-        f = c["func"]
-        if c["kind"] == "equal":
-            then = f"return {c['expected']!r}"
-        elif c["kind"] == "raises":
-            then = f"raise {c.get('exception', 'ValueError')}(\"invalid input\")"
+def _visible_tests(rng, f, ok, exposing):
+    """VISIBLE_PER_FUNCTION visible tests for `f`, each of a different kind of `_cases`, at
+    least one of them not a `raises` check, drawn with fresh inputs until `ok(check,
+    exposing)` holds; with `exposing`, the first must expose `f`'s bug. Every function gets
+    the same number and mix, so a function whose bug is hidden (whose tests must avoid it)
+    does not stand out. Returns fewer when that is impossible. The tests are in the order
+    `_cases` lists their kinds, so the failing one is not always first."""
+    first = _cases(rng, f)
+    order, kind_of = [c["name"] for c in first], {c["name"]: c["kind"] for c in first}
+    kinds = list(order)
+    rng.shuffle(kinds)
+
+    def draw(kind, expose):
+        for _ in range(DRAWS_PER_KIND):
+            c = _canonical(dict(next(c for c in _cases(rng, f) if c["name"] == kind), name=f"visible_{kind}"))
+            if ok(c, expose):
+                return c
+        return None
+
+    chosen = []
+    while len(chosen) < VISIBLE_PER_FUNCTION:
+        expose = exposing and not chosen
+        need_value = not expose and all(c["kind"] == "raises" for c in chosen) and len(chosen) == VISIBLE_PER_FUNCTION - 1
+        for kind in kinds:
+            if need_value and kind_of[kind] == "raises":
+                continue
+            if c := draw(kind, expose):
+                chosen.append(c)
+                kinds.remove(kind)
+                break
         else:
-            continue
-        src += f"\n\n_{f}_original = {f}\n\n\ndef {f}(*args):\n    if list(args) == {c['args']!r}:\n        {then}\n    return _{f}_original(*args)\n"
-    return src
+            break
+    return sorted(chosen, key=lambda c: order.index(c["name"][len("visible_") :]))
 
 
 def _write(source, then=""):
@@ -487,49 +542,55 @@ def build_fix(ctx, instruction, extra_imports=()):
     funcs = p["functions"]
     bugged = sorted(rng.sample(funcs, p["n_bugs"]))
     bugs = {f: rng.choice(sorted(BUGS[f])) for f in bugged}
-    if not any(BUGS[f][b]["naive"] for f, b in bugs.items()):
-        raise Reject("no injected bug has a catalogued wrong fix")
     visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
     bug_src = {f: _apply(f, BUGS[f][b]["bug"]) for f, b in bugs.items()}
     hidden_only = {f: s for f, s in bug_src.items() if f not in visible_bugs}
     ref, buggy, partial = _exec(_module(funcs, {})), _exec(_module(funcs, bug_src)), _exec(_module(funcs, hidden_only))
 
+    # Every function gets visible tests, and all of them pass once only the hidden bugs are
+    # left. A function with a visible bug gets one test that fails because of that bug (with
+    # it alone and with every bug in place); every other function's tests pass on the module
+    # as given, so they exercise behavior its hidden bug (if any) does not touch.
     visible = []
     for f in funcs:
-        if f in bugs and f not in visible_bugs:
-            continue  # a hidden bug gets no visible test
-        for _ in range(100):
-            c = _canonical(dict(rng.choice(_cases(rng, f)), name=f"visible_{f}"))
-            if _passes(ref, [c]) and _passes(partial, [c]) and (f not in visible_bugs or not _passes(buggy, [c])):
-                visible.append(c)
-                break
-        else:
-            raise Reject(f"no visible test for {f}")
+        if f in visible_bugs:
+            alone = _exec(_module(funcs, {f: bug_src[f]}))
 
-    seen = [(c["func"], c["args"]) for c in visible]
+            def ok(c, exposing, alone=alone):
+                if not (_passes(ref, [c]) and _passes(partial, [c])):
+                    return False
+                return not _passes(alone, [c]) and not _passes(buggy, [c]) if exposing else True
+
+        else:
+
+            def ok(c, exposing):
+                return _passes(ref, [c]) and _passes(partial, [c]) and _passes(buggy, [c])
+
+        tests = _visible_tests(rng, f, ok, exposing=f in visible_bugs)
+        if len(tests) < VISIBLE_PER_FUNCTION:
+            raise Reject(f"too few visible tests for {f}")
+        visible += tests
+
+    seen = [(c["func"], c["args"]) for c in visible if c["name"][len("visible_") :] not in FIXED_INPUTS]
     for _ in range(100):
         checks = [_canonical(c) for f in funcs for c in _cases(rng, f)]
         if not any((c["func"], c["args"]) in seen for c in checks):
             break  # hidden inputs differ from every visible test's, so hard-coding those cannot pass
     else:
         raise Reject("hidden checks keep repeating a visible test")
-    failed = [c["name"] for c in checks if not _passes(ref, [c])]
-    if failed:
-        raise RuntimeError(f"{ctx.family}: the correct module fails hidden checks {failed}")
+    if failed := [c["name"] for c in checks if not _passes(ref, [c])]:
+        raise Reject(f"the correct module fails hidden checks {failed}")
 
     names = ", ".join(funcs + list(extra_imports))
     tests = "\n\n".join(_test_function(c) for c in visible)
     test_src = f'"""Run with: python3 test_{MODULE}.py"""\n\nfrom {MODULE} import {names}  # noqa: F401\n\n\n{tests}' + TEST_RUNNER
     fixed = _module(funcs, {})
-    shortcuts = {"hardcode-visible": _solution(_hardcoded(_module(funcs, bug_src), [c for c in visible if c["func"] in visible_bugs]))}
+    shortcuts = {f"wrong-fix-{f}": _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])})) for f, b in bugs.items()}
     if hidden_only:
         shortcuts["visible-bugs-only"] = _solution(_module(funcs, hidden_only))
-    for f, b in bugs.items():
-        if BUGS[f][b]["naive"]:
-            shortcuts[f"wrong-fix-{f}"] = _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])}))
     listed = ", ".join(f"`{f}`" for f in funcs)
     return TaskSpec(
-        instruction=instruction.format(functions=listed, hint=p["hint"]),
+        instruction=instruction.format(functions=listed),
         files={f"{MODULE}.py": _module(funcs, bug_src), f"test_{MODULE}.py": test_src},
         grader=Checks(PATH, MODULE, tuple(checks)),
         oracle=_solution(fixed, f"cd /app && python3 test_{MODULE}.py\n"),
@@ -538,16 +599,10 @@ def build_fix(ctx, instruction, extra_imports=()):
     )
 
 
-INSTRUCTION = """The date helpers in `/app/dates.py` ({functions}) are used for billing and scheduling, and some of their results are wrong around month ends, leap years, year boundaries and weekends. {hint}
+INSTRUCTION = """The date helpers in `/app/dates.py` ({functions}) are used for billing and scheduling, and some of their results are wrong in calendar edge cases such as month ends, leap years and year boundaries. Some of the tests in `/app/test_dates.py` fail, and those tests may not cover every bug.
 
 Fix `dates.py` so that every function behaves exactly as its docstring describes. Keep the function names and signatures, and use only the Python standard library; the functions must keep taking every date as an argument (never the current date). You may add tests to `/app/test_dates.py` (run it with `python3 test_dates.py`), but do not change what the existing tests assert.
 """
-
-HINTS = {
-    "easy": "One function has a bug, and a test in `/app/test_dates.py` fails because of it.",
-    "medium": "Some tests in `/app/test_dates.py` fail, and some bugs may not be covered by those tests at all.",
-    "hard": "Several functions have bugs; the tests in `/app/test_dates.py` catch only a few of them.",
-}
 
 
 def build(ctx):
@@ -556,23 +611,17 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-dates",
-    version=1,
+    version=2,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "dates", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["days_in_month", "month_end", "add_months", "iso_week"], "n_bugs": 1, "visible_bug_tests": 1.0, "hint": HINTS["easy"]},
-        "medium": {
-            "functions": ["days_in_month", "month_end", "add_months", "iso_week", "add_business_days"],
-            "n_bugs": 2,
-            "visible_bug_tests": 0.5,
-            "hint": HINTS["medium"],
-        },
+        "easy": {"functions": ["days_in_month", "month_end", "add_months", "iso_week"], "n_bugs": 1, "visible_bug_tests": 1.0},
+        "medium": {"functions": ["days_in_month", "month_end", "add_months", "iso_week", "add_business_days"], "n_bugs": 2, "visible_bug_tests": 0.5},
         "hard": {
             "functions": ["days_in_month", "month_end", "add_months", "iso_week", "add_business_days", "age", "weeks_in_year"],
             "n_bugs": 4,
             "visible_bug_tests": 0.25,
-            "hint": HINTS["hard"],
         },
     },
     build=build,

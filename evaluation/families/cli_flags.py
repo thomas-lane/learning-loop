@@ -1,24 +1,35 @@
 """cli-flags: add command-line options to an argparse script, as specified.
 
 /app/report.py summarizes a tab-separated event log (`python3 report.py LOGFILE` prints
-`<category>: <count>`, most events first, ties alphabetical). The agent adds options:
-easy `--limit N` (an integer of at least 1) and `--format text|json`; medium adds
-`--format csv` and `--min-count N` (inclusive); hard adds `--only`/`--exclude` (repeatable,
-mutually exclusive), states that filters apply before `--limit`, and requires exit status 1
-when the log cannot be read. Usage errors exit with status 2 and print nothing on stdout.
+`<category>: <count>`, most events first, ties alphabetical). The instruction, the same at
+every difficulty, asks for `--limit N` (an integer of at least 1), `--format text|json|csv`,
+`--min-count N` (inclusive), `--only`/`--exclude` (repeatable, mutually exclusive), states
+that the filters apply before `--limit`, defines the empty JSON (`[]`) and CSV (the header
+line) reports, says which CSV fields are quoted and that the others are not, requires exit
+status 2 with nothing on stdout for usage errors and exit status 1 when the log cannot be
+read. The oracle implements all of it at every difficulty.
 
 Grading: `Commands` runs the agent's script with hidden argv lists on a hidden log and
-compares stdout and the exit status. The log's categories are planted: one contains a double
-quote (JSON escaping), on medium/hard one contains a comma (CSV quoting), some counts tie, and
-one count equals the `--min-count` argument of a check.
+compares stdout and the exit status. Difficulty decides which options the hidden checks
+exercise and what the log holds:
+
+- easy: five categories, one with a double quote (JSON escaping); checks `--limit` and
+  `--format text|json`, and the usage errors for them;
+- medium: six categories, one with a double quote and one with a comma (CSV quoting); adds
+  `--format csv` and `--min-count`, with one check's `--min-count` equal to a count;
+- hard: seven categories; adds `--only`/`--exclude` (repeated, combined with `--min-count`
+  and `--limit`, and together as a usage error) and an unreadable LOGFILE (exit 1).
+
+Some counts tie at every difficulty; the top count is unique by construction (the planted
+tie copies a count below the largest).
 
 Traps (declared shortcuts, each the oracle script with one plausible mistake, each caught by a
-planted check): `hardcode-examples` (prints the instruction's example output),
-`limit-unchecked` (`type=int`, so `--limit 0` and `--limit -1` are accepted),
+planted check of its difficulty): `hardcode-examples` (prints the instruction's example
+output), `limit-unchecked` (`type=int`, so `--limit 0` and `--limit -1` are accepted),
 `json-hand-built` (string formatting, no escaping); medium adds `csv-no-quoting` and
 `min-count-exclusive` (`>` instead of `>=`); hard adds `no-mutex`, `limit-before-filter`,
-`only-not-repeatable` (`--only` without `action="append"` keeps the last value, a string) and `argparse-filetype`
-(`argparse.FileType` makes an unreadable log exit 2 instead of 1).
+`only-not-repeatable` (`--only` without `action="append"` keeps the last value, a string) and
+`argparse-filetype` (`argparse.FileType` makes an unreadable log exit 2 instead of 1).
 """
 
 import csv
@@ -26,7 +37,7 @@ import io
 import json
 from datetime import datetime, timedelta
 
-from learning_loop.tasks.spec import Commands, Family, Reject, Solution, TaskSpec
+from learning_loop.tasks.spec import Commands, Family, Solution, TaskSpec
 
 PLAIN = ["auth", "billing", "search", "upload", "cache", "mailer", "export", "scheduler", "webhooks", "reports"]
 QUOTED = ['search "beta"', 'flags "new-ui"', 'import "legacy"']
@@ -84,48 +95,33 @@ def positive_int(text):
 '''
 
 
-def _oracle(level):
-    """The reference script for a difficulty: the original plus exactly the options asked for."""
-    formats = ["text", "json"] + (["csv"] if level != "easy" else [])
-    imports = "import argparse\n" + ("import csv\n" if level != "easy" else "") + "import json\n" + ("import sys\n" if level != "easy" else "")
-    src = ORIGINAL.replace("Usage: python3 report.py LOGFILE\n", "Usage: python3 report.py LOGFILE [--limit N] [--format FORMAT]" + (" [--min-count N]" if level != "easy" else "") + (" [--only CATEGORY ... | --exclude CATEGORY ...]" if level == "hard" else "") + "\n")
-    src = src.replace("import argparse\n", imports)
+def _oracle():
+    """The reference script: the original plus every option the instruction asks for."""
+    src = ORIGINAL.replace("Usage: python3 report.py LOGFILE\n", "Usage: python3 report.py LOGFILE [--limit N] [--format FORMAT] [--min-count N] [--only CATEGORY ... | --exclude CATEGORY ...]\n")
+    src = src.replace("import argparse\n", "import argparse\nimport csv\nimport json\nimport sys\n")
     src = src.replace("    return counts\n", "    return counts\n" + POSITIVE)
     opts = (
         '    parser.add_argument("--limit", type=positive_int, help="print at most N categories")\n'
-        f'    parser.add_argument("--format", choices={formats!r}, default="text")\n'
+        '    parser.add_argument("--format", choices=["text", "json", "csv"], default="text")\n'
+        '    parser.add_argument("--min-count", type=positive_int, default=1, help="only categories with at least N events")\n'
+        "    group = parser.add_mutually_exclusive_group()\n"
+        '    group.add_argument("--only", action="append", metavar="CATEGORY", help="report only these categories")\n'
+        '    group.add_argument("--exclude", action="append", metavar="CATEGORY", help="leave out these categories")\n'
     )
-    if level != "easy":
-        opts += '    parser.add_argument("--min-count", type=positive_int, default=1, help="only categories with at least N events")\n'
-    if level == "hard":
-        opts += (
-            "    group = parser.add_mutually_exclusive_group()\n"
-            '    group.add_argument("--only", action="append", metavar="CATEGORY", help="report only these categories")\n'
-            '    group.add_argument("--exclude", action="append", metavar="CATEGORY", help="leave out these categories")\n'
-        )
     src = src.replace('    parser.add_argument("logfile")\n', '    parser.add_argument("logfile")\n' + opts)
-    load = "    counts = load(args.logfile)\n"
-    if level == "hard":
-        load = (
-            "    try:\n        counts = load(args.logfile)\n    except OSError as e:\n"
-            '        print(f"error: cannot read {args.logfile}: {e.strerror}", file=sys.stderr)\n        sys.exit(1)\n'
-        )
-    body = load
-    if level == "easy":
-        body += "    rows = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))\n"
-    else:
-        cond = "count >= args.min_count"
-        if level == "hard":
-            cond += "\n        and (args.only is None or name in args.only)\n        and (args.exclude is None or name not in args.exclude)"
-        body += f"    rows = [\n        (name, count)\n        for name, count in counts.items()\n        if {cond}\n    ]\n    rows.sort(key=lambda kv: (-kv[1], kv[0]))\n"
-    body += "    if args.limit is not None:\n        rows = rows[: args.limit]\n"
-    body += '    if args.format == "json":\n        print(json.dumps([{"category": name, "count": count} for name, count in rows]))\n'
-    if level != "easy":
-        body += '    elif args.format == "csv":\n        out = csv.writer(sys.stdout, lineterminator="\\n")\n        out.writerow(["category", "count"])\n        out.writerows(rows)\n'
-    body += '    else:\n        for name, count in rows:\n            print(f"{name}: {count}")\n'
+    body = (
+        "    try:\n        counts = load(args.logfile)\n    except OSError as e:\n"
+        '        print(f"error: cannot read {args.logfile}: {e.strerror}", file=sys.stderr)\n        sys.exit(1)\n'
+        "    rows = [\n        (name, count)\n        for name, count in counts.items()\n"
+        "        if count >= args.min_count\n        and (args.only is None or name in args.only)\n        and (args.exclude is None or name not in args.exclude)\n"
+        "    ]\n    rows.sort(key=lambda kv: (-kv[1], kv[0]))\n"
+        "    if args.limit is not None:\n        rows = rows[: args.limit]\n"
+        '    if args.format == "json":\n        print(json.dumps([{"category": name, "count": count} for name, count in rows]))\n'
+        '    elif args.format == "csv":\n        out = csv.writer(sys.stdout, lineterminator="\\n")\n        out.writerow(["category", "count"])\n        out.writerows(rows)\n'
+        '    else:\n        for name, count in rows:\n            print(f"{name}: {count}")\n'
+    )
     old_body = '    counts = load(args.logfile)\n    rows = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))\n    for name, count in rows:\n        print(f"{name}: {count}")\n'
-    assert old_body in src
-    return src.replace(old_body, body)
+    return _swap(src, (old_body, body))
 
 
 def _swap(src, *pairs):
@@ -137,6 +133,7 @@ def _swap(src, *pairs):
 
 
 def _shortcuts(level, oracle, example_output):
+    """The declared wrong scripts whose mistake a check of this difficulty catches."""
     out = {
         "hardcode-examples": f"import sys\n\nsys.stdout.write({example_output!r})\n",
         "limit-unchecked": _swap(oracle, ('parser.add_argument("--limit", type=positive_int', 'parser.add_argument("--limit", type=int')),
@@ -192,17 +189,13 @@ def _log(rng, counts):
 
 
 def _counts(rng, level):
-    """Category -> count: a unique top, one tie, a planted quote (and comma) category."""
+    """Category -> count: a unique top, one tie below it, a planted quote (and comma) category."""
     n = {"easy": 5, "medium": 6, "hard": 7}[level]
     cats = rng.sample(PLAIN, n - (1 if level == "easy" else 2)) + [rng.choice(QUOTED)] + ([rng.choice(COMMA)] if level != "easy" else [])
     values = rng.sample(range(2, 14), n - 1)
     values.append(rng.choice(sorted(values)[:-1]))  # one tie, below the unique top
     rng.shuffle(cats)
-    counts = dict(zip(cats, values))
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    if ranked[0][1] == ranked[1][1]:
-        raise Reject("tied top category")
-    return counts
+    return dict(zip(cats, values))
 
 
 def _ranked(counts):
@@ -255,7 +248,8 @@ def _checks(rng, level, counts):
         ok("min_count_json", ["--min-count", str(boundary), "--format", "json"], min_count=boundary, fmt="json")
         usage("min_count_zero", ["--min-count", "0"])
     if level == "hard":
-        a, b = rng.sample([n for n, _ in ranked], 2)
+        a = rng.choice([n for n, _ in ranked])
+        b = rng.choice([n for n, c in ranked if c != counts[a]])  # distinct counts, so the larger one passes --min-count
         ok("only_repeated", ["--only", a, "--only", b], only=[a, b])
         ok("exclude_top_then_limit", ["--exclude", ranked[0][0], "--limit", "2"], exclude=[ranked[0][0]], limit=2)
         ok("only_min_count", ["--only", a, "--only", b, "--min-count", str(min(counts[a], counts[b]) + 1), "--format", "csv"], only=[a, b], min_count=min(counts[a], counts[b]) + 1, fmt="csv")
@@ -267,10 +261,13 @@ def _checks(rng, level, counts):
 INSTRUCTION = """`/app/report.py` summarizes an event log: `python3 report.py LOGFILE` prints one line per category, `<category>: <count>`, most events first and categories with equal counts in alphabetical order. Add these command-line options to it; with none of them, it must behave exactly as it does now.
 
 - `--limit N`: print at most N categories (the first N of the report). N must be a whole number of at least 1.
-- `--format FORMAT`: {formats}, where `text` is the current output and the default.
+- `--min-count N`: only categories with at least N events. N must be a whole number of at least 1.
+- `--only CATEGORY` and `--exclude CATEGORY`: report only the named categories, or all categories except the named ones. Each option can be given several times to name several categories, but using both options in one command is a usage error.
+- `--format FORMAT`: `text`, `json` or `csv`, where `text` is the current output and the default.
   - `json`: the whole report on one line: a JSON array of objects `{{"category": <name>, "count": <count>}}` in report order, written exactly as Python's `json.dumps` writes it with its default settings. An empty report is `[]`.
-{csv}{min_count}{only}
-Options can be combined{order}. A usage error, such as an invalid value, an unknown format{conflict}, must print a message to standard error, nothing to standard output, and exit with status 2 (which is what argparse does for the errors it detects).{missing}
+  - `csv`: a header line `category,count`, then one line per category in report order. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled; every other field is written as it is, without quotes. An empty report is just the header line.
+
+Options can be combined: the filters (`--min-count`, `--only`, `--exclude`) choose the categories first, and `--limit` then keeps the first N of what remains. A usage error, such as an invalid value, an unknown format or conflicting options, must print a message to standard error, nothing to standard output, and exit with status 2 (which is what argparse does for the errors it detects). If LOGFILE cannot be read, print an error message to standard error, nothing to standard output, and exit with status 1.
 
 `/app/sample.log` is a small example log. For instance, `python3 report.py sample.log --limit 2 --format json` prints:
 
@@ -279,10 +276,6 @@ Options can be combined{order}. A usage error, such as an invalid value, an unkn
 
 Use only the Python standard library.
 """
-
-CSV_LINE = "  - `csv`: a header line `category,count`, then one line per category. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled.\n"
-MIN_COUNT_LINE = "- `--min-count N`: only categories with at least N events. N must be a whole number of at least 1.\n"
-ONLY_LINE = "- `--only CATEGORY` and `--exclude CATEGORY`: report only the named categories, or all categories except the named ones. Each option can be given several times to name several categories, but using both options in one command is a usage error.\n"
 
 
 def _write(source):
@@ -295,18 +288,8 @@ def build(ctx):
     sample_counts = _counts(rng, level)
     sample = _log(rng, sample_counts)
     example = _expected(sample_counts, limit=2, fmt="json")
-    oracle = _oracle(level)
-    formats = "`text`, `json` or `csv`" if level != "easy" else "`text` or `json`"
-    instruction = INSTRUCTION.format(
-        formats=formats,
-        csv=CSV_LINE if level != "easy" else "",
-        min_count=MIN_COUNT_LINE if level != "easy" else "",
-        only=ONLY_LINE if level == "hard" else "",
-        order=": the filters (`--min-count`, `--only`, `--exclude`) choose the categories first, and `--limit` then keeps the first N of what remains" if level == "hard" else "",
-        conflict=" or conflicting options" if level == "hard" else "",
-        missing=" If LOGFILE cannot be read, print an error message to standard error, nothing to standard output, and exit with status 1." if level == "hard" else "",
-        example=example,
-    )
+    oracle = _oracle()
+    instruction = INSTRUCTION.format(example=example)
     shortcuts = _shortcuts(level, oracle, example)
     return TaskSpec(
         instruction=instruction,
@@ -320,7 +303,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="cli-flags",
-    version=1,
+    version=2,
     cluster="write-code",
     category="coding",
     skills=("python", "argparse", "cli", "output-formats"),

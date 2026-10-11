@@ -4,17 +4,28 @@
 date. Files are duplicates when their bytes are identical, whatever their names. From each
 set of duplicates the copy in the oldest snapshot stays (by the date in the folder name),
 ties within that snapshot going to the path that sorts first; every other copy is deleted.
-The grader is a FileTree over /app/backups: exactly the surviving files, unchanged.
+The grader is a FileTree over /app/backups: exactly the surviving files, unchanged. The
+instruction is the same at every difficulty.
 
-Construction: the oldest snapshot is in late August and the others follow it, one later in
-August and the rest in early September, so with day-first names the oldest snapshot sorts
-neither first nor last. A planted document is unchanged in every snapshot, so keeping the
-copy whose path sorts first, keeping the newest copy and deleting every copy all fail. A
-second planted document is edited by changing one digit, so two versions share a name and a
-size: deduplicating by name or by size deletes a version that must stay. Other documents are
-edited, added or missing at random. On medium/hard the oldest snapshot also holds a second
-copy of one document, so the tie rule matters. Every trap holds by construction, so the first
-draw is always used.
+Data per difficulty: easy has 3 snapshots of 4 documents directly in each snapshot folder;
+medium 4 snapshots of 7 documents in subfolders (`home/`, `work/`, `etc/`); hard 5 snapshots
+of 9 documents up to two folders deep, and the oldest snapshot also holds a second copy of
+one document under another name, so the tie rule decides which copy stays.
+
+Traps and the shortcut that checks each:
+
+- the oldest snapshot is in late August and the others follow it, one later in August and
+  the rest in early September, so with day-first names the oldest snapshot sorts neither
+  first nor last: keeping the copy whose path sorts first (`keep-first-path`) and keeping the
+  newest copy (`keep-newest`) fail on a planted document that is unchanged in every
+  snapshot;
+- that document also makes deleting every copy of a duplicate (`delete-all-copies`) fail;
+- a second planted document is edited by changing one digit, so two versions share a name
+  and a size: deduplicating by name (`by-name`) or by size (`by-size`) deletes a version that
+  must stay.
+
+Other documents are edited, added or missing at random. Every trap holds by construction, so
+the first draw is always used.
 """
 
 from datetime import datetime, timedelta
@@ -43,14 +54,11 @@ WORDS = ["alpha", "boiler", "cable", "dentist", "invoice", "garden", "laptop", "
 INSTRUCTION = """`/app/backups/` holds backup snapshots, one folder per snapshot named `backup-DD-MM-YYYY` after the day it was taken (day, month, year: `backup-05-09-2026` is 5 September 2026). Each snapshot is a copy of some files as they were on that day.
 
 Free up space by removing duplicate files. Two files are duplicates when their contents are byte-for-byte identical, whatever their names or folders. From each set of duplicates keep exactly one copy: the one in the **oldest** snapshot (by the date in the folder name); if that snapshot holds more than one copy, keep the one whose path sorts first in byte order (as `LC_ALL=C sort` orders them). Delete every other copy. Files whose contents are unique stay.
-{note}
+
+A name says nothing about the contents: a file can keep its name while its contents change from one snapshot to the next.
+
 Change nothing else: do not move, rename or edit any file.
 """
-NOTES = {
-    "easy": "\nA name says nothing about the contents: a file can keep its name while its contents change from one snapshot to the next.\n",
-    "medium": "\nA name says nothing about the contents: a file can keep its name while its contents change from one snapshot to the next.\n",
-    "hard": "",
-}
 
 SOLVER = '''
 import re
@@ -194,7 +202,7 @@ def build(ctx):
     as_bytes = {rel: text.encode() for rel, text in files.items()}
     stay = _NS["keep"](as_bytes, "oracle")
     return TaskSpec(
-        instruction=INSTRUCTION.format(note=NOTES[ctx.difficulty]),
+        instruction=INSTRUCTION,
         files={f"backups/{rel}": text for rel, text in files.items()},
         grader=FileTree("/app/backups", {rel: tree_entry(as_bytes[rel]) for rel in sorted(stay)}),
         oracle=_py_solution("oracle"),
@@ -211,13 +219,13 @@ def build(ctx):
 
 FAMILY = Family(
     name="dedupe-files",
-    version=1,
+    version=2,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "hashing", "dates"),
     difficulties={
-        "easy": {"snapshots": 3, "docs": 5, "layout": "flat", "inner_copy": False},
-        "medium": {"snapshots": 4, "docs": 7, "layout": "nested", "inner_copy": True},
+        "easy": {"snapshots": 3, "docs": 4, "layout": "flat", "inner_copy": False},
+        "medium": {"snapshots": 4, "docs": 7, "layout": "nested", "inner_copy": False},
         "hard": {"snapshots": 5, "docs": 9, "layout": "deep", "inner_copy": True},
     },
     build=build,

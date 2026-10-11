@@ -1,22 +1,36 @@
 """extract-subset: extract only the `.conf` files from a bundle of nested tar.gz archives.
 
-/app/bundle.tar.gz holds plain files and inner archives (`.tar.gz`; on hard also `.tgz`, and
-one inner archive holds another). Every file whose name ends in `.conf`, at any level, goes
-to /app/out with its path kept: a file at P in an inner archive stored at A.tar.gz (or A.tgz)
-goes to <A>/P under the output directory of the archive that holds A. The grader is a
-FileTree over /app/out: exactly those files.
+/app/bundle.tar.gz holds plain files and inner archives (`.tar.gz` or `.tgz`, which may hold
+further archives). Every file whose name ends in `.conf`, at any level, goes to /app/out with
+its path kept: a file at P in an inner archive stored at A.tar.gz (or A.tgz) goes to <A>/P
+under the output directory of the archive that holds A. The grader is a FileTree over
+/app/out: exactly those files. The instruction states every rule at every difficulty.
 
-Construction: every level has `.conf` files next to decoys whose paths contain `conf` but do
-not end in `.conf` (`etc/api.conf.example`, `docs/configuration.md`, `conf.d/README.txt`), and
-every inner archive holds `.conf` files, so extracting everything, matching `*conf*`, skipping
-the inner archives, flattening paths, or extracting inner archives at the top of /app/out
-all fail. On medium/hard several inner archives share a member path (`conf.d/limits.conf`).
-On hard one inner archive is a `.tgz` and another contains a nested `.tgz`, so treating only
-`.tar.gz` as archives or descending only one level fails. Every trap holds by construction,
-so the first draw is always used.
+Data per difficulty (the bundle always also holds `README.md`, `VERSION`, `etc/bundle.conf`,
+`etc/bundle.conf.bak` and `docs/configuration.md`):
 
-The archives are built byte-for-byte deterministically: sorted members, fixed mtime, uid/gid 0,
-GNU format, and gzip with mtime 0.
+- easy: one service archive `<svc>.tar.gz` at the top of the bundle;
+- medium: three service archives at the top, two of which hold `conf.d/limits.conf`;
+- hard: four service archives under `services/`, the last one a `.tgz`, two holding
+  `conf.d/limits.conf`, and the first holding a further archive `plugins/<name>.tgz`.
+
+Traps and the shortcut that checks each:
+
+- every level has `.conf` files next to decoys whose paths contain `conf` but do not end in
+  `.conf` (`etc/api.conf.example`, `docs/configuration.md`, `conf.d/README.txt`), so
+  extracting everything (`extract-everything`) or matching `*conf*` (`name-contains`) fails;
+- every inner archive holds `.conf` files under `etc/`, so skipping the inner archives
+  (`skip-nested`), flattening paths (`flatten`) or extracting inner archives at the top of
+  /app/out (`inner-at-root`) fails; on medium/hard several inner archives share the member
+  path `conf.d/limits.conf`, so flattening or extracting at the top also overwrites files;
+- hard: one inner archive is a `.tgz` and another contains a nested `.tgz`, so treating only
+  `.tar.gz` as archives (`tar-gz-only`) or descending only one level (`one-level`) fails.
+  Without these archives those two methods are correct, so the shortcuts are declared only
+  on hard.
+
+Every trap holds by construction, so the first draw is always used. The archives are built
+byte-for-byte deterministically: sorted members, fixed mtime, uid/gid 0, GNU format, and
+gzip with mtime 0.
 """
 
 import gzip
@@ -30,17 +44,16 @@ SERVICES = ["api", "web", "worker", "billing", "search", "mailer", "auth", "repo
 PLUGINS = ["ratelimit", "audit", "cache", "metrics"]
 KEYS = ["port", "workers", "timeout", "log_level", "max_body", "pool_size", "retries", "region"]
 
-INSTRUCTION = """`/app/bundle.tar.gz` is a release bundle. Besides plain files it contains other gzipped tar archives{kinds}{nesting}.
+INSTRUCTION = """`/app/bundle.tar.gz` is a release bundle. Besides plain files it contains other gzipped tar archives (`.tar.gz` or `.tgz`), and archives can contain further archives.
 
-Extract every file whose name ends in `.conf` into `/app/out/`, from the bundle itself and from every archive inside it, keeping their paths:
+Extract every file whose name ends in `.conf` into `/app/out/`, from the bundle itself and from every archive inside it, at any depth, keeping their paths:
 
 - a file at path `P` in the bundle goes to `/app/out/P`;
-- an archive at path `A{exts}` in the bundle is not extracted as a file; a file at path `P` inside it goes to `/app/out/A/P` (`etc/x.conf` inside `pkg/y.tar.gz` goes to `/app/out/pkg/y/etc/x.conf`){nested_rule}
+- an archive at path `A.tar.gz` or `A.tgz` in the bundle is not extracted as a file; a file at path `P` inside it goes to `/app/out/A/P` (`etc/x.conf` inside `pkg/y.tar.gz` goes to `/app/out/pkg/y/etc/x.conf`);
+- the same rule applies inside inner archives, at every level: an archive at `B.tgz` inside `pkg/y.tar.gz` puts its file `P` at `/app/out/pkg/y/B/P`.
 
 Do not flatten the paths. `/app/out/` must contain only those `.conf` files, with their contents unchanged: no other files and no archives.
 """
-
-NESTED_RULE = ";\n- the same rule applies inside inner archives, at every level: an archive at `B.tgz` inside `pkg/y.tar.gz` puts its file `P` at `/app/out/pkg/y/B/P`."
 
 SOLVER = '''
 import io
@@ -167,14 +180,8 @@ def build(ctx):
         shortcuts["one-level"] = _py_solution("one-level")
     if p["tgz"]:
         shortcuts["tar-gz-only"] = _py_solution("tar-gz-only")
-    hard = p["tgz"]
     return TaskSpec(
-        instruction=INSTRUCTION.format(
-            kinds=" (`.tar.gz` or `.tgz`)" if hard else " (`.tar.gz`)",
-            nesting=", and archives can contain further archives" if p["nested"] else "",
-            exts=".tar.gz` or `A.tgz" if hard else ".tar.gz",
-            nested_rule=NESTED_RULE if p["nested"] else ".",
-        ),
+        instruction=INSTRUCTION,
         files={"bundle.tar.gz": bundle},
         grader=FileTree("/app/out", {rel: tree_entry(data) for rel, data in sorted(expected.items())}),
         oracle=_py_solution("oracle"),
@@ -185,13 +192,13 @@ def build(ctx):
 
 FAMILY = Family(
     name="extract-subset",
-    version=1,
+    version=2,
     cluster="filesystem",
     category="shell",
     skills=("shell", "tar", "gzip", "archives"),
     difficulties={
-        "easy": {"services": 2, "subdir": False, "shared": False, "nested": False, "tgz": False},
-        "medium": {"services": 3, "subdir": True, "shared": True, "nested": False, "tgz": False},
+        "easy": {"services": 1, "subdir": False, "shared": False, "nested": False, "tgz": False},
+        "medium": {"services": 3, "subdir": False, "shared": True, "nested": False, "tgz": False},
         "hard": {"services": 4, "subdir": True, "shared": True, "nested": True, "tgz": True},
     },
     build=build,

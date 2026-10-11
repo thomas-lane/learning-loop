@@ -3,27 +3,46 @@
 The seed picks one of two conversions, each specified exactly in the instruction and shown
 by an example pair in /app/examples/:
 
-- `kv-csv`: a key=value log (bare or double-quoted values) becomes a CSV file with a given
-  header, minimally quoted (a field with a comma or a double quote is quoted, inner quotes
-  doubled).
+- `kv-csv`: a key=value log (bare or double-quoted values, `\\"` and `\\\\` escapes inside
+  quotes) becomes a CSV file with a given header, minimally quoted (a field with a comma or a
+  double quote is quoted, inner quotes doubled).
 - `fixed-jsonl`: a fixed-width export (1-based inclusive column ranges, text and integer
   fields) becomes JSON Lines in exactly the form `json.dumps(obj)` writes by default.
 
+Each conversion has one instruction, the same at every difficulty, that states its whole
+grammar: for kv-csv, bare values (any character but a space or a double quote), quoted
+values with escapes, and skipped blank (empty or spaces-only) and `#` lines; for fixed-jsonl,
+leading zeros and minus signs, spaces-only integers as `null`, lines cut short, and skipped
+blank and `#` lines. It says how lines may end (`\\n` or `\\r\\n`, the last line break optional),
+because the grader compares stdout after Python's text-mode decoding (which turns `\\r\\n`
+into `\\n`) and ignores trailing line breaks. It also says that the converter must read only
+its argument, because the grader runs it in a scratch directory that holds only
+`convert.py` and the input.
+
 The agent writes /app/convert.py; the `Commands` grader runs `python3 convert.py FILE` on
-hidden inputs (plus an empty file) and compares stdout and the exit code. Every hidden input
-contains every trap of its difficulty, so each wrong method fails every non-empty check.
+three hidden inputs plus an empty file and compares stdout and the exit code. Difficulty
+decides which cases of the grammar the data contains; every hidden input and the example
+contain every planted case of their difficulty, so each wrong method fails every non-empty
+check:
+
+- kv-csv: quoted values with spaces and commas, and an empty value, at every difficulty;
+  medium adds `\\"` and `\\\\` escapes (planted, and in random messages) and comment and blank
+  lines (one of them spaces-only); hard adds bare values with `'`, `\\` or `=` (user names,
+  and paths with a `?id=` query).
+- fixed-jsonl: names with a double quote at every difficulty; medium adds spaces-only
+  integer fields (every export has an optional integer field for them), a name with a
+  backslash, comment lines, a spaces-only blank line and zero-padded integers; hard adds
+  non-ASCII names and cities, an empty text field (a record whose optional text fields are
+  all empty) and lines whose trailing spaces are cut off.
 
 Traps (declared shortcuts; each is a full script an agent might write):
 kv-csv: `hardcode-examples` (prints the example's CSV), `naive-split` (splits on spaces, so
-quoted values with spaces break), `no-csv-quoting` (joins fields with commas); medium/hard add
-`\\"` and `\\\\` escapes (`keeps-backslashes`: a regex that finds the quoted value but does not
-unescape it) and comment/blank lines (`no-skip-comments`); hard adds bare values with `'`, `\\`
-and `=`, which `shlex.split` misreads (`shlex-split`).
+quoted values with spaces break), `no-csv-quoting` (joins fields with commas); medium adds
+`keeps-backslashes` (a regex that finds the quoted value but does not unescape it) and
+`no-skip-comments`; hard adds `shlex-split` (`shlex.split` misreads `'` and `\\` in bare values).
 fixed-jsonl: `hardcode-examples`, `off-by-one-columns` (slices [start-1:end-1]),
-`hand-built-json` (no escaping of the planted `"` in text); medium/hard add empty integer
-fields (`empty-int-as-zero`) and comment lines (`no-skip-comments`); hard adds non-ASCII text
-(`ensure-ascii-false`: `json.dumps(..., ensure_ascii=False)`), backslashes and lines whose
-trailing empty fields are cut off.
+`hand-built-json` (no escaping of the planted `"`); medium adds `empty-int-as-zero` and
+`no-skip-comments`; hard adds `ensure-ascii-false` (`json.dumps(..., ensure_ascii=False)`).
 """
 
 import csv
@@ -31,7 +50,7 @@ import io
 import json
 from datetime import datetime, timedelta
 
-from learning_loop.tasks.spec import Commands, Family, Reject, Solution, TaskSpec
+from learning_loop.tasks.spec import Commands, Family, Solution, TaskSpec
 
 N_HIDDEN = 3
 
@@ -45,18 +64,18 @@ Write a converter `/app/convert.py` such that `python3 /app/convert.py LOGFILE` 
 
 Input format:
 - One record per line: `key=value` pairs separated by one or more spaces. Keys consist of lowercase letters, digits and underscores.
-- A value is either bare or quoted. {bare} A quoted value starts with `"` and ends at the next {unescaped}`"`; it may contain spaces and commas{escapes}. The enclosing quotes are not part of the value. A value may be empty (`key=` or `key=""`).
-{skip}
+- A value is either bare or quoted. A bare value runs up to the next space and may contain any character except a space and a double quote (for example `'`, `\\` or `=`). A quoted value starts with `"` and ends at the next unescaped `"`; it may contain spaces and commas, and inside it `\\"` stands for `"` and `\\\\` for `\\`. The enclosing quotes are not part of the value. A value may be empty (`key=` or `key=""`).
+- Blank lines (empty or containing only spaces) and lines starting with `#` are not records; skip them.
+
 Output format:
 - The first line is the header `{header}`. Then comes one row per record, in input order, with the record's values for these keys in this order. A missing key gives an empty field; other keys are ignored.
-- Fields are separated by commas. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled; other fields are written as they are. Every line, including the last, ends with a newline.
-"""
+- Fields are separated by commas. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled; other fields are written as they are, without quotes.
+{common}"""
 
-KV_BARE = {
-    False: "A bare value runs up to the next space; it contains no spaces, double quotes or backslashes.",
-    True: "A bare value runs up to the next space and may contain any character except a space and a double quote (for example `'`, `\\` or `=`).",
-}
-KV_SKIP = "- Blank lines and lines starting with `#` are not records; skip them.\n"
+COMMON = """- Lines may end with `\\n` or `\\r\\n`, and the line break after the last line is optional.
+
+The converter must be self-contained: it is run as `python3 convert.py {arg}` from a directory that holds only `convert.py` and {arg}, so it cannot read the examples or any other file. Use only the Python standard library.
+"""
 
 KV_PARSE = r'''def parse(line):
     """The key=value pairs of one line, as a dict."""
@@ -247,7 +266,7 @@ def _kv_file(rng, p, columns, extras, start, plants):
         lines.append(line)
         records.append(rec)
     if p["comments"]:
-        for text in ["# rotated by logrotate", "", "# host=web-2 restarted", "   "][: rng.randint(3, 4)]:
+        for text in ["# rotated by logrotate", "", "# host=web-2 restarted", "   "]:
             lines.insert(rng.randint(0, len(lines)), text)
     return "\n".join(lines) + "\n", records
 
@@ -288,13 +307,7 @@ def _build_kv(rng, p):
     inputs = [_kv_file(rng, p, columns, extras, start + timedelta(days=i + 1), plants) for i in range(N_HIDDEN)]
     sample_csv = _csv(columns, sample_recs)
     return {
-        "instruction": KV_INSTRUCTION.format(
-            bare=KV_BARE[p["level"] == "hard"],
-            unescaped="unescaped " if p["level"] != "easy" else "",
-            escapes=", and inside it `\\\"` stands for `\"` and `\\\\` for `\\`" if p["level"] != "easy" else ", but no double quotes or backslashes",
-            skip=KV_SKIP if p["comments"] else "",
-            header=",".join(columns),
-        ),
+        "instruction": KV_INSTRUCTION.format(header=",".join(columns), common=COMMON.format(arg="LOGFILE")),
         "examples": {"examples/sample.log": sample_log, "examples/sample.csv": sample_csv},
         "cases": [(f"input_{i + 1}.log", text, _csv(columns, recs)) for i, (text, recs) in enumerate(inputs)] + [("empty.log", "", _csv(columns, []))],
         "scripts": _kv_scripts(p, columns, sample_csv),
@@ -317,10 +330,13 @@ Input format: one record per line. Positions count characters from 1, and a rang
 {table}
 
 - A text field's value is its content without leading and trailing spaces (possibly the empty string).
-- An integer field is right-aligned and may have a minus sign{zeros}.{empty_int}
-{short}{skip}
-Output: one JSON object per record, one per line, in input order, with the fields above as keys in the table's order. Write each object exactly as Python's `json.dumps(obj)` writes it with its default settings: `", "` between members, `": "` after each key, and every non-ASCII character as a `\\uXXXX` escape. Every line, including the last, ends with a newline.
-"""
+- An integer field is right-aligned and may have a minus sign or leading zeros. An integer field that holds only spaces is `null`.
+- A line may be shorter than the last position in the table (trailing spaces may be cut off); the missing positions count as spaces.
+- Blank lines (empty or containing only spaces) and lines starting with `#` are not records; skip them.
+
+Output format:
+- One JSON object per record, one per line, in input order, with the fields above as keys in the table's order. Write each object exactly as Python's `json.dumps(obj)` writes it with its default settings: `", "` between members, `": "` after each key, and every non-ASCII character as a `\\uXXXX` escape.
+{common}"""
 
 FX_PARSE = '''def parse(line):
     record = {}
@@ -369,10 +385,13 @@ UNICODE_CITIES = ["Malmö", "Zürich", "Bogotá", "Kraków", "Łódź"]
 
 
 def _fx_fields(rng, p):
-    """[(name, start, end, kind)] with 1-based inclusive positions."""
-    spec = [("id", "int", 6), ("name", "text", rng.randint(18, 22))]
-    pool = [("city", "text", rng.randint(10, 13)), ("qty", "int", rng.randint(5, 6)), ("balance", "int", rng.randint(8, 9)), ("code", "text", 7)]
-    spec += rng.sample(pool, p["n_fields"] - 2)
+    """[(name, start, end, kind)] with 1-based inclusive positions: `id`, `name`, an optional
+    integer field and more optional fields, in a shuffled order after `id`."""
+    ints = [("qty", "int", rng.randint(5, 6)), ("balance", "int", rng.randint(8, 9))]
+    texts = [("city", "text", rng.randint(10, 13)), ("code", "text", 7)]
+    first = rng.choice(ints)  # an integer field that can be empty, for the spaces-only-integer case
+    spec = [("id", "int", 6), ("name", "text", rng.randint(18, 22)), first]
+    spec += rng.sample([f for f in ints + texts if f != first], p["n_fields"] - 3)
     head, rest = spec[:1], spec[1:]
     rng.shuffle(rest)
     fields, pos = [], 1
@@ -439,6 +458,7 @@ def _fx_file(rng, p, fields, plants):
         header = "# " + " ".join(name for name, _, _, _ in fields)
         lines.insert(0, header)
         lines.insert(rng.randint(2, len(lines)), "# continued")
+        lines.insert(rng.randint(2, len(lines)), "  ")
     return "\n".join(lines) + "\n", records
 
 
@@ -470,21 +490,12 @@ def _build_fixed(rng, p):
         plants += ["empty_int", "empty_int", "backslash"]
     if p["level"] == "hard":
         plants += ["unicode", "unicode", "empty_text"]
-    has_int = any(kind == "int" and name != "id" for name, _, _, kind in fields)
-    if p["level"] != "easy" and not has_int:
-        raise Reject("no optional integer field for the empty-integer trap")
     sample, sample_recs = _fx_file(rng, p, fields, plants)
     inputs = [_fx_file(rng, p, fields, plants) for _ in range(N_HIDDEN)]
     table = "\n".join(f"| `{name}` | {start}-{end} | {'integer' if kind == 'int' else 'text'} |" for name, start, end, kind in fields)
     sample_jsonl = _jsonl(sample_recs)
     return {
-        "instruction": FX_INSTRUCTION.format(
-            table=table,
-            zeros=" or leading zeros" if p["leading_zeros"] else "",
-            empty_int=" An integer field that holds only spaces is `null`." if p["level"] != "easy" else "",
-            short="- A line may end early when its last fields are empty; the missing positions count as spaces.\n" if p["short_lines"] else "",
-            skip="- Blank lines and lines starting with `#` are not records; skip them.\n" if p["comments"] else "",
-        ),
+        "instruction": FX_INSTRUCTION.format(table=table, common=COMMON.format(arg="FILE")),
         "examples": {"examples/sample.txt": sample, "examples/sample.jsonl": sample_jsonl},
         "cases": [(f"input_{i + 1}.txt", text, _jsonl(recs)) for i, (text, recs) in enumerate(inputs)] + [("empty.txt", "", "")],
         "scripts": _fx_scripts(p, fields, sample_jsonl),
@@ -523,7 +534,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="format-converter",
-    version=1,
+    version=2,
     cluster="write-code",
     category="coding",
     skills=("python", "parsing", "escaping", "file-formats"),

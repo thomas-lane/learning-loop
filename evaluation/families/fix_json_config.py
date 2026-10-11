@@ -2,12 +2,18 @@
 keeping every value.
 
 Task: `/app/config.json` has `//` comments, trailing commas and keys repeated within one
-object (medium/hard add single-quoted strings, commented-out settings and nested duplicates;
-hard adds `/* */` block comments and a whole duplicated object, and its instruction no longer
-lists the kinds of damage). The visible `/app/validate.py` accepts only strict JSON without
-duplicate keys that has the required settings with the right types. The instruction states the
-rule for duplicates: the first occurrence is the one the service used. The grader parses the
-file as JSON and compares it with the intended config: every setting, with first occurrences.
+object. The instruction, the same at every difficulty, lists every kind of damage that can
+occur (`//` and `/* */` comments, commented-out settings, trailing commas, single-quoted
+strings, repeated keys) and the rules: keep every value and its type, remove comments, keep
+the first occurrence of a repeated key (the one the service used). The visible
+`/app/validate.py` accepts only strict JSON without duplicate keys that has the required
+settings with the right types. The grader parses the file as JSON and compares it with the
+intended config: every setting, with first occurrences.
+
+Difficulty comes from the data: a repeated key in one nested object on easy, in two on medium
+and in three on hard, which also repeats the whole top-level `logging` object; more trailing
+commas and inline comments as the level rises; medium/hard add single-quoted strings and a
+commented-out setting; hard adds a `/* */` block comment.
 
 Construction: the config is a list of entries rendered by hand, so every defect is planted.
 Every instance has URL strings containing `//`, a value followed by an inline `// ...`
@@ -54,7 +60,7 @@ INLINE = {
 }
 MOTDS = ["Don't forget to rotate the keys", "Maintenance window: Sunday's 02:00 slot", "We're migrating the database this week"]
 
-INSTRUCTION = """Someone hand-edited our service config `/app/config.json` and now it no longer loads: it contains {defects}.
+INSTRUCTION = """Someone hand-edited our service config `/app/config.json` and now it no longer loads. It may contain any of: `//` line comments, `/* */` block comments, commented-out settings, trailing commas, single-quoted strings, and keys that appear more than once in the same object.
 
 Repair the file in place so that `python3 /app/validate.py` prints `OK`, following these rules:
 
@@ -62,11 +68,6 @@ Repair the file in place so that `python3 /app/validate.py` prints `OK`, followi
 - Comments are not settings: remove them, including commented-out settings.
 - Some keys appear more than once in the same object (left over from a bad merge). The service always used the **first** occurrence: keep that one and remove the later ones.
 - Any valid JSON formatting is fine.
-"""
-
-INSTRUCTION_HARD = """`/app/config.json` was edited by hand and no longer loads. Repair it in place so that `python3 /app/validate.py` prints `OK`.
-
-Keep every setting with exactly its current value and type (a single-quoted value is a string with the same text). Comments are not settings. Where a key appears more than once in the same object, the service used the first occurrence, so that is the value to keep. Any valid JSON formatting is fine.
 """
 
 VALIDATOR = '''"""Pre-deploy check for /app/config.json: strict JSON, no duplicated keys, and the
@@ -385,9 +386,8 @@ def build(ctx):
     shortcuts = {m: _solution(m) for m in ("last-wins", "drop-duplicates", "regex-strip", "grep-v-comments")}
     if p["single_quotes"]:
         shortcuts["quote-swap"] = _solution("quote-swap")
-    defects = "comments, trailing commas, single-quoted strings and duplicated keys" if p["single_quotes"] else "comments, trailing commas and duplicated keys"
     return TaskSpec(
-        instruction=INSTRUCTION_HARD if p["block_comments"] else INSTRUCTION.format(defects=defects),
+        instruction=INSTRUCTION,
         files={"config.json": text, "validate.py": VALIDATOR},
         grader=ParsedAnswer("/app/config.json", "json", expected),
         oracle=_solution("oracle"),
@@ -398,7 +398,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-json-config",
-    version=1,
+    version=2,
     cluster="config-repair",
     category="config",
     skills=("json", "parsing", "config-repair", "python"),

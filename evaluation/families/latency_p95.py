@@ -3,7 +3,15 @@ in two formats?
 
 The logs under /app/logs are nginx access logs (`access.log*`, request time in seconds in the
 last field) and JSON-lines application logs (`app.jsonl*`, `duration_ms` in milliseconds).
-An endpoint is the URL path without its query string.
+An endpoint is the URL path without its query string. The instruction is the same at every
+difficulty (it names rotated, gzip-compressed and archived logs in subdirectories, and query
+strings, wherever they occur). The data per difficulty:
+
+- easy: `access.log` and `app.jsonl`; no URL has a query string;
+- medium: `access.log`, `access.log.1` and `app.jsonl`; about 30% of URLs carry a query
+  string;
+- hard: `access.log`, `access.log.1.gz`, `app.jsonl` and `archive/app.jsonl.1.gz`, with
+  query strings as on medium.
 
 Construction, with H a base latency in ms (every role is a different endpoint):
 
@@ -28,7 +36,10 @@ Construction, with H a base latency in ms (every role is a different endpoint):
   that misses g leaves D_g with only slow requests, so it beats T (whose values are all
   <= H+60). That covers skipping compressed or archived files.
 
-So every declared shortcut and every proper subset of the files fails by construction;
+The declared shortcuts (`SOLVER` modes): `mean`, `max`, `floor-index`,
+`linear-interpolation`, `quantiles-exclusive`, `no-unit-conversion`, `text-only` and
+`json-only` at every level; `with-query` on medium/hard; `plain-only` and `top-level-only`
+on hard. So every declared shortcut and every proper subset of the files fails by construction;
 `build` still verifies uniqueness and the subsets. Every solution, right or wrong, is one
 Python source (`SOLVER`) run with a mode, so the shell and model forms cannot drift apart.
 """
@@ -52,7 +63,7 @@ METHODS = ["GET", "GET", "GET", "POST"]
 
 INSTRUCTION = """Our API feels slow and we need to know which endpoint has the worst tail latency.
 
-The request logs are in `/app/logs/`{extra}. They come in two formats:
+The request logs are in `/app/logs/`, including rotated, gzip-compressed and archived logs in any subdirectories. They come in two formats:
 
 - nginx access logs (files named `access.log*`): the **last** field of each line is the request time in **seconds**;
 - JSON-lines application logs (files named `app.jsonl*`): `duration_ms` is the request time in **milliseconds**.
@@ -291,9 +302,8 @@ def build(ctx):
         modes.append("plain-only")
     if any("/" in n for n in names):
         modes.append("top-level-only")
-    hard = any("/" in n for n in names)
     return TaskSpec(
-        instruction=INSTRUCTION.format(extra=" (including rotated, gzip-compressed and archived logs in subdirectories)" if hard else ""),
+        instruction=INSTRUCTION,
         files=_render(ctx.rng, recs, names, p["queries"]),
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution("oracle"),
@@ -304,7 +314,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="latency-p95",
-    version=1,
+    version=2,  # v2: one instruction for every level
     cluster="text-analytics",
     category="data",
     skills=("logs", "json", "percentiles", "units", "aggregation", "python"),

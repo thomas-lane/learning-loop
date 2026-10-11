@@ -4,8 +4,8 @@
 `/app/logsum.sh LOG_DIR OUT_FILE [PATTERN]` counts the lines containing PATTERN (a fixed
 string, default ERROR) in each `*.log` file directly inside LOG_DIR, writes `<name>: <count>`
 lines to OUT_FILE and prints `total: <sum>`; a missing LOG_DIR is an error (exit 2). The
-script is built from five sites, and 2 / 3 / 4 of them carry a bug from a catalog of classic
-strict-mode mistakes:
+script is built from five sites, and 2 / 3 / 4 of them carry a bug drawn uniformly from that
+site's catalog of classic strict-mode mistakes:
 
 - `pattern`: `pattern=$3` dies with "unbound variable" when PATTERN is omitted;
 - `check_dir`: the error is reported but not propagated (`[ -d ... ] || echo ...`, exit 0),
@@ -19,20 +19,34 @@ strict-mode mistakes:
   `*.log` to grep.
 
 Hard moves the counting function into `/app/lib/count.sh`, which the script sources. The
-visible cases in `/app/test_logsum.py` expose all / two / one of the bugs, each in the
-script as given: `build` redraws when another bug masks a visible one (`for f in $(ls ...)`
-never enters the loop without a .log file, which hides a missing guard). The grader
-(`Commands`) runs the script on hidden inputs, one feature per check, and compares stdout,
-the exit status and OUT_FILE; one more check requires the line `set -euo pipefail` to stay.
+instruction is the same at every difficulty: fix the script "and any file it sources"; some
+visible cases fail, and they may not cover every bug.
+
+The grader (`Commands`) runs the script on hidden inputs, one behavior (check kind) per
+check, and compares stdout, the exit status and OUT_FILE; one more check requires the line
+`set -euo pipefail` to stay. Besides one kind per catalogued bug, four kinds no bug touches
+(files the script must skip, a case-sensitive PATTERN, a line with two matches, a PATTERN
+with spaces) cover the rest of the header. `/app/test_logsum.py` holds visible cases as a
+repository's regression tests would, so an agent that rewrites the loop sees what it breaks:
+one for every kind no hidden bug breaks (`EXPOSED_BY`, even when another bug masks it),
+except that as many kinds no bug touches as the hidden bugs break (at least two, at every
+level) get no case either. A behavior without a visible case is therefore at least as likely
+to work as to hide a bug; `build` redraws when too few untouched kinds are left. All / half / a quarter of the bugs (at least one) are
+*visible*: some case fails because of each of them, both with that bug alone and with every
+bug in place (`build` redraws when another bug masks one: `for f in $(ls ...)` never enters
+the loop without a .log file, which hides a missing guard). Every other visible case passes
+on the script as given, and every visible case passes once only the hidden bugs are left.
+Hidden checks never reuse a visible case's arguments. In the regex-looking PATTERN check,
+each log's decoy lines (which match PATTERN only as a regular expression) differ in number
+from its matching lines, so the regex count always differs from the fixed-string count.
 
 Traps, each declared as a shortcut that must fail:
-- `visible-bugs-only` (when some bug has no visible case): fix only the bugs the visible
-  cases expose;
-- `hardcode-visible`: the buggy script with a prelude that replays each visible case's
-  expected output when called with exactly its arguments;
-- `wrong-fix-<site>`: every bug fixed correctly except one, which gets a plausible wrong fix
-  (`${3:-}` as the default, a bare `exit` after the error message, `|| echo 0` after
-  `grep -c`, which then prints two lines, or quoting the whole glob);
+- `visible-bugs-only` (when some bug is hidden): fix only the bugs the visible cases expose;
+- `wrong-fix-<site>`, for every bug except the regex one: every bug fixed correctly except
+  this one, which gets a plausible wrong fix (`${3:-}` as the default, a bare `exit` after
+  the error message, `! [ -d $log_dir ]` still unquoted, `|| echo 0` after `grep -c`, which
+  then prints two lines, quoting the whole glob or the whole `$(ls ...)`, an unquoted
+  `[ -f $f ]` guard);
 - `find-pipeline`: everything fixed, but the loop rewritten as `find ... | sort | while
   read`, which also descends into subdirectories and loses the total in the pipeline's
   subshell;
@@ -120,14 +134,19 @@ CORRECT = {
     "guard": '    [ -f "$f" ] || continue  # no match: the pattern stays literal\n',
 }
 
-# site -> bug -> (buggy text, plausible wrong fix or None)
+# site -> bug -> (buggy text, plausible wrong fix or None). Every bug but `regex_pattern` has a
+# wrong fix, so every instance (at least two bugs) has a `wrong-fix-*` shortcut and each
+# site's bug is drawn uniformly from its catalog entries.
 BUGS = {
     "pattern": {
         "unset_default": ("pattern=$3\n", "pattern=${3:-}\n"),
     },
     "check_dir": {
         "error_not_fatal": ('[ -d "$log_dir" ] || echo "logsum: not a directory: $log_dir" >&2\n', '[ -d "$log_dir" ] || { echo "logsum: not a directory: $log_dir" >&2; exit; }\n'),
-        "unquoted_test": ('if [ ! -d $log_dir ]; then\n    echo "logsum: not a directory: $log_dir" >&2\n    exit 2\nfi\n', None),
+        "unquoted_test": (
+            'if [ ! -d $log_dir ]; then\n    echo "logsum: not a directory: $log_dir" >&2\n    exit 2\nfi\n',
+            'if ! [ -d $log_dir ]; then\n    echo "logsum: not a directory: $log_dir" >&2\n    exit 2\nfi\n',
+        ),
     },
     "count": {
         "no_match_exits": ('    grep -c -F -- "$2" "$1"\n', '    grep -c -F -- "$2" "$1" || echo 0\n'),
@@ -135,10 +154,10 @@ BUGS = {
     },
     "loop": {
         "unquoted_dir": ("for f in $log_dir/*.log; do\n", 'for f in "$log_dir/*.log"; do\n'),
-        "ls_words": ('for f in $(ls "$log_dir"/*.log); do\n', None),
+        "ls_words": ('for f in $(ls "$log_dir"/*.log); do\n', 'for f in "$(ls "$log_dir"/*.log)"; do\n'),
     },
     "guard": {
-        "no_empty_guard": ("", None),
+        "no_empty_guard": ("", '    [ -f $f ] || continue\n'),
     },
 }
 
@@ -239,7 +258,13 @@ def _cases(rng):
     pattern = rng.choice([f"{word}.{other}", f"{word}[1]", f"{word}*{other}"])
     decoy = pattern.replace(".", "-").replace("[1]", "1").replace("*", "")  # matches the pattern only as a regex
     d2 = f"var-{tag}"
-    custom = {f"{d2}/{n}": _log(rng, pattern, rng.randint(1, 4), [f"WARN {decoy} seen"] * rng.randint(2, 4)) for n in _names(rng, 2)}
+    custom = {}
+    for name in _names(rng, 2):
+        hits = rng.randint(1, 4)
+        # the regex count is the decoys (plus the hits when they match the regex too), so a
+        # decoy count other than the hit count makes it differ from the fixed-string count
+        decoys = rng.choice([k for k in range(2, 5) if k != hits])
+        custom[f"{d2}/{name}"] = _log(rng, pattern, hits, [f"WARN {decoy} seen"] * decoys)
 
     d3 = f"logs-{tag + 1}"
     names3 = _names(rng, 3)
@@ -254,6 +279,31 @@ def _cases(rng):
     d6 = f"empty-{tag}"
     no_logs = {f"{d6}/readme.txt": "ERROR: nothing here\n", f"{d6}/app.log.1": _log(rng, "ERROR", 2)}
 
+    # behaviors no catalogued bug breaks: files the script must skip, a case-sensitive
+    # PATTERN, lines (not occurrences) counted, a PATTERN with spaces
+    d7 = f"app-{tag}"
+    others = logs(d7, _names(rng, 2))
+    others[f"{d7}/{rng.choice(WORDS)}.log.{rng.randint(1, 3)}"] = _log(rng, "ERROR", rng.randint(1, 4))
+    others[f"{d7}/{rng.choice(['notes', 'todo'])}.txt"] = _log(rng, "ERROR", rng.randint(1, 3))
+    others[f"{d7}/{rng.choice(['old', 'archive'])}/{rng.choice(WORDS)}.log"] = _log(rng, "ERROR", rng.randint(1, 4))
+
+    word = rng.choice(["Timeout", "Retry", "Quota"])
+    d8 = f"jobs-{tag}"
+    cased = {f"{d8}/{n}": _log(rng, word, rng.randint(1, 4), [f"INFO {word.lower()} seen", f"WARN {word.upper()} seen"]) for n in _names(rng, 2)}
+
+    d9 = f"api-{tag}"
+    doubled = {}
+    for name in _names(rng, 2):
+        lines = _log(rng, "ERROR", rng.randint(2, 5)).splitlines()
+        hit = [i for i, ln in enumerate(lines) if "ERROR" in ln]
+        for i in rng.sample(hit, rng.randint(1, len(hit))):
+            lines[i] += " (ERROR repeated)"  # still one line
+        doubled[f"{d9}/{name}"] = "\n".join(lines) + "\n"
+
+    phrase = f"{rng.choice(['disk', 'queue', 'cache'])} {rng.choice(['full', 'stalled', 'evicted'])}"
+    d10 = f"ops-{tag}"
+    spaced_pattern = {f"{d10}/{n}": _log(rng, phrase, rng.randint(1, 4), [f"WARN {phrase.replace(' ', '-')} seen"]) for n in _names(rng, 2)}
+
     return [
         _case("default_pattern", d, default),
         _case("fixed_string_pattern", d2, custom, pattern),
@@ -262,8 +312,14 @@ def _cases(rng):
         _case("spaces_in_directory", d5, spaced_dir, "ERROR"),
         _case("no_log_files", d6, no_logs, "ERROR"),
         {"name": "missing_directory", "argv": ["bash", "logsum.sh", f"missing logs {tag}", "out.txt", "ERROR"], "inputs": {}, "stdout": "", "exit": 2},
+        _case("skips_other_files", d7, others, "ERROR"),
+        _case("case_sensitive_pattern", d8, cased, word),
+        _case("lines_not_occurrences", d9, doubled, "ERROR"),
+        _case("pattern_with_spaces", d10, spaced_pattern, phrase),
     ]
 
+
+OMITTED_AT_LEAST = 2  # behaviors no bug touches that get no visible case, at every level
 
 STRICT_CHECK = {"name": "strict_mode_kept", "argv": ["grep", "-q", "-x", "set -euo pipefail", "logsum.sh"], "inputs": {}, "exit": 0}
 
@@ -340,29 +396,10 @@ def _test_file(visible):
     return TEST_RUNNER.replace("@@cases@@", json.dumps(cases, indent=1))
 
 
-def _hardcoded(files, visible):
-    """The buggy script with a prelude that replays each visible case for its exact arguments."""
-    prelude = ""
-    for c in visible:
-        args = " ".join(c["argv"][2:])
-        out = c.get("outputs", {}).get("out.txt")
-        write = "" if out is None else f"    printf '%s' '{out}' > \"$2\"\n"
-        say = "" if not c["stdout"] else f"    printf '%s\\n' '{c['stdout'].rstrip()}'\n"
-        prelude += f'if [ "$*" = "{args}" ]; then  # {c["name"]}\n{write}{say}    exit {c["exit"]}\nfi\n'
-    script = files[SCRIPT].replace("set -euo pipefail\n", "set -euo pipefail\n\n" + prelude, 1)
-    return dict(files, **{SCRIPT: script})
+INSTRUCTION = """`/app/logsum.sh` summarizes a directory of log files; its header comment describes exactly what it must do (usage: `bash logsum.sh LOG_DIR OUT_FILE [PATTERN]`). It runs under `set -euo pipefail` but has bugs: it breaks on some inputs and gives wrong results on others. Some of the cases in `/app/test_logsum.py` fail, and those cases may not cover every bug.
 
-
-INSTRUCTION = """`/app/logsum.sh` summarizes a directory of log files; its header comment describes exactly what it must do (usage: `bash logsum.sh LOG_DIR OUT_FILE [PATTERN]`). It runs under `set -euo pipefail` but has bugs: it breaks on some inputs and gives wrong results on others.{lib} {hint}
-
-Fix the script so it behaves exactly as its header comment describes for any input, including file and directory names with spaces. Keep the line `set -euo pipefail` at the top of `logsum.sh` and keep the script a bash script (it is run as `bash logsum.sh ...`, not necessarily from `/app`). Use only bash and standard command-line tools. You may add cases to `/app/test_logsum.py` (run it with `python3 test_logsum.py`), but do not change the existing ones.
+Fix the script, and any file it sources, so it behaves exactly as its header comment describes for any input, including file and directory names with spaces. Keep the line `set -euo pipefail` at the top of `logsum.sh` and keep the script a bash script (it is run as `bash logsum.sh ...`, not necessarily from `/app`). Use only bash and standard command-line tools. You may add cases to `/app/test_logsum.py` (run it with `python3 test_logsum.py`), but do not change the existing ones.
 """
-
-HINTS = {
-    "easy": "The cases in `/app/test_logsum.py` show both problems.",
-    "medium": "Some cases in `/app/test_logsum.py` fail, and some bugs may not be covered by those cases at all.",
-    "hard": "The cases in `/app/test_logsum.py` catch only one of its problems.",
-}
 
 
 def build(ctx):
@@ -371,45 +408,51 @@ def build(ctx):
     artifacts = (SCRIPT, LIB) if split else (SCRIPT,)
     bugged = sorted(rng.sample(SITES, p["n_bugs"]))
     bugs = {s: rng.choice(sorted(BUGS[s])) for s in bugged}
-    if not any(BUGS[s][b][1] for s, b in bugs.items()):
-        raise Reject("no injected bug has a catalogued wrong fix")
     visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
     bug_text = {s: BUGS[s][b][0] for s, b in bugs.items()}
-    fixed, buggy = _script({}, split=split), _script(bug_text, split=split)
-    partial = _script({s: t for s, t in bug_text.items() if s not in visible_bugs}, split=split)
+    hidden_only = {s: t for s, t in bug_text.items() if s not in visible_bugs}
+    fixed, buggy, partial = _script({}, split=split), _script(bug_text, split=split), _script(hidden_only, split=split)
 
-    # visible cases: the check that exposes each visible bug, plus one that no injected bug
-    # affects; all of them pass once only the hidden bugs are left
-    exposing = {name for b in bugs.values() for name in EXPOSED_BY[b]}
-    kinds = [rng.choice(EXPOSED_BY[bugs[s]]) for s in visible_bugs]
-    kinds.append(rng.choice(sorted({c["name"] for c in _cases(rng)} - exposing - set(kinds))))
-    visible = []
-    for site, kind in zip([*visible_bugs, None], kinds):
-        c = next(c for c in _cases(rng) if c["name"] == kind)
-        target = _script({site: bug_text[site]}, split=split) if site else buggy
-        ok = _passes(fixed, [c], artifacts) and _passes(partial, [c], artifacts) and _passes(target, [c], artifacts) == (site is None)
-        if not ok:
-            raise RuntimeError(f"{ctx.family}: visible case {kind} does not single out {site or 'nothing'}")
-        if site and _passes(buggy, [c], artifacts):
-            raise Reject(f"another bug masks the {site} bug in the visible case {kind}")  # e.g. `$(ls ...)` never runs the loop without .log files
-        visible.append(dict(c, name=f"visible_{c['name']}"))
+    # Visible cases: one per behavior (check kind) that no hidden bug breaks (even one another
+    # bug masks), except some untouched ones left out below, so they pass once only the hidden
+    # bugs are left, as a repository's regression tests would. A case no visible bug is meant
+    # to break must pass on the script as given;
+    # every visible bug must fail a case on its own and with every bug in place (`for f in
+    # $(ls ...)` never enters the loop without a .log file, which would hide a missing guard).
+    cases = _cases(rng)
+    ok_fixed, ok_partial, ok_buggy = (_results(files, cases, artifacts) for files in (fixed, partial, buggy))
+    if not all(ok_fixed.values()):
+        raise Reject(f"the correct script fails cases {[n for n, ok in ok_fixed.items() if not ok]}")
+    unseen = {name for s in hidden_only for name in EXPOSED_BY[bugs[s]]}
+    if any(not ok_partial[c["name"]] for c in cases if c["name"] not in unseen):
+        raise Reject("a case fails on a hidden bug it is not meant to show")
+    # Leave out as many behaviors no bug touches as the hidden bugs break (at least two), so
+    # a behavior without a visible case is as likely to work as to hide a bug.
+    untied = sorted({c["name"] for c in cases} - {name for b in bugs.values() for name in EXPOSED_BY[b]})
+    if len(untied) < max(OMITTED_AT_LEAST, len(unseen)):
+        raise Reject("too few untouched behaviors to leave out")
+    omitted = set(rng.sample(untied, max(OMITTED_AT_LEAST, len(unseen))))
+    visible = [c for c in cases if c["name"] not in unseen | omitted]
+    meant = {name for s in visible_bugs for name in EXPOSED_BY[bugs[s]]}
+    if any(not ok_buggy[c["name"]] for c in visible if c["name"] not in meant):
+        raise Reject("a visible case fails on a bug it is not meant to show")
+    for s in visible_bugs:
+        alone = _results(_script({s: bug_text[s]}, split=split), visible, artifacts)
+        if not any(not alone[c["name"]] and not ok_buggy[c["name"]] for c in visible):
+            raise Reject(f"no visible case shows the {s} bug")  # e.g. masked by another bug
+    visible = [dict(c, name=f"visible_{c['name']}") for c in visible]
 
     seen = [c["argv"] for c in visible]
     for _ in range(100):
         checks = _cases(rng) + [STRICT_CHECK]
         if not any(c["argv"] in seen for c in checks if c is not STRICT_CHECK):
-            break
+            break  # hidden arguments differ from every visible case's, so replaying those cannot pass
     else:
         raise Reject("hidden checks keep repeating a visible case")
-    failed = [n for n, ok in _results(fixed, checks, artifacts).items() if not ok]
-    if failed:
-        raise RuntimeError(f"{ctx.family}: the correct script fails hidden checks {failed}")
+    if failed := [n for n, ok in _results(fixed, checks, artifacts).items() if not ok]:
+        raise Reject(f"the correct script fails hidden checks {failed}")
 
-    shortcuts = {
-        "hardcode-visible": _solution(_hardcoded(buggy, visible[:-1])),
-        "find-pipeline": _solution(_script({}, split=split, loop=FIND_LOOP)),
-    }
-    hidden_only = {s: t for s, t in bug_text.items() if s not in visible_bugs}
+    shortcuts = {"find-pipeline": _solution(_script({}, split=split, loop=FIND_LOOP))}
     if hidden_only:
         shortcuts["visible-bugs-only"] = _solution(partial)
     for s, b in bugs.items():
@@ -420,9 +463,8 @@ def build(ctx):
 
     files = {path[len("/app/") :]: text for path, text in buggy.items()}
     files["test_logsum.py"] = _test_file(visible)
-    lib = " Its counting function lives in `/app/lib/count.sh`, which the script sources." if split else ""
     return TaskSpec(
-        instruction=INSTRUCTION.format(lib=lib, hint=p["hint"]),
+        instruction=INSTRUCTION,
         files=files,
         modes={"logsum.sh": 0o755},
         grader=Commands(artifacts, tuple(checks)),
@@ -434,14 +476,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-shell-script",
-    version=1,
+    version=2,
     cluster="fix-code",
     category="debugging",
     skills=("shell", "bash", "debugging", "quoting"),
     difficulties={
-        "easy": {"n_bugs": 2, "visible_bug_tests": 1.0, "split_lib": False, "hint": HINTS["easy"]},
-        "medium": {"n_bugs": 3, "visible_bug_tests": 0.5, "split_lib": False, "hint": HINTS["medium"]},
-        "hard": {"n_bugs": 4, "visible_bug_tests": 0.25, "split_lib": True, "hint": HINTS["hard"]},
+        "easy": {"n_bugs": 2, "visible_bug_tests": 1.0, "split_lib": False},
+        "medium": {"n_bugs": 3, "visible_bug_tests": 0.5, "split_lib": False},
+        "hard": {"n_bugs": 4, "visible_bug_tests": 0.25, "split_lib": True},
     },
     build=build,
 )

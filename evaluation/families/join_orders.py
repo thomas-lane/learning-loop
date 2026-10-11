@@ -1,19 +1,26 @@
 """join-orders: total the quantity each customer ordered, joining the order CSVs to the
 customer master by a customer ID that the order system formats inconsistently.
 
-Construction: `customers.csv` holds canonical IDs (`AB-00417`); the monthly files in
-`orders/` refer to customers with IDs that differ in letter case and surrounding whitespace,
-and on medium/hard also in the number of leading zeros. The answer is a JSON object over
-every customer in customers.csv (a left join: customers without orders get 0, orders of
-unknown customers are left out).
+`customers.csv` holds canonical IDs (`AB-00417`); the monthly files in `orders/` refer to
+customers with IDs that can differ in letter case, surrounding whitespace and the number of
+leading zeros. The answer is a JSON object over every customer in customers.csv (a left
+join: customers without orders get 0, orders of unknown customers are left out).
 
-Traps, all planted in every instance: for each normalization in play (trim, case, leading
-zeros) at least one order differs from its customer's ID *only* in that respect, so a join
-that skips any one normalization loses that order; at least two customers have no orders
-(an inner join drops them); at least two orders belong to IDs absent from customers.csv (an
-outer join adds them). Medium/hard spread the orders over several files (reading one file
-loses the rest); hard writes one file with its columns in another order (reusing the first
-file's column positions breaks) and states the matching rule without an example.
+The instruction is the same at every difficulty: it states the full matching rule with
+examples and that each order file names its columns in a header whose order can differ
+between files. The data decides which variations occur:
+
+- easy: 10 customers, one order file; IDs differ in case and whitespace only;
+- medium: 14 customers, two order files; IDs also differ in leading zeros;
+- hard: 18 customers, three order files, the last with its columns in another order.
+
+Traps, all planted in every instance: for each variation in play (trim, case, leading zeros)
+at least one order differs from its customer's ID *only* in that respect, so a join that
+skips that normalization (`no-trim`, `no-case`, `no-zeros`; `exact-join` skips all) loses
+that order; at least two customers have no orders (`inner-join` drops them); at least two
+orders belong to IDs absent from customers.csv (`outer-join` adds them). Medium/hard spread
+the orders over several files (`first-file` loses the rest); hard's reordered file breaks
+reusing the first file's column positions (`fixed-columns`).
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode: the shell
 form runs it on /app/data, the model runs the same source on the generated files, so the two
@@ -33,20 +40,14 @@ ORDER_COLUMNS = ["order_id", "placed", "customer_id", "quantity"]
 REORDERED = ["customer_id", "quantity", "order_id", "placed"]
 MONTHS = ["2026-07", "2026-08", "2026-09"]
 
-INSTRUCTION = """Customer master data is in `/app/data/customers.csv` (columns `customer_id`, `name`, `country`). Orders are in `/app/data/orders/`, one CSV file per month, each with a header row and the columns `order_id`, `placed`, `customer_id` and `quantity`.
+INSTRUCTION = """Customer master data is in `/app/data/customers.csv` (columns `customer_id`, `name`, `country`). Orders are in `/app/data/orders/`, one CSV file per month. Each order file has a header row naming its columns `order_id`, `placed`, `customer_id` and `quantity`; the order of the columns can differ between files.
 
-The order system does not store customer IDs as carefully as the master data. {rule}
+The order system does not store customer IDs as carefully as the master data. An ID in an order can differ from the one in `customers.csv` in letter case, in surrounding whitespace and in the number of leading zeros in the number after the dash: two IDs are the same customer when they are equal after trimming surrounding whitespace, ignoring letter case and ignoring those leading zeros. For example, ` xy-00417`, `Xy-00417 `, `XY-417`, `XY-000417` and `xY-0417 ` are all customer `XY-00417`.
 
 For **every** customer in `customers.csv`, compute the total `quantity` they ordered across all order files. Customers without any orders must appear with `0`. Orders whose customer is not in `customers.csv` are left out.
 
-Write the result to `/app/answer.json` as a single JSON object that maps each `customer_id`, written exactly as in `customers.csv`, to that total as an integer, for example `{{"XY-00417": 12, "XY-00009": 0}}`.
+Write the result to `/app/answer.json` as a single JSON object that maps each `customer_id`, written exactly as in `customers.csv`, to that total as an integer, for example `{"XY-00417": 12, "XY-00009": 0}`.
 """
-
-RULES = {
-    "easy": "An ID in an order can differ from the one in `customers.csv` in letter case and in surrounding whitespace, so ` xy-00417` and `Xy-00417 ` are both customer `XY-00417`.",
-    "medium": "An ID in an order can differ from the one in `customers.csv` in letter case, in surrounding whitespace and in the number of leading zeros in its number, so ` xy-417`, `XY-000417` and `xY-0417 ` are all customer `XY-00417`.",
-    "hard": "Treat two customer IDs as the same customer when they are equal after trimming surrounding whitespace, ignoring letter case and ignoring leading zeros in the numeric part after the dash.",
-}
 
 SOLVER = '''
 import csv
@@ -207,7 +208,7 @@ def build(ctx):
     if p["reorder"]:
         shortcuts["fixed-columns"] = _solution("fixed-columns")
     return TaskSpec(
-        instruction=INSTRUCTION.format(rule=RULES[ctx.difficulty]),
+        instruction=INSTRUCTION,
         files=files,
         grader=ParsedAnswer("/app/answer.json", "json", expected),
         oracle=_solution("oracle"),
@@ -218,7 +219,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="join-orders",
-    version=1,
+    version=2,
     cluster="tabular-data",
     category="data",
     skills=("csv", "join", "normalization", "python"),

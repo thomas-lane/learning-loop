@@ -1,34 +1,44 @@
 """refactor-preserve: extract a duplicated parser into one helper, keep behavior, then extend it.
 
-/app/<module>.py has two or three public functions that each contain their own copy of the
-code that parses a string (a duration such as "1h30m" in `timesheet.py`, or a size such as
-"4kb" in `quota.py`). The instruction asks for a preparatory refactoring: add a helper with a
-given name and signature that parses one string exactly as the copies do, make every existing
-function call it while keeping its behavior (results, tie-breaking, which inputs raise or are
-skipped), then extend the helper with a new input form (a new unit, or spaces inside the
-string), so every function accepts the new form.
+/app/<module>.py has three public functions that each contain their own copy of the code that
+parses a string (a duration such as "1h30m" in `timesheet.py`, or a size such as "4kb" in
+`quota.py`; the seed picks the domain). The instruction, the same at every difficulty, asks
+for a preparatory refactoring: add a helper with a given name and signature, in the same
+module, that parses one string exactly as the copies do, make every existing function call it
+while keeping its behavior (results, tie-breaking, which inputs raise or are skipped), then
+extend the helper with both of the domain's new input forms (days or tebibytes, and spaces
+inside the string), so every function accepts them. It says that the module is tested on its
+own, because the `Checks` grader copies only that file: a helper put in another module would
+make the import fail.
 
 Why behavior can see the structure: the `Checks` grader can only call functions, so the
 requirement "every function uses the helper" is made observable through the extension.
-Hidden checks call the helper (old forms with every legacy rule, new forms, invalid strings)
-and every existing function on inputs that contain the new form. A function that kept its own
-copy rejects the new form, so the shortcuts `helper-unused` (helper added, callers unchanged)
-and `misses-a-caller` (the last function keeps its copy) fail; doing nothing fails because the
-helper is missing. What behavior cannot see is a function that re-implements the extended
-grammar in its own copy instead of calling the helper; that takes more work than the refactor
-and is not declared as a shortcut.
+Hidden checks call the helper (old forms, the legacy rules, both new forms, invalid strings)
+and every existing function on inputs that contain the new forms. A function that kept its
+own copy rejects the new forms, so the shortcuts `helper-unused` (helper added, callers
+unchanged) and `misses-a-caller` (the last function keeps its copy) fail; doing nothing fails
+because the helper is missing. What behavior cannot see is a function that re-implements the
+extended grammar in its own copy instead of calling the helper; that takes more work than the
+refactor and is not declared as a shortcut.
 
 Other traps (declared shortcuts, each failing a planted check): `no-extension` (pure
-refactor), `hardcode-examples` (the helper special-cases the visible tests' new-form examples),
-`case-sensitive` and `drops-legacy-form` (a helper rewritten from scratch that loses a legacy
-rule from the docstrings: upper case, bare numbers of minutes, or the optional "b" of a size),
-`ties-last` (rewriting `longest`/`largest` with `>=`, so ties return the last entry). Hard adds
-a third function that skips unparsable entries instead of raising (`skip-becomes-raise`) and
-asks for two extensions at once (`one-extension-only`).
+refactor), `one-extension-only`, `hardcode-examples` (the helper special-cases the visible
+tests' new-form examples), `case-sensitive` and `drops-legacy-form` (a helper rewritten from
+scratch that loses a legacy rule from the docstrings: upper case, bare numbers of minutes, or
+the optional "b" of a size), `ties-last` (rewriting `longest`/`largest` with `>=`, so ties
+return the last entry) and `skip-becomes-raise` (the third function raises on an unparsable
+entry instead of skipping it).
 
-Difficulty: easy and medium have two functions and one extension; easy's visible tests show
-two new-form examples and every legacy rule, medium's one example and fewer legacy cases;
-hard has three functions, two extensions and one new-form example.
+Difficulty is in the data, the same for both domains: what the visible tests show and how
+subtle the hidden invalid strings are. Easy's visible tests show two new-form examples of each
+extension, the tie rule, the skipping of invalid entries and a legacy test with an upper-case,
+a space-padded and a bare-minutes (or "b"-suffixed) string; the helper's hidden invalid
+strings are the three obvious ones (empty, a lone unit, an unknown unit). Medium shows one
+example of each extension, the tie and the skipping, and adds two of the five subtle invalid
+strings (`invalid`: whitespace only, a decimal, a sign, units out of order or doubled, a unit
+before its number). Hard shows one example of one extension and the skipping, and checks all
+five subtle strings. The third function's invalid `limit` is a word (`bad_limit`), so it does
+not repeat a helper case.
 """
 
 import re
@@ -52,13 +62,17 @@ if __name__ == "__main__":
     raise SystemExit(1 if failed else 0)
 """
 
-INSTRUCTION = """`/app/{module}` has {n} functions ({names}) that each contain their own copy of the code that parses a {noun} string. Refactor the module:
+INSTRUCTION = """`/app/{module}` has three functions ({names}) that each contain their own copy of the code that parses a {noun} string. Refactor the module:
 
-1. Add a function `{helper}(text)` that parses one {noun} string exactly the way the existing functions do (the module and function docstrings describe the format) and returns the number of {unit}. It raises `ValueError` for a string that is not a {noun}.
+1. Add a function `{helper}(text)` to `/app/{module}` that parses one {noun} string exactly the way the existing functions do (the module and function docstrings describe the format) and returns the number of {unit}. It raises `ValueError` for a string that is not a {noun}.
 2. Make every one of the existing functions call `{helper}` instead of using its own copy of the parsing code. Keep their behavior otherwise unchanged: the same results, the same tie-breaking, and the same handling of entries that are not {noun}s.
-3. Then extend `{helper}` so that it also accepts {extensions}Because every function goes through `{helper}`, they all accept the new form{s} too.
+3. Then extend `{helper}` so that it also accepts both of these new forms:
+   - {ext_a};
+   - {ext_b}.
 
-`/app/{tests}` has some tests (run `python3 {tests}` in `/app`); keep them passing. Use only the Python standard library.
+   Because every function goes through `{helper}`, they all accept the new forms too.
+
+Keep all of the code in `/app/{module}`: the module is tested by importing that file on its own, from a directory that holds no other file, so a helper defined in another file would be missing. `/app/{tests}` has some tests (run `python3 {tests}` in `/app`); keep them passing. Use only the Python standard library.
 """
 
 # --------------------------------------------------------------------------- #
@@ -67,10 +81,9 @@ INSTRUCTION = """`/app/{module}` has {n} functions ({names}) that each contain t
 
 
 class Durations:
-    module, helper, noun, unit, var, error = "timesheet.py", "parse_minutes", "duration", "minutes", "minutes", "not a duration"
+    module, helper, noun, unit, var = "timesheet.py", "parse_minutes", "duration", "minutes", "minutes"
     funcs = ("total_minutes", "longest", "over_limit")
     items = "entries"
-    legacy_form = "bare numbers of minutes"
     extensions = {
         "days": 'a number of days with the unit `d`, written before the hours (1d is 24h, i.e. 1440 minutes), such as "2d", "1d4h" or "3d30m"',
         "spaces": 'spaces between the parts of a duration, such as "1h 30m" (one or more spaces between any two parts)',
@@ -117,17 +130,24 @@ class Durations:
         return s.upper() if rng.random() < 0.25 else s
 
     @staticmethod
+    def legacy(rng):
+        """Old-format strings that each rely on a legacy rule: a bare number, upper case, padding."""
+        return [str(rng.randint(61, 400)), f"{rng.randint(1, 9)}H{rng.randint(1, 59)}M", f" {rng.randint(1, 59)}m "]
+
+    @staticmethod
     def invalid(rng):
-        return ["", "   ", "h", f"{rng.randint(2, 9)}x", "1.5h", f"{rng.randint(5, 50)}m{rng.randint(1, 5)}h", "-5m", "1hh"]
+        """Obvious invalid strings first (empty, a lone unit, an unknown unit), then subtle ones."""
+        return ["", "h", f"{rng.randint(2, 9)}x", "   ", "1.5h", f"{rng.randint(5, 50)}m{rng.randint(1, 5)}h", "-5m", "1hh"]
+
+    bad_limit = "soon"
 
     tie_pairs = staticmethod(lambda rng: (lambda v: (str(v), f"{v // 60}h{v % 60}m"))(rng.randint(2, 9) * 60 + rng.randint(1, 59)))
 
 
 class Sizes:
-    module, helper, noun, unit, var, error = "quota.py", "parse_size", "size", "bytes", "size", "not a size"
+    module, helper, noun, unit, var = "quota.py", "parse_size", "size", "bytes", "size"
     funcs = ("total_bytes", "largest", "over_quota")
     items = "sizes"
-    legacy_form = 'the optional "b" after the unit'
     extensions = {
         "tera": 'the unit `t` for tebibytes (1t is 1024g), also with the optional `b`, such as "2t" or "1TB"',
         "spaces": 'spaces between the number and its unit, such as "4 kb", "3 G" or "512 b"',
@@ -180,13 +200,22 @@ class Sizes:
         return s.upper() if rng.random() < 0.25 else s
 
     @staticmethod
+    def legacy(rng):
+        """Old-format strings that each rely on a legacy rule: a bare "b", upper case, padding."""
+        return [f"{rng.randint(2, 900)}b", f"{rng.randint(2, 900)}KB", f" {rng.randint(2, 900)}g "]
+
+    @staticmethod
     def invalid(rng):
-        return ["", "  ", "k", f"{rng.randint(2, 9)}x", "1.5k", "4kbb", "-1k", "kb4"]
+        """Obvious invalid strings first (empty, a lone unit, an unknown unit), then subtle ones."""
+        return ["", "k", f"{rng.randint(2, 9)}x", "  ", "1.5k", "4kbb", "-1k", "kb4"]
+
+    bad_limit = "huge"
 
     tie_pairs = staticmethod(lambda rng: (lambda n: (f"{n}k", str(n * 1024)))(rng.randint(2, 900)))
 
 
 DOMAINS = {"durations": Durations, "sizes": Sizes}
+N_OBVIOUS_INVALID = 3
 
 # --------------------------------------------------------------------------- #
 # Module sources
@@ -266,14 +295,12 @@ def _helper(dom, exts, case=True, legacy=True, examples=None):
     return src + _indent(lines, 4) + f"    return {dom.var}\n"
 
 
-def _module(dom, n_funcs, exts, helper=None, callers=None, ties_last=False, skip=True):
-    """The module: an optional helper source, then the functions, each calling the helper
-    (`callers[i]` true) or keeping its own copy of the original parsing code."""
-    callers = callers if callers is not None else [helper is not None] * n_funcs
+def _module(dom, exts, helper=None, callers=None, ties_last=False, skip=True):
+    """The module: an optional helper source, then the three functions, each calling the
+    helper (`callers[i]` true) or keeping its own copy of the original parsing code."""
+    callers = callers if callers is not None else [helper is not None] * 3
     mode = ["helper" if c else "inline" for c in callers]
-    parts = ([helper] if helper else []) + [_total(dom, mode[0], exts), _best(dom, mode[1], exts, ties_last)]
-    if n_funcs == 3:
-        parts.append(_over(dom, mode[2], exts, skip))
+    parts = ([helper] if helper else []) + [_total(dom, mode[0], exts), _best(dom, mode[1], exts, ties_last), _over(dom, mode[2], exts, skip)]
     return dom.doc + "\n\n" + "\n\n".join(parts)
 
 
@@ -288,8 +315,8 @@ def _exec(src):
 # --------------------------------------------------------------------------- #
 
 
-def _cases(rng, dom, n_funcs, exts, ref):
-    """[(name, func, args)] hidden calls; expected values come from the reference module."""
+def _cases(rng, dom, exts, ref, p):
+    """Hidden checks; expected values come from the reference module."""
     h, f = dom.helper, dom.funcs
     out = []
     for i in range(5):
@@ -304,13 +331,15 @@ def _cases(rng, dom, n_funcs, exts, ref):
     for e in exts:
         for i in range(3):
             out.append((f"helper_new_{e}_{i}", h, [dom.new_form(rng, e)]))
-    for i, bad in enumerate(dom.invalid(rng)):
+    invalid = dom.invalid(rng)
+    subtle = rng.sample(invalid[N_OBVIOUS_INVALID:], p["subtle_invalid"])
+    for i, bad in enumerate(invalid[:N_OBVIOUS_INVALID] + subtle):
         out.append((f"helper_invalid_{i}", h, [bad]))
     old = [dom.old_form(rng) for _ in range(5)]
     new = [dom.new_form(rng, e) for e in exts]
     out.append(("total_old", f[0], [old]))
     out.append(("total_new", f[0], [old[:3] + new]))
-    out.append(("total_invalid", f[0], [old[:2] + [dom.invalid(rng)[3]]]))
+    out.append(("total_invalid", f[0], [old[:2] + [dom.invalid(rng)[2]]]))
     a, b = dom.tie_pairs(rng)
     v = ref[h](a)
     small = [dom.old_form(rng) for _ in range(3)]
@@ -320,14 +349,13 @@ def _cases(rng, dom, n_funcs, exts, ref):
     big_new = max(new, key=lambda s: ref[h](s))
     out.append(("best_new", f[1], [[dom.old_form(rng, 1), big_new, dom.old_form(rng, 2)]]))
     out.append(("best_empty", f[1], [[]]))
-    out.append(("best_invalid", f[1], [[old[0], dom.invalid(rng)[4]]]))
-    if n_funcs == 3:
-        limit = dom.old_form(rng)
-        entries = old + new + [dom.invalid(rng)[3], dom.new_form(rng, exts[0])]
-        rng.shuffle(entries)
-        out.append(("over_mixed", f[2], [entries, limit]))
-        out.append(("over_new_limit", f[2], [entries, dom.new_form(rng, exts[-1])]))
-        out.append(("over_invalid_limit", f[2], [old, dom.invalid(rng)[5]]))
+    out.append(("best_invalid", f[1], [[old[0], dom.invalid(rng)[2]]]))
+    limit = dom.old_form(rng)
+    entries = old + new + [dom.invalid(rng)[2], dom.new_form(rng, exts[0])]
+    rng.shuffle(entries)
+    out.append(("over_mixed", f[2], [entries, limit]))
+    out.append(("over_new_limit", f[2], [entries, dom.new_form(rng, exts[-1])]))
+    out.append(("over_invalid_limit", f[2], [old, dom.bad_limit]))
     checks = []
     for name, func, args in out:
         try:
@@ -339,7 +367,7 @@ def _cases(rng, dom, n_funcs, exts, ref):
     return checks
 
 
-def _visible_tests(rng, dom, n_funcs, exts, ref, p, hidden_new):
+def _visible_tests(rng, dom, exts, ref, p, hidden_new):
     mod = dom.module[:-3]
     f, h = dom.funcs, dom.helper
     tests = []
@@ -350,19 +378,23 @@ def _visible_tests(rng, dom, n_funcs, exts, ref, p, hidden_new):
 
     old = [dom.old_form(rng) for _ in range(4)]
     add("total", f[0], [old])
-    a, b = dom.tie_pairs(rng)
-    add("tie_returns_first", f[1], [[a, b]])
-    if p["legacy_tests"]:
-        add("legacy_forms", f[0], [[a, b, a.upper()]])
-    if n_funcs == 3:
-        add("over_skips_invalid", f[2], [[old[0], "oops", old[1]], dom.old_form(rng, 1)])
+    if p["tie_test"]:
+        a, b = dom.tie_pairs(rng)
+        add("tie_returns_first", f[1], [[a, b]])
+    if p["legacy_test"]:
+        add("legacy_forms", f[0], [dom.legacy(rng)])
+    add("over_skips_invalid", f[2], [[old[0], "oops", old[1]], dom.old_form(rng, 1)])
     examples = {}
-    for e in exts[: p["new_examples"]] if len(exts) > 1 else exts * p["new_examples"]:
-        for _ in range(20):
-            s = dom.new_form(rng, e)
-            if s not in hidden_new and s not in examples:
-                break
-        examples[s] = ref[h](s)
+    shown = exts if p["shown_extensions"] == len(exts) else sorted(rng.sample(exts, p["shown_extensions"]))
+    for e in shown:
+        for _ in range(p["examples_per_extension"]):
+            for _ in range(20):
+                s = dom.new_form(rng, e)
+                if s not in hidden_new and s not in examples:
+                    break
+            else:
+                raise Reject("no fresh new-form example")
+            examples[s] = ref[h](s)
     for i, (s, v) in enumerate(examples.items()):
         tests.append(f"def test_{h}_new_form_{i}():\n    assert {mod}.{h}({s!r}) == {v!r}\n")
     src = f'"""Run with: python3 test_{dom.module}"""\n\nimport {mod}\n\n\n' + "\n\n".join(tests) + TEST_RUNNER
@@ -376,39 +408,31 @@ def _write(module, source):
 def build(ctx):
     rng, p = ctx.rng, ctx.params
     dom = DOMAINS[rng.choice(sorted(DOMAINS))]
-    n = p["functions"]
-    exts = sorted(dom.extensions) if p["extensions"] == 2 else [rng.choice(sorted(dom.extensions))]
-    original = _module(dom, n, exts)
-    oracle = _module(dom, n, exts, helper=_helper(dom, exts))
+    exts = sorted(dom.extensions)
+    original = _module(dom, exts)
+    oracle = _module(dom, exts, helper=_helper(dom, exts))
     ref = _exec(oracle)
-    checks = _cases(rng, dom, n, exts, ref)
+    checks = _cases(rng, dom, exts, ref, p)
     hidden_new = {c["args"][0] for c in checks if c["name"].startswith("helper_new")}
-    tests, examples = _visible_tests(rng, dom, n, exts, ref, p, hidden_new)
+    tests, examples = _visible_tests(rng, dom, exts, ref, p, hidden_new)
     shortcuts = {
-        "helper-unused": _module(dom, n, exts, helper=_helper(dom, exts), callers=[False] * n),
-        "misses-a-caller": _module(dom, n, exts, helper=_helper(dom, exts), callers=[True] * (n - 1) + [False]),
-        "no-extension": _module(dom, n, exts, helper=_helper(dom, ())),
-        "hardcode-examples": _module(dom, n, exts, helper=_helper(dom, (), examples=examples)),
-        "case-sensitive": _module(dom, n, exts, helper=_helper(dom, exts, case=False)),
-        "drops-legacy-form": _module(dom, n, exts, helper=_helper(dom, exts, legacy=False)),
-        "ties-last": _module(dom, n, exts, helper=_helper(dom, exts), ties_last=True),
+        "helper-unused": _module(dom, exts, helper=_helper(dom, exts), callers=[False] * 3),
+        "misses-a-caller": _module(dom, exts, helper=_helper(dom, exts), callers=[True, True, False]),
+        "no-extension": _module(dom, exts, helper=_helper(dom, ())),
+        "one-extension-only": _module(dom, exts, helper=_helper(dom, exts[:1])),
+        "hardcode-examples": _module(dom, exts, helper=_helper(dom, (), examples=examples)),
+        "case-sensitive": _module(dom, exts, helper=_helper(dom, exts, case=False)),
+        "drops-legacy-form": _module(dom, exts, helper=_helper(dom, exts, legacy=False)),
+        "ties-last": _module(dom, exts, helper=_helper(dom, exts), ties_last=True),
+        "skip-becomes-raise": _module(dom, exts, helper=_helper(dom, exts), skip=False),
     }
-    if n == 3:
-        shortcuts["skip-becomes-raise"] = _module(dom, n, exts, helper=_helper(dom, exts), skip=False)
-    if len(exts) == 2:
-        shortcuts["one-extension-only"] = _module(dom, n, exts, helper=_helper(dom, exts[:1]))
-    for name, src in shortcuts.items():  # by construction every shortcut fails a planted check
+    for name, src in shortcuts.items():  # a planted check catches each shortcut, unless the draw left it out
         if all(run_checks(_exec(src), checks).values()):
             raise Reject(f"no hidden check catches {name}")
     test_file = f"test_{dom.module}"
-    if len(exts) == 1:
-        ext_text = dom.extensions[exts[0]] + ". "
-    else:
-        ext_text = "both of these new forms:\n   - " + ";\n   - ".join(dom.extensions[e] for e in exts) + ".\n\n   "
-    names = ", ".join(f"`{x}`" for x in dom.funcs[:n])
     instruction = INSTRUCTION.format(
-        module=dom.module, n="two" if n == 2 else "three", names=names, noun=dom.noun, helper=dom.helper, unit=dom.unit,
-        extensions=ext_text, s="s" if len(exts) > 1 else "", tests=test_file,
+        module=dom.module, names=", ".join(f"`{x}`" for x in dom.funcs), noun=dom.noun, helper=dom.helper, unit=dom.unit,
+        ext_a=dom.extensions[exts[0]], ext_b=dom.extensions[exts[1]], tests=test_file,
     )
     oracle_shell = _write(dom.module, oracle) + f"cd /app && python3 {test_file}\n"
     return TaskSpec(
@@ -417,20 +441,20 @@ def build(ctx):
         grader=Checks(f"/app/{dom.module}", dom.module[:-3], tuple(checks)),
         oracle=Solution(oracle_shell, lambda f, s=oracle: {f"/app/{dom.module}": s}),
         shortcuts={k: Solution(_write(dom.module, v), lambda f, s=v: {f"/app/{dom.module}": s}) for k, v in shortcuts.items()},
-        params={"domain": dom.module[:-3], "functions": list(dom.funcs[:n]), "extensions": exts, "n_checks": len(checks)},
+        params={"domain": dom.module[:-3], "functions": list(dom.funcs), "extensions": exts, "n_checks": len(checks)},
     )
 
 
 FAMILY = Family(
     name="refactor-preserve",
-    version=1,
+    version=2,
     cluster="write-code",
     category="coding",
     skills=("python", "refactoring", "regression-safety"),
     difficulties={
-        "easy": {"functions": 2, "extensions": 1, "new_examples": 2, "legacy_tests": True},
-        "medium": {"functions": 2, "extensions": 1, "new_examples": 1, "legacy_tests": False},
-        "hard": {"functions": 3, "extensions": 2, "new_examples": 1, "legacy_tests": False},
+        "easy": {"tie_test": True, "legacy_test": True, "shown_extensions": 2, "examples_per_extension": 2, "subtle_invalid": 0},
+        "medium": {"tie_test": True, "legacy_test": False, "shown_extensions": 2, "examples_per_extension": 1, "subtle_invalid": 2},
+        "hard": {"tie_test": False, "legacy_test": False, "shown_extensions": 1, "examples_per_extension": 1, "subtle_invalid": 5},
     },
     build=build,
 )

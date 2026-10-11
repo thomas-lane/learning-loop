@@ -1,22 +1,37 @@
 """config-drift: which hosts' configuration dumps differ from the baseline, on which settings,
 and with which values?
 
-Construction: a baseline settings tree (`/app/configs/baseline.json`, every setting nested
-in a section) and one JSON dump per host under `/app/configs/hosts/` (in region
-subdirectories on hard). Every dump, the baseline included, is written with its own key
-order and indentation (2 or 4 spaces, or on one line), because order and whitespace do not
-count. Drifted hosts get 1-3 differences: a changed value (easy+), a missing setting or a
-setting only the host has (medium+), and a number written as a string or a whole missing
-section (hard). The answer maps each drifted host to {dotted setting: {"baseline", "host"}},
-with null for a missing side.
+The instruction is the same at every difficulty: it says that every `.json` file under
+`/app/configs/hosts/`, at any depth, is a host's dump, defines settings as leaf values, and
+says that an object present on only one side is reported as the settings inside it. The
+data per difficulty:
 
-Traps, by construction: some hosts differ from the baseline only in key order or whitespace,
-so comparing file text flags them (they would appear with no differences); every setting
-is nested, so comparing only top-level keys reports sections instead of settings.
-Medium/hard: a host has a setting the baseline lacks, so walking only the baseline's
-settings misses it. Hard: a port is written as "8080" on one host, so comparing values as
-strings misses it; drifted hosts sit in region subdirectories, so reading only
-`hosts/*.json` misses them.
+- easy: drifted hosts differ only in changed values; every dump is directly in `hosts/`;
+- medium: also settings missing on the host and settings only the host has, always inside
+  objects both sides have, so every difference is a single leaf;
+- hard: also a number written as a string, an object (a section or subsection such as `db`
+  or `db.pool`) the host lacks and a section only the host has, each reported as the
+  settings inside it; drifted hosts sit in region subdirectories of `hosts/`.
+
+Construction: a baseline settings tree (`/app/configs/baseline.json`, every setting nested
+in a section) and one JSON dump per host. Every dump, the baseline included, is written with
+its own key order and indentation (2 or 4 spaces, or on one line), because order and
+whitespace do not count. Drifted hosts get 1-3 drifts each (an object drift gives one
+difference per setting inside the object), and every kind of drift the level requires
+appears on some host. The answer maps each drifted host to
+{dotted setting: {"baseline", "host"}}, with null for a missing side. The grader compares
+numbers by value (`1` equals `1.0`, both JSON numbers); a number and a string still differ
+(`8080` against `"8080"`), as the instruction says.
+
+Traps, by construction (each a declared shortcut where it applies): some hosts differ from
+the baseline only in key order or whitespace, so comparing file text flags them (they would
+appear with no differences; `textual`); every setting is nested, so comparing only
+top-level keys reports sections instead of settings (`top-level`). Medium/hard: a host has
+a setting the baseline lacks, so walking only the baseline's settings misses it
+(`baseline-keys-only`). Hard: a port is written as "8080" on one host, so comparing values
+as strings misses it (`str-compare`); reporting an object that exists on only one side as
+one entry instead of its settings fails (`whole-object`); drifted hosts sit in region
+subdirectories, so reading only `hosts/*.json` misses them (`top-dir-only`).
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv-revenue.
 """
@@ -37,14 +52,29 @@ SECTIONS = {
     "tls": {"enabled": [True, False], "min_version": ["1.2", "1.3"], "cert_path": ["/etc/ssl/app.pem", "/etc/ssl/certs/site.pem"]},
     "metrics": {"enabled": [True, False], "port": [9100, 9102, 9200], "path": ["/metrics", "/internal/metrics"]},
 }
-EXTRA = {"debug": {"pprof": True}, "server": {"trace_requests": True}, "db": {"statement_cache": 256}, "logging": {"verbose_sql": True}}
+# Settings a host may have that no baseline has: section -> setting -> candidate values.
+EXTRA_LEAVES = {
+    "server": {"trace_requests": [True, False]},
+    "db": {"statement_cache": [128, 256, 512]},
+    "cache": {"compress": [True, False]},
+    "logging": {"verbose_sql": [True, False]},
+    "features": {"instant_refund": [True, False]},
+    "limits": {"max_header_kb": [8, 16, 32]},
+    "tls": {"hsts": [True, False]},
+    "metrics": {"histograms": [True, False]},
+}
+# Sections a host may have that the baseline lacks, besides the SECTIONS the baseline leaves out.
+EXTRA_SECTIONS = {
+    "debug": {"pprof": [True, False], "trace_sql": [True, False], "dump_dir": ["/tmp/debug", "/var/tmp/app-debug"]},
+    "profiling": {"enabled": [True, False], "sample_hz": [10, 50, 100]},
+}
 REGIONS = ["eu", "us", "ap"]
 
-INSTRUCTION = """We keep the intended configuration of our web hosts in `/app/configs/baseline.json`. `/app/configs/hosts/`{subdirs} holds a JSON dump of each host's live configuration; a dump's file name without `.json` is the host name. The dumps come from different tools, so key order, indentation and other whitespace vary, and those differences do not matter.
+INSTRUCTION = """We keep the intended configuration of our web hosts in `/app/configs/baseline.json`. Every `.json` file under `/app/configs/hosts/`, at any depth, is a JSON dump of one host's live configuration; a dump's file name without `.json` is the host name. The dumps come from different tools, so key order, indentation and other whitespace vary, and those differences do not matter.
 
-Find every setting on which a host differs from the baseline. Settings are the leaf values (anything that is not a JSON object), named by their dotted path, e.g. `db.pool.max`. A host differs on a setting when its value differs (including its JSON type: `8080` and `"8080"` differ), when the host lacks a setting the baseline has, or when the host has a setting the baseline lacks.
+Find every setting on which a host differs from the baseline. Settings are the leaf values (anything that is not a JSON object), named by their dotted path, e.g. `db.pool.max`. A host differs on a setting when its value differs (including its JSON type: `8080` and `"8080"` differ), when the host lacks a setting the baseline has, or when the host has a setting the baseline lacks. When an object (a section such as `db`, or a subsection such as `db.pool`) exists on only one side, every setting inside it is a separate difference: report those settings, not the object.
 
-Write a JSON object to `/app/answer.json` that maps each host that differs to an object mapping each of its differing settings to `{{"baseline": <baseline value>, "host": <host value>}}`, with `null` on the side where the setting is missing (no setting is ever `null`). Leave out hosts that match the baseline. For example: `{{"web-99": {{"db.pool.max": {{"baseline": 20, "host": 40}}}}}}`.
+Write a JSON object to `/app/answer.json` that maps each host that differs to an object mapping each of its differing settings to `{"baseline": <baseline value>, "host": <host value>}`, with `null` on the side where the setting is missing (no setting is ever `null`). Leave out hosts that match the baseline. For example: `{"web-99": {"db.pool.max": {"baseline": 20, "host": 40}}}`.
 """
 
 SOLVER = r'''
@@ -68,7 +98,21 @@ def same(a, b, mode):
     return type(a) is type(b) and a == b
 
 
+def objects_diff(b, h, prefix=""):
+    """Like the oracle, but an object on only one side is one entry holding the object."""
+    out = {}
+    for k in sorted(set(b) | set(h)):
+        path = prefix + k
+        if isinstance(b.get(k), dict) and isinstance(h.get(k), dict):
+            out.update(objects_diff(b[k], h[k], path + "."))
+        elif k not in h or k not in b or not same(b[k], h[k], "oracle"):
+            out[path] = {"baseline": b.get(k), "host": h.get(k)}
+    return out
+
+
 def diff(base, host, mode):
+    if mode == "whole-object":
+        return objects_diff(base, host)
     if mode == "top-level":
         b, h = base, host
     else:
@@ -179,37 +223,46 @@ def _choices(path):
 
 
 def _drift(rng, host, base, kind, used):
-    """Apply one drift of `kind` to `host`; returns False when it cannot apply."""
+    """Apply one drift of `kind` to `host`; returns False when it cannot apply. `used` holds the
+    setting paths earlier drifts of this host touched, which later ones leave alone."""
     paths = [x for x in _paths(base) if x not in used]
     if kind == "value":
         path = rng.choice(paths)
         old = _get(base, path)
         new = rng.choice([v for v in _choices(path) if not (type(v) is type(old) and v == old)])
         _set(host, path, new)
-    elif kind == "missing":
+    elif kind == "missing":  # one setting; its object stays on both sides
         path = rng.choice(paths)
         _delete(host, path)
-    elif kind == "extra":
-        section = rng.choice(sorted(EXTRA))
-        key = next(iter(EXTRA[section]))
-        path = (section, key)
-        if section in base and key in base[section]:
+    elif kind == "extra":  # one setting, inside a section both sides have
+        cands = [(s, k) for s in sorted(EXTRA_LEAVES) if s in base and s in host for k in sorted(EXTRA_LEAVES[s]) if (s, k) not in used]
+        if not cands:
             return False
-        _set(host, path, EXTRA[section][key])
+        path = rng.choice(cands)
+        _set(host, path, rng.choice(EXTRA_LEAVES[path[0]][path[1]]))
     elif kind == "type":
         ports = [x for x in paths if x[-1] == "port"]
         if not ports:
             return False
         path = rng.choice(ports)
         _set(host, path, str(_get(base, path)))
-    elif kind == "missing-section":
-        subs = sorted({x[:2] for x in paths if len(x) == 3})
-        if not subs:
+    elif kind == "missing-object":  # a section or subsection none of whose settings drifted yet
+        objs = sorted({x[:n] for x in _paths(base) for n in range(1, len(x))})
+        objs = [o for o in objs if not any(u[: len(o)] == o for u in used)]
+        if not objs:
             return False
-        path = rng.choice(subs)
+        path = rng.choice(objs)
         _delete(host, path)
-        used.update(x for x in _paths(base) if x[:2] == path)
+        used.update(x for x in _paths(base) if x[: len(path)] == path)
         return True
+    elif kind == "extra-object":  # a whole section the baseline lacks
+        specs = {**SECTIONS, **EXTRA_SECTIONS}
+        section = rng.choice([s for s in sorted(specs) if s not in base and s not in host])
+        host[section] = _draw(rng, specs[section])
+        used.update((section,) + x for x in _paths(host[section]))
+        return True
+    else:
+        raise ValueError(kind)
     used.add(path)
     return True
 
@@ -274,12 +327,14 @@ def build(ctx):
         shortcuts["baseline-keys-only"] = _solution("baseline-keys-only")
     if "type" in required:
         shortcuts["str-compare"] = _solution("str-compare")
+    if {"missing-object", "extra-object"} & set(required):
+        shortcuts["whole-object"] = _solution("whole-object")
     if p["regions"]:
         shortcuts["top-dir-only"] = _solution("top-dir-only")
     return TaskSpec(
-        instruction=INSTRUCTION.format(subdirs=" (including its subdirectories)" if p["regions"] else ""),
+        instruction=INSTRUCTION,
         files=files,
-        grader=ParsedAnswer("/app/answer.json", "json", expected),
+        grader=ParsedAnswer("/app/answer.json", "json", expected, numbers="value"),
         oracle=oracle,
         shortcuts=shortcuts,
         params={"hosts": n, "drifted": sorted(expected), "sections": sections},
@@ -288,14 +343,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="config-drift",
-    version=1,
+    version=2,
     cluster="diagnosis",
     category="data",
     skills=("json", "diffing", "python", "diagnosis"),
     difficulties={
         "easy": {"sections": 4, "hosts": 4, "drifted": 1, "format_only": 2, "kinds": ["value"], "required_kinds": ["value"], "regions": False},
         "medium": {"sections": 5, "hosts": 6, "drifted": 2, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["value", "extra", "missing"], "regions": False},
-        "hard": {"sections": 6, "hosts": 8, "drifted": 3, "format_only": 3, "kinds": ["value", "missing", "extra", "missing-section"], "required_kinds": ["type", "extra", "missing-section", "value"], "regions": True},
+        "hard": {"sections": 6, "hosts": 8, "drifted": 3, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["type", "extra", "missing-object", "extra-object", "value"], "regions": True},
     },
     build=build,
 )

@@ -1,20 +1,30 @@
 """json-aggregate: per-site count and mean temperature of the valid sensor readings in
 several JSON Lines files.
 
-Construction: `/app/data/readings/` holds one `.jsonl` file per day (hard: one of them
-gzipped and one in `archive/`). A line is either a single reading (`temp_c` at the top level)
-or a batch (`readings`: a list of readings with their own `temp_c`). A reading whose
-`temp_c` is null or missing failed and is skipped. Medium/hard mix in a newer record schema
-that puts the site in `location.site` instead of `site`. The answer is a JSON object
-{site: {"count": valid readings, "mean_temp_c": mean rounded to 2 decimals}}.
+`/app/data/readings/` holds one `.jsonl` file per day. A line is either a single reading
+(`temp_c` at the top level) or a batch (`readings`: a list of readings with their own
+`temp_c`). A reading whose `temp_c` is null or missing failed and is skipped. The answer is a
+JSON object {site: {"count": valid readings, "mean_temp_c": mean rounded to 2 decimals}},
+graded with numbers compared by value, so a mean of 23 may be written `23` or `23.0`.
+
+The instruction is the same at every difficulty and states every rule that can apply (files
+in subdirectories and gzipped files, and the newer schema's `location.site`); the data
+decides which apply:
+
+- easy: two files at the top level, three sites, every record with a `site` field;
+- medium: three files, four sites, and a newer record schema mixed into every file that puts
+  the site in `location.site` instead of `site`;
+- hard: five files, five sites, the newer schema, one file gzipped (`.jsonl.gz`) and one in
+  the subdirectory `archive/`.
 
 Traps, planted in every instance: every file has failed readings (null and missing), single
 readings and batches with valid values, so treating a failed reading as 0
 (`null-as-zero`), ignoring the nested `readings` lists (`flat-only`), ignoring single
 readings (`batch-only`) or reading only the first file (`first-file`) changes some count.
-Medium/hard: every file has newer-schema records (`top-level-site` drops them). Hard: skipping
-the gzipped file (`plain-only`) or the subdirectory (`non-recursive`) loses readings. `build`
-rejects a draw whose exact mean lies halfway between two 2-decimal values.
+Medium/hard: every file has newer-schema records with valid readings (`top-level-site` drops
+them). Hard: skipping the gzipped file (`plain-only`) or the subdirectory (`non-recursive`)
+loses readings. `build` redraws when a site has no valid reading or an exact mean lies
+halfway between two 2-decimal values.
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv_revenue: the shell
 form reads /app/data/readings, the model runs the same source on the generated files.
@@ -29,27 +39,16 @@ from learning_loop.tasks.spec import Family, gzip_bytes, ParsedAnswer, Reject, S
 
 SITES = ["north-hall", "south-hall", "lab-a", "lab-b", "cold-store", "roof", "basement"]
 
-INSTRUCTION = """Temperature sensors upload their data as JSON Lines files (one JSON object per line) to `/app/data/readings/`.{files_note}
+INSTRUCTION = """Temperature sensors upload their data as JSON Lines files (one JSON object per line) to `/app/data/readings/`. Use every file under that directory, including subdirectories; files ending in `.gz` are gzip-compressed.
 
-Each line is a record from one sensor at one site. A record is either a **single reading**, with `temp_c` at the top level, or a **batch**, whose `readings` list holds several readings, each with its own `temp_c`.{site_note} A reading whose `temp_c` is `null` or missing failed: skip it entirely (it is not a reading of 0).
+Each line is a record from one sensor at one site. A record is either a **single reading**, with `temp_c` at the top level, or a **batch**, whose `readings` list holds several readings, each with its own `temp_c`. The site is in the record's `site` field; records from newer firmware have no `site` field and put it in `location.site` instead. A reading whose `temp_c` is `null` or missing failed: skip it entirely (it is not a reading of 0).
 
 For each site, count the valid readings across all the files and compute their mean `temp_c`, rounded to 2 decimal places. Write the result to `/app/answer.json` as a JSON object keyed by site name, for example:
 
 ```json
-{{"some-site": {{"count": 12, "mean_temp_c": 21.43}}}}
+{"some-site": {"count": 12, "mean_temp_c": 21.43}}
 ```
 """
-
-FILES_NOTE = {
-    "easy": "",
-    "medium": "",
-    "hard": " Use every file under that directory, including subdirectories; files ending in `.gz` are gzip-compressed.",
-}
-SITE_NOTE = {
-    "easy": " The site is in the record's `site` field.",
-    "medium": " The site is in the record's `site` field; records from newer firmware have no `site` field and put it in `location.site` instead.",
-    "hard": " The site is in the record's `site` field or, in records from newer firmware, in `location.site`.",
-}
 
 SOLVER = '''
 import json
@@ -236,9 +235,9 @@ def build(ctx):
     if any("/" in n for n in names):
         modes.append("non-recursive")
     return TaskSpec(
-        instruction=INSTRUCTION.format(files_note=FILES_NOTE[ctx.difficulty], site_note=SITE_NOTE[ctx.difficulty]),
+        instruction=INSTRUCTION,
         files=files,
-        grader=ParsedAnswer("/app/answer.json", "json", expected),
+        grader=ParsedAnswer("/app/answer.json", "json", expected, numbers="value"),
         oracle=_solution("oracle"),
         shortcuts={m: _solution(m) for m in modes},
         params={"files": names, "n_sites": p["n_sites"], "newer": p["newer"]},
@@ -247,7 +246,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="json-aggregate",
-    version=1,
+    version=2,
     cluster="tabular-data",
     category="data",
     skills=("json", "nested-data", "missing-values", "aggregation", "python"),

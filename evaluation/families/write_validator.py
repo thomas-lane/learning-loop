@@ -1,25 +1,35 @@
 """write-validator: write a validator for a schema stated in the instruction.
 
-The agent fills in /app/validator.py. Easy asks for `is_valid(record) -> bool`; medium and
-hard ask for `validate(record) -> list[str]`, the sorted, distinct error codes of a record
-(`[]` when it is valid). The schema's fields come from one of two domains (an account or a
-device), with seed-drawn bounds, lengths and allowed values. Field kinds: an identifier string
-(length and character rules), an integer range, an enum, an email address, a tag list and a
-calendar date. /app/examples.json shows a few records with their results.
+The agent fills in `validate(record) -> list[str]` in /app/validator.py: the sorted, distinct
+error codes of a record (`[]` when it is valid). The instruction is the same at every
+difficulty: a schema of six fields from one of two domains (an account or a device), with
+seed-drawn bounds, lengths, allowed values and whether the integer is required, and one rule
+text (missing vs null, what counts as an integer, inclusive bounds, `unknown_field`,
+`not_an_object`). Field kinds: an identifier string (length and character rules), an integer
+range, an enum, an email address, a tag list and a calendar date. /app/examples.json shows
+records with their expected codes.
 
-Grading: `Checks` (kind `equal`) on hidden records: valid ones (including every boundary:
-the range ends, the length limits, a leap day), records with one planted error per rule, and
-records with several errors.
+Grading: `Checks` (kind `equal`) on hidden records: valid ones (including every boundary: the
+range ends, the length limits, a leap day), records that break one rule of one field, records
+with several errors, and the trap records of the difficulty. No hidden record equals an
+example.
 
-Traps (each a full validator with one mistake, declared as a shortcut, and each caught by a
-planted hidden record): `hardcode-examples` (answers the example records only),
-`bool-is-int` (`isinstance(v, int)` accepts true; the integer range includes 1),
-`coerces-strings` (`int(v)` accepts "7"), `range-off-by-one` (exclusive bounds),
-`re-match-prefix` (`re.match` without an end anchor accepts "abc-def"); medium and hard add
-`dollar-newline` (`^...$` accepts a trailing newline), `stops-at-first-error` and
-`unsorted-codes` (multi-error records whose schema order is not alphabetical); hard adds
-`strptime-date` (accepts "2026-2-03"), `fromisoformat-date` (accepts "20260203"),
-`unknown-fields-ignored` and `assumes-object` (non-object inputs).
+Traps (each a full validator with one mistake, declared as a shortcut, and each caught by the
+hidden records planted for it, `TRAPS`): `hardcode-examples` (answers the example records
+only), `bool-is-int` (`isinstance(v, int)` accepts true; the integer range includes 1),
+`coerces-strings` (`int(v)` accepts "7"), `range-off-by-one` (exclusive bounds; records at
+both range ends), `re-match-prefix` (`re.match` without an end anchor accepts "ab-cd"),
+`dollar-newline` (`^...$` accepts a trailing newline), `stops-at-first-error` (records with
+three errors), `unsorted-codes` (two errors whose schema order is the reverse of their
+alphabetical order), `unknown-fields-ignored`, `assumes-object` (non-object inputs),
+`strptime-date` (accepts "2026-2-03") and `fromisoformat-date` (accepts "20260203"). The
+records with several errors use only plain bad values (`PLAIN_BAD`), never another trap's, so
+each checks what it is planted for.
+
+Difficulty is in the data, not the instruction: easy's hidden records leave out the two
+date-library traps and its examples show one record for every trap it plants; medium plants
+every trap and its examples show half of them; hard plants every trap and its examples show
+none. Each step also has fewer plain examples (valid records and plain errors).
 """
 
 import json
@@ -94,7 +104,8 @@ def _check(name, kind, opts, v):
     raise AssertionError(kind)
 
 
-def _errors(record):
+def validate(record):
+    """The sorted, distinct error codes of `record` ([] when it is valid)."""
     if not isinstance(record, dict):
         return ["not_an_object"]
     errors = []
@@ -104,24 +115,10 @@ def _errors(record):
                 errors.append(name + "_missing")
             continue
         errors += _check(name, kind, opts, record[name])
-    if @UNKNOWN@ and any(key not in KNOWN for key in record):
+    if any(key not in KNOWN for key in record):
         errors.append("unknown_field")
     return sorted(set(errors))
 '''
-API = {
-    "is_valid": '''
-
-def is_valid(record):
-    """True if `record` satisfies the schema."""
-    return not _errors(record)
-''',
-    "validate": '''
-
-def validate(record):
-    """The sorted, distinct error codes of `record` ([] when it is valid)."""
-    return _errors(record)
-''',
-}
 
 # Each variant: (old, new) replacements in ENGINE that make one plausible mistake.
 VARIANTS = {
@@ -143,7 +140,7 @@ VARIANTS = {
         '    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", v):\n        return False\n    try:\n        datetime.date(int(v[:4]), int(v[5:7]), int(v[8:]))',
         "    try:\n        datetime.date.fromisoformat(v)",
     )],
-    "unknown-fields-ignored": [("    if @UNKNOWN@ and any(key not in KNOWN for key in record):\n        errors.append(\"unknown_field\")\n", "")],
+    "unknown-fields-ignored": [("    if any(key not in KNOWN for key in record):\n        errors.append(\"unknown_field\")\n", "")],
     "assumes-object": [('    if not isinstance(record, dict):\n        return ["not_an_object"]\n', "")],
 }
 
@@ -168,47 +165,72 @@ DOMAINS = {
     },
 }
 
-INSTRUCTION = """Write {what} in `/app/validator.py` that checks a {noun} record (a JSON object, given to you as a Python dict) against the schema below. {returns}
+INSTRUCTION = """Write a function `validate(record)` in `/app/validator.py` that checks a {noun} record (a JSON object, given to you as a Python dict) against the schema below. It returns the list of error codes for the record: each code at most once, sorted alphabetically, and `[]` for a valid record. A field can produce several codes, and every field is checked (do not stop at the first error).
 
 Schema:
 {fields}
 Rules:
 - A key that is present is never missing, even when its value is null; a null value is simply of the wrong type.
-- Integers are Python `int` values. Booleans (`true`/`false`) are not integers, and neither are floats such as `7.0` or numeric strings such as `"7"`.
+- An integer is a Python `int` that is not a `bool`: `True` and `False` are not integers here, although Python's `bool` is a subclass of `int`. Floats such as `7.0` and numeric strings such as `"7"` are not integers either.
 - Ranges and length limits include both ends.
-{unknown}{not_object}
-`/app/examples.json` lists some records with their expected results. Use only the Python standard library.
+- Any key that is not in the schema adds the code `unknown_field` (once, however many such keys there are).
+- If the record is not a JSON object (a dict), the result is `["not_an_object"]` and nothing else.
+
+`/app/examples.json` lists some records with their expected results. Put all of your code in `/app/validator.py`: it is tested by importing that file on its own, from a directory that holds no other file. Use only the Python standard library.
 """
 
-STUB = {
-    "is_valid": '"""Validate {noun} records."""\n\n\ndef is_valid(record):\n    """True if `record` satisfies the schema."""\n    raise NotImplementedError\n',
-    "validate": '"""Validate {noun} records."""\n\n\ndef validate(record):\n    """The sorted, distinct error codes of `record` ([] when it is valid)."""\n    raise NotImplementedError\n',
+STUB = '"""Validate {noun} records."""\n\n\ndef validate(record):\n    """The sorted, distinct error codes of `record` ([] when it is valid)."""\n    raise NotImplementedError\n'
+
+# Shortcut -> the labels of the hidden records planted to catch it.
+TRAPS = {
+    "bool-is-int": ("int_true",),
+    "coerces-strings": ("int_string",),
+    "range-off-by-one": ("boundary_int_min", "boundary_int_max"),
+    "re-match-prefix": ("ident_bad_char",),
+    "dollar-newline": ("ident_newline",),
+    "stops-at-first-error": ("multi",),
+    "unsorted-codes": ("multi_order",),
+    "unknown-fields-ignored": ("unknown_key", "unknown_and_bad"),
+    "assumes-object": ("not_object_list", "not_object_string", "not_object_null"),
+    "strptime-date": ("date_unpadded",),
+    "fromisoformat-date": ("date_basic",),
 }
+TRAP_LABELS = {label for labels in TRAPS.values() for label in labels}
+
+# Per field kind, the bad values that break a plain rule and set off no trap (bool, numeric
+# string, float, prefix match, trailing newline, date-library leniency).
+PLAIN_BAD = {
+    "ident": ("ident_number", "ident_short", "ident_long", "ident_digit_first", "ident_upper"),
+    "int": ("int_null", "int_below", "int_above"),
+    "enum": ("enum_case", "enum_other", "enum_number", "enum_null"),
+    "email": ("email_no_dot", "email_two_at", "email_space", "email_no_local", "email_empty_label", "email_upper", "email_number"),
+    "tags": ("tags_string", "tags_empty_item", "tags_number_item", "tags_duplicate", "tags_too_many"),
+    "date": ("date_feb30", "date_not_leap", "date_month13", "date_number"),
+}
+KINDS = ["ident", "int", "enum", "email", "tags", "date"]
 
 
-def _schema(rng, dom, p):
+def _schema(rng, dom):
     """[(name, kind, required, opts)] in the order the instruction lists them."""
     d = DOMAINS[dom]
     name, words, pattern, min_len, max_lens = d["ident"]
     fields = {
         "ident": (name, "ident", True, {"min_len": min_len, "max_len": rng.choice(max_lens), "pattern": pattern, "words": words}),
-        "int": (d["int"][0], "int", p["int_required"], {"min": rng.choice(d["int"][1]), "max": rng.choice(d["int"][2])}),
+        "int": (d["int"][0], "int", rng.choice([True, False]), {"min": rng.choice(d["int"][1]), "max": rng.choice(d["int"][2])}),
         "enum": (d["enum"][0], "enum", True, {"values": rng.choice(d["enum"][1])}),
         "email": (d["email"], "email", True, {}),
         "tags": (d["tags"][0], "tags", False, {"max_items": rng.choice(d["tags"][1])}),
         "date": (d["date"], "date", True, {}),
     }
-    kinds = list(p["kinds"])
-    for _ in range(50):
-        rng.shuffle(kinds)
-        schema = [fields[k] for k in kinds]
-        names = [f[0] for f in schema]
-        if names != sorted(names):  # schema order differs from code order, so unsorted output is visible
-            return schema
-    raise Reject("schema order is alphabetical")
+    kinds = list(KINDS)
+    rng.shuffle(kinds)
+    schema = [fields[k] for k in kinds]
+    if [f[0] for f in schema] == sorted(f[0] for f in schema):
+        raise Reject("schema order is alphabetical, so unsorted codes could not be told apart")
+    return schema
 
 
-def _describe(field, api):
+def _describe(field):
     name, kind, required, o = field
     req = "required" if required else "optional"
     if kind == "ident":
@@ -234,14 +256,11 @@ def _describe(field, api):
     else:
         what = "a calendar date written `YYYY-MM-DD` (four-digit year, two-digit month and day) that exists, e.g. not February 30"
         suffixes, note = ["type", "format"], ""
-    line = f"- `{name}` ({req}): {what}."
-    if api == "validate":
-        all_codes = ([f"{name}_missing"] if required else []) + [f"{name}_{s}" for s in suffixes]
-        line += " Codes: " + ", ".join(f"`{c}`" for c in all_codes)
-        if "type" in suffixes:
-            line += f" (`{name}_type` when the value is not {'a list' if kind == 'tags' else 'an integer' if kind == 'int' else 'a string'}, and then no other code for it)"
-        line += "." if not note else "; " + note.format(n=name) + "."
-    return line + "\n"
+    all_codes = ([f"{name}_missing"] if required else []) + [f"{name}_{s}" for s in suffixes]
+    line = f"- `{name}` ({req}): {what}. Codes: " + ", ".join(f"`{c}`" for c in all_codes)
+    if "type" in suffixes:
+        line += f" (`{name}_type` when the value is not {'a list' if kind == 'tags' else 'an integer' if kind == 'int' else 'a string'}, and then no other code for it)"
+    return line + ("." if not note else "; " + note.format(n=name) + ".") + "\n"
 
 
 def _valid_value(rng, field, boundary=None):
@@ -267,7 +286,7 @@ def _valid_value(rng, field, boundary=None):
     raise AssertionError(kind)
 
 
-def _bad_values(rng, field, unknown_rule):
+def _bad_values(rng, field):
     """[(label, value)] that break exactly this field's rules."""
     name, kind, _, o = field
     if kind == "ident":
@@ -309,64 +328,57 @@ def _valid_record(rng, schema):
     return rec
 
 
-def _cases(rng, schema, p):
-    """[(label, input)] hidden inputs; the expected results come from the reference."""
+def _plain_bad(rng, field):
+    return dict(_bad_values(rng, field))[rng.choice(PLAIN_BAD[field[1]])]
+
+
+def _cases(rng, schema):
+    """[(label, input)] for every kind of hidden record; expected results come from the reference."""
     out = [("valid", _valid_record(rng, schema)) for _ in range(3)]
-    full = {f[0]: _valid_value(rng, f) for f in schema}
-    out.append(("valid_all_fields", full))
+    out.append(("valid_all_fields", {f[0]: _valid_value(rng, f) for f in schema}))
     for f in schema:
         for b in {"ident": ["min", "max"], "int": ["min", "max"], "tags": ["max"], "date": ["leap"]}.get(f[1], []):
             rec = _valid_record(rng, schema)
             rec[f[0]] = _valid_value(rng, f, b)
-            out.append((f"boundary_{f[0]}_{b}", rec))
-    if not p["unknown_rule"]:
-        rec = _valid_record(rng, schema)
-        rec["note"] = "extra keys are allowed"
-        out.append(("extra_key_allowed", rec))
+            out.append((f"boundary_{f[1]}_{b}", rec))
     for f in schema:
-        for label, v in _bad_values(rng, f, p["unknown_rule"]):
+        for label, v in _bad_values(rng, f):
             rec = _valid_record(rng, schema)
             rec[f[0]] = v
             out.append((label, rec))
         if f[2]:
             rec = _valid_record(rng, schema)
             rec.pop(f[0], None)
-            out.append((f"missing_{f[0]}", rec))
-    if p["multi"]:
-        for i in range(3):
-            rec = _valid_record(rng, schema)
-            bad = rng.sample(schema, 3)
-            for f in bad:
-                rec[f[0]] = rng.choice(_bad_values(rng, f, p["unknown_rule"]))[1]
-            out.append((f"multi_{i}", rec))
-        # planted: two errors whose schema order is the reverse of their alphabetical order
-        first, second = next((a, b) for i, a in enumerate(schema) for b in schema[i + 1 :] if a[0] > b[0])
+            out.append((f"missing_{f[1]}", rec))
+    for _ in range(3):
         rec = _valid_record(rng, schema)
-        rec[first[0]] = _bad_values(rng, first, False)[0][1]
-        rec[second[0]] = _bad_values(rng, second, False)[0][1]
-        out.append(("multi_order", rec))
-    if p["unknown_rule"]:
-        rec = _valid_record(rng, schema)
-        rec["nickname"] = "zed"
-        out.append(("unknown_key", rec))
-        rec = _valid_record(rng, schema)
-        rec[schema[0][0]] = _bad_values(rng, schema[0], True)[0][1]
-        rec["Extra"] = 1
-        out.append(("unknown_and_bad", rec))
-    if p["not_object"]:
-        out += [("not_object_list", [_valid_record(rng, schema)]), ("not_object_string", "username=ann"), ("not_object_null", None)]
+        for f in rng.sample(schema, 3):
+            rec[f[0]] = _plain_bad(rng, f)
+        out.append(("multi", rec))
+    # two errors whose schema order is the reverse of their alphabetical order
+    first, second = next((a, b) for i, a in enumerate(schema) for b in schema[i + 1 :] if a[0] > b[0])
+    rec = _valid_record(rng, schema)
+    rec[first[0]], rec[second[0]] = _plain_bad(rng, first), _plain_bad(rng, second)
+    out.append(("multi_order", rec))
+    rec = _valid_record(rng, schema)
+    rec["nickname"] = "zed"
+    out.append(("unknown_key", rec))
+    rec = _valid_record(rng, schema)
+    rec[schema[0][0]] = _plain_bad(rng, schema[0])
+    rec["Extra"] = 1
+    out.append(("unknown_and_bad", rec))
+    out += [("not_object_list", [_valid_record(rng, schema)]), ("not_object_string", "username=ann"), ("not_object_null", None)]
     return out
 
 
-def _source(schema, api, unknown_rule, variant=None):
+def _source(schema, variant=None):
     plain = [(n, k, r, {key: v for key, v in o.items() if key != "words"}) for n, k, r, o in schema]
     src = ENGINE
     for old, new in VARIANTS.get(variant, []):
         if old not in src:
             raise AssertionError(f"{variant}: {old!r}")
         src = src.replace(old, new)
-    src = src.replace("@SCHEMA@", _pretty(plain)).replace("@UNKNOWN@", repr(unknown_rule))
-    return src + API[api]
+    return src.replace("@SCHEMA@", _pretty(plain))
 
 
 def _pretty(schema):
@@ -379,14 +391,13 @@ def _exec(src):
     return ns
 
 
-def _hardcoded(api, examples):
+def _hardcoded(examples):
     table = {json.dumps(e["record"], sort_keys=True): e["expected"] for e in examples}
-    default = "True" if api == "is_valid" else "[]"
     return (
         "import json\n\n"
         f"EXPECTED = {json.dumps(table, indent=4, sort_keys=True)}\n\n\n"
-        f"def {api}(record):\n"
-        f"    return EXPECTED.get(json.dumps(record, sort_keys=True), {default})\n"
+        "def validate(record):\n"
+        "    return EXPECTED.get(json.dumps(record, sort_keys=True), [])\n"
     )
 
 
@@ -394,81 +405,70 @@ def _write(source):
     return f"cat > /app/validator.py <<'PY'\n{source}PY\n"
 
 
+def _key(v):
+    return json.dumps(v, sort_keys=True)
+
+
+def _examples(rng, schema, p, planted):
+    """[(label, record)] for examples.json: plain examples (valid records first, then plain
+    errors), and one record for each trap the difficulty shows, all from a draw of their own."""
+    pool = _cases(rng, schema)
+    valid = [v for label, v in pool if label.startswith("valid")]
+    plain_errors = [(label, v) for label, v in pool if not label.startswith(("valid", "boundary_")) and label not in TRAP_LABELS]
+    n_errors = p["plain_examples"] // 2
+    out = [("valid", v) for v in valid[: p["plain_examples"] - n_errors]] + rng.sample(plain_errors, n_errors)
+    shown = sorted(planted) if p["show_traps"] == "all" else sorted(rng.sample(sorted(planted), len(planted) // 2)) if p["show_traps"] == "half" else []
+    for trap in shown:
+        label = rng.choice(TRAPS[trap])
+        out.append((label, rng.choice([v for lb, v in pool if lb == label])))
+    rng.shuffle(out)
+    return out, shown
+
+
 def build(ctx):
     rng, p = ctx.rng, ctx.params
-    api = p["api"]
     dom = rng.choice(sorted(DOMAINS))
-    schema = _schema(rng, dom, p)
-    ref = _exec(_source(schema, api, p["unknown_rule"]))[api]
+    schema = _schema(rng, dom)
+    oracle = _source(schema)
+    ref = _exec(oracle)["validate"]
 
     def expect(v):
         return ref(json.loads(json.dumps(v)))
 
-    examples = []
-    pool = [("valid", _valid_record(rng, schema)) for _ in range(p["examples"])] + _cases(rng, schema, p)
-    picks = rng.sample(range(p["examples"], len(pool)), p["examples"] // 2)
-    for i in list(range(p["examples"] - p["examples"] // 2)) + picks:
-        examples.append({"record": pool[i][1], "expected": expect(pool[i][1])})
-    shown = {json.dumps(e["record"], sort_keys=True) for e in examples}
-    cases = [(label, v) for label, v in _cases(rng, schema, p) if json.dumps(v, sort_keys=True) not in shown]
-    checks = tuple({"name": f"{label}_{i}", "func": api, "kind": "equal", "args": [v], "expected": expect(v)} for i, (label, v) in enumerate(cases))
-    if api == "is_valid" and sum(c["expected"] is True for c in checks) < 3:
-        raise Reject("too few valid hidden records")
-    variants = [v for v in p["shortcuts"]]
-    sources = {v: _source(schema, api, p["unknown_rule"], v) for v in variants}
-    for v, src in sources.items():  # by construction every variant fails a planted record
+    planted = [t for t in TRAPS if t not in p["unplanted"]]
+    dropped = {label for t in p["unplanted"] for label in TRAPS[t]}
+    shown_records, shown_traps = _examples(rng, schema, p, planted)
+    examples = [{"record": v, "expected": expect(v)} for _, v in shown_records]
+    shown = {_key(e["record"]) for e in examples}
+    cases = [(label, v) for label, v in _cases(rng, schema) if label not in dropped and _key(v) not in shown]
+    checks = tuple({"name": f"{label}_{i}", "func": "validate", "kind": "equal", "args": [v], "expected": expect(v)} for i, (label, v) in enumerate(cases))
+    sources = {t: _source(schema, t) for t in planted}
+    for t, src in sources.items():  # each trap's planted records catch it unless an example took them all
         if all(run_checks(_exec(src), list(checks)).values()):
-            raise Reject(f"no hidden record catches {v}")
-    sources["hardcode-examples"] = _hardcoded(api, examples)
-    oracle = _source(schema, api, p["unknown_rule"])
+            raise Reject(f"no hidden record catches {t}")
+    sources["hardcode-examples"] = _hardcoded(examples)
     d = DOMAINS[dom]
-    fields_text = "".join(_describe(f, api) for f in schema)
-    returns = (
-        "`is_valid(record)` returns `True` if the record satisfies every rule and `False` otherwise."
-        if api == "is_valid"
-        else "`validate(record)` returns the list of error codes for the record: each code at most once, sorted alphabetically, and `[]` for a valid record. A field can produce several codes, and every field is checked (do not stop at the first error)."
-    )
-    instruction = INSTRUCTION.format(
-        what="a function `is_valid(record)`" if api == "is_valid" else "a function `validate(record)`",
-        noun=d["noun"],
-        returns=returns,
-        fields=fields_text,
-        unknown="- Any key that is not in the schema adds the code `unknown_field` (once, however many such keys there are).\n" if p["unknown_rule"] else "- Keys that are not in the schema are allowed and ignored.\n",
-        not_object="- If the record is not a JSON object (a dict), the result is `[\"not_an_object\"]` and nothing else.\n" if p["not_object"] else "",
-    )
+    instruction = INSTRUCTION.format(noun=d["noun"], fields="".join(_describe(f) for f in schema))
     return TaskSpec(
         instruction=instruction,
-        files={"validator.py": STUB[api].format(noun=d["noun"]), "examples.json": json.dumps(examples, indent=2) + "\n"},
+        files={"validator.py": STUB.format(noun=d["noun"]), "examples.json": json.dumps(examples, indent=2) + "\n"},
         grader=Checks("/app/validator.py", "validator", checks),
         oracle=Solution(_write(oracle), lambda f, s=oracle: {"/app/validator.py": s}),
         shortcuts={k: Solution(_write(v), lambda f, s=v: {"/app/validator.py": s}) for k, v in sorted(sources.items())},
-        params={"domain": dom, "fields": [f[0] for f in schema], "api": api, "n_checks": len(checks)},
+        params={"domain": dom, "fields": [f[0] for f in schema], "planted": planted, "shown_traps": shown_traps, "n_checks": len(checks)},
     )
 
 
 FAMILY = Family(
     name="write-validator",
-    version=1,
+    version=2,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases", "validation"),
     difficulties={
-        "easy": {
-            "api": "is_valid", "kinds": ["ident", "int", "enum"], "int_required": True, "unknown_rule": False, "not_object": False, "multi": False,
-            "examples": 8, "shortcuts": ["bool-is-int", "coerces-strings", "range-off-by-one", "re-match-prefix"],
-        },
-        "medium": {
-            "api": "validate", "kinds": ["ident", "int", "enum", "email"], "int_required": False, "unknown_rule": False, "not_object": False, "multi": True,
-            "examples": 6, "shortcuts": ["bool-is-int", "coerces-strings", "range-off-by-one", "re-match-prefix", "dollar-newline", "stops-at-first-error", "unsorted-codes"],
-        },
-        "hard": {
-            "api": "validate", "kinds": ["ident", "int", "enum", "email", "tags", "date"], "int_required": False, "unknown_rule": True, "not_object": True, "multi": True,
-            "examples": 4,
-            "shortcuts": [
-                "bool-is-int", "coerces-strings", "range-off-by-one", "re-match-prefix", "dollar-newline", "stops-at-first-error", "unsorted-codes",
-                "strptime-date", "fromisoformat-date", "unknown-fields-ignored", "assumes-object",
-            ],
-        },
+        "easy": {"unplanted": ["strptime-date", "fromisoformat-date"], "show_traps": "all", "plain_examples": 6},
+        "medium": {"unplanted": [], "show_traps": "half", "plain_examples": 5},
+        "hard": {"unplanted": [], "show_traps": "none", "plain_examples": 4},
     },
     build=build,
 )

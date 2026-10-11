@@ -1,24 +1,34 @@
 """slow-query: which query, among those that cannot use an index, spends the most total time
-in the query log? (the full-scan query behind the statement timeouts)
+in the query logs? (the full-scan query behind the statement timeouts)
+
+The instruction is the same at every difficulty: it names the query logs in `/app/db/`,
+including rotated, gzip-compressed ones, and asks for the total over all of them. The data
+per difficulty:
+
+- easy: one log, `query_log.csv`; no index traps;
+- medium: one log; the index traps below;
+- hard: the index traps, and `query_log.csv` plus the older, rotated `query_log.1.csv.gz`.
 
 Construction: `/app/db/queries.sql` lists single-table queries `SELECT ... FROM <table>
 WHERE <column> = ? ...`, `/app/db/table_stats.json` gives each table's row count, columns
-and indexes, and the query log (`/app/db/query_log.csv`, plus a gzipped rotated log on hard)
-has one row per execution: `ts,query_id,duration_ms,rows_scanned`. A query can use an index
-when an index on its own table has its WHERE column first; otherwise it scans the whole
-table (its rows_scanned is the table's row count). The target T is a full-scan query on a
+and indexes, and each query log has one row per execution:
+`ts,query_id,duration_ms,rows_scanned`. A query can use an index when an index on its own
+table has its WHERE column first; otherwise it scans the whole table (its rows_scanned is
+the table's row count). The target T is a full-scan query on a
 big table. Planted decoys, each beating T under one wrong method:
 
-- F, an indexed lookup with by far the most executions (most frequent query);
+- F, an indexed lookup with by far the most executions (most frequent query,
+  `most-frequent`);
 - H, an indexed query on a low-selectivity column with more total time than T (ignoring
-  whether the query can use an index);
+  whether the query can use an index, `ignore-index`);
 - S, a rare full scan with the single slowest execution (slowest occurrence instead of the
-  total);
+  total, `slowest-single`);
 - medium/hard: T's column is indexed on another table and is the second column of a
-  composite index on T's table, so treating "the column has an index somewhere" or "the
-  column is in an index" as usable excludes T;
+  composite index on T's table, so treating "the column has an index somewhere"
+  (`any-table`) or "the column is in an index" (`any-position`) as usable excludes T;
 - hard: full-scan decoys D_a and D_b whose time is all in one of the two log files, each
-  beating T within that file, so reading only one file fails.
+  beating T within that file, so reading only the plain log (`plain-only`) or only the
+  gzip-compressed one (`gzip-only`) fails.
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv-revenue.
 """
@@ -47,9 +57,9 @@ INSTRUCTION = """Since this morning our API has been hitting database statement 
 
 - `/app/db/queries.sql`: every query the application runs, each preceded by a `-- query: <id>` line.
 - `/app/db/table_stats.json`: each table's row count, columns and indexes (an index's `columns` are in index order).
-- {logs}: one CSV row per query execution during the incident (`ts,query_id,duration_ms,rows_scanned`).
+- The query logs: `/app/db/query_log.csv` and any older, rotated logs next to it (`query_log.<n>.csv.gz`, gzip-compressed). Each has one CSV row per query execution during the incident (`ts,query_id,duration_ms,rows_scanned`).
 
-A query can use an index only if an index **on the query's own table** has the query's `WHERE` column as its **first** column; otherwise it scans the whole table. Among the queries that cannot use an index, find the one with the largest **total** time, i.e. the sum of `duration_ms` over all of its executions in {which}.
+A query can use an index only if an index **on the query's own table** has the query's `WHERE` column as its **first** column; otherwise it scans the whole table. Among the queries that cannot use an index, find the one with the largest **total** time, i.e. the sum of `duration_ms` over all of its executions in all of the query logs.
 
 Write just that query's id (as written in `queries.sql`, nothing else) to `/app/answer.txt`.
 """
@@ -81,6 +91,8 @@ def answer(sql, stats, logs, mode):
     queries = parse_queries(sql)
     if mode == "plain-only":
         logs = [(n, t) for n, t in logs if not n.endswith(".gz")]
+    if mode == "gzip-only":
+        logs = [(n, t) for n, t in logs if n.endswith(".gz")]
     total, count, slowest = defaultdict(int), defaultdict(int), {}
     for _, text in logs:
         for r in csv.DictReader(io.StringIO(text)):
@@ -305,16 +317,15 @@ def build(ctx):
     full = sorted((v, q) for q, v in totals.items() if not _NS["uses_index"](stats, *queries[q], "oracle"))
     if full[-1][1] != target or (len(full) > 1 and full[-2][0] == full[-1][0]):
         raise Reject("the target is not the unique top full scan")
-    logs_desc = "`/app/db/query_log.csv`" if n_files == 1 else "`/app/db/query_log.csv` and the older, rotated `/app/db/query_log.1.csv.gz`"
-    which = "the log" if n_files == 1 else "both logs"
     shortcuts = {m: _solution(m) for m in ("most-frequent", "slowest-single", "ignore-index")}
     if p["index_traps"]:
         shortcuts["any-table"] = _solution("any-table")
         shortcuts["any-position"] = _solution("any-position")
     if n_files > 1:
         shortcuts["plain-only"] = _solution("plain-only")
+        shortcuts["gzip-only"] = _solution("gzip-only")
     return TaskSpec(
-        instruction=INSTRUCTION.format(logs=logs_desc, which=which),
+        instruction=INSTRUCTION,
         files=files,
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution("oracle"),
@@ -325,7 +336,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="slow-query",
-    version=1,
+    version=2,
     cluster="diagnosis",
     category="data",
     skills=("sql", "indexes", "logs", "aggregation", "diagnosis"),

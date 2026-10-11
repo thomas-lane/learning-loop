@@ -6,16 +6,36 @@ names and hidden files stay as they are. When several files in one folder map to
 name, they are ordered by their current names in byte order: the first gets the name, the
 others get `-2`, `-3`, ... before the extension. A file that already has the standard name
 takes part like any other. The grader is a FileTree over /app/docs: exactly the renamed files.
+The instruction is the same at every difficulty.
 
-Construction: every folder has collision groups, so renaming in a loop that overwrites
-(`mv -f`) loses files and one that refuses to overwrite (`mv -n`) leaves names unchanged. One
-group holds a file that already has the standard name and a spelling with a capital first
-letter, which sorts before it, so "add a suffix if the name is taken" numbers the wrong
-file. Names in a folder differ ignoring case, so rendering on a case-insensitive file system
-loses nothing. A hidden file whose name would change (`.DS_Store`) sits in every folder, so renaming
-hidden files fails. Medium/hard add folders whose names would change and whose files need
-renaming, so renaming folders too, or only the top level, fails. `build` redraws when a
-suffixed name would clash with another file's new name.
+Data per difficulty:
+
+- easy: one folder of 8 files (and a hidden one) with two collision groups of two, every
+  file in a group spelled differently from the standard name, so no file of a group already
+  has it;
+- medium: a top folder with groups of two and three, the first of which holds a file
+  already at the standard name, plus the subfolder `Old Drafts`; any other group may hold
+  such a file too;
+- hard: as medium, plus `Clients/` and `Clients/Acme_Corp`.
+
+Traps and the shortcut that checks each:
+
+- every folder except `Clients/` has collision groups, so renaming in a loop that overwrites (`overwrite`,
+  `mv -f`) loses files and one that refuses to overwrite (`no-clobber`, `mv -n`) leaves
+  names unchanged;
+- medium/hard: one top-level group holds a file that already has the standard name and a
+  spelling with a capital first letter, which sorts before it, so "add a suffix if the name
+  is taken" (`suffix-if-taken`) numbers the wrong file. On easy no group holds such a file,
+  so that loop is correct there and the shortcut is not declared;
+- a hidden file whose name would change (`.DS_Store`) sits in every folder, so renaming
+  hidden files (`include-hidden`) fails;
+- medium/hard: folders whose names would change hold files that need renaming, so renaming
+  folders too (`rename-folders`) or only the top level (`top-level-only`) fails.
+
+Names in a folder differ ignoring case, so rendering on a case-insensitive file system
+loses nothing. `build` redraws when a suffixed name would clash with another file's new name,
+two files have the same contents, or no file has an uppercase extension (so the extension
+always needs lowercasing somewhere).
 """
 
 from learning_loop.tasks.spec import Family, FileTree, Reject, Solution, TaskSpec, tree_entry
@@ -50,13 +70,8 @@ INSTRUCTION = """The files in `/app/docs/` and its subfolders have inconsistent 
 
 For example, `Project_Brief  v2.TXT` becomes `project-brief-v2.txt`. Each file stays in its folder, and folder names stay as they are. Hidden files (names starting with `.`) keep their names.
 
-Collisions: when several files in the same folder would get the same new name, order them by their current names in byte order (as `LC_ALL=C sort` orders them, so capital letters come before lowercase ones). The first gets the new name, and the others get `-2`, `-3`, ... inserted before the extension, in that order: `Draft A.txt` and `draft_a.txt` become `draft-a.txt` and `draft-a-2.txt`.{note} File contents must not change, and no file may be lost.
+Collisions: when several files in the same folder would get the same new name, order them by their current names in byte order (as `LC_ALL=C sort` orders them, so capital letters come before lowercase ones). The first gets the new name, and the others get `-2`, `-3`, ... inserted before the extension, in that order: `Draft A.txt` and `draft_a.txt` become `draft-a.txt` and `draft-a-2.txt`. A file that already has the standard name takes part in this ordering like any other. File contents must not change, and no file may be lost.
 """
-NOTES = {
-    "easy": " A file that already has the standard name takes part in this ordering like any other.",
-    "medium": " A file that already has the standard name takes part in this ordering like any other.",
-    "hard": "",
-}
 
 SOLVER = '''
 import re
@@ -218,7 +233,10 @@ def _text(rng):
     return "\n".join(f"{rng.choice(WORDS)} {rng.choice(WORDS)} {rng.randint(10, 99999)}" for _ in range(rng.randint(2, 6))) + "\n"
 
 
-def _folder_names(rng, folder, slugs, groups, singles, trap):
+def _folder_names(rng, folder, slugs, groups, singles, trap, existing):
+    """The file names of one folder. `existing`: a group may hold a file that already has the
+    standard name (with `trap`, the first group always does); otherwise every file of a group
+    is a spelling that differs from it."""
     names = []
     for k, size in enumerate(groups):
         slug, ext = slugs.pop(), rng.choice(EXTS)
@@ -230,7 +248,7 @@ def _folder_names(rng, folder, slugs, groups, singles, trap):
             first = slug.capitalize().replace(" ", rng.choice(SEPARATORS)) + "." + ext
             group = {std: std, first.lower(): first}
         while len(group) < size:
-            name = rng.choice([std, _variant(rng, slug, ext)])
+            name = rng.choice([std, _variant(rng, slug, ext)]) if existing else _variant(rng, slug, ext)
             group.setdefault(name.lower(), name)
         names += sorted(group.values())
     for _ in range(singles):
@@ -246,9 +264,11 @@ def build(ctx):
     slugs = rng.sample(SLUGS, sum(len(f["groups"]) + f["singles"] for f in p["folders"].values()))
     folders = {}
     for folder, spec in p["folders"].items():
-        folders[folder] = _folder_names(rng, folder, slugs, spec["groups"], spec["singles"], trap=folder == "")
+        folders[folder] = _folder_names(rng, folder, slugs, spec["groups"], spec["singles"], trap=p["existing"] and folder == "", existing=p["existing"])
         folders[folder].append(rng.choice(HIDDEN))
     docs = {_join(folder, name): _text(rng) for folder, names in folders.items() for name in names}
+    if not any(name.rpartition(".")[2].isupper() for names in folders.values() for name in names if not name.startswith(".")):
+        raise Reject("no file has an uppercase extension")
     if len({rel.lower() for rel in docs}) != len(docs):
         raise Reject("two paths differ only in letter case")
     if len(set(docs.values())) != len(docs):
@@ -261,14 +281,15 @@ def build(ctx):
     shortcuts = {
         "overwrite": Solution(OVERWRITE, lambda f: _result(f, _loop(f, _overwrite))),
         "no-clobber": Solution(NO_CLOBBER, lambda f: _result(f, _loop(f, _no_clobber))),
-        "suffix-if-taken": Solution(SUFFIX_IF_TAKEN, lambda f: _result(f, _loop(f, _suffix_if_taken))),
         "include-hidden": _py_solution("include-hidden"),
     }
+    if p["existing"]:
+        shortcuts["suffix-if-taken"] = Solution(SUFFIX_IF_TAKEN, lambda f: _result(f, _loop(f, _suffix_if_taken)))
     if len(folders) > 1:
         shortcuts["rename-folders"] = _py_solution("rename-folders")
         shortcuts["top-level-only"] = _py_solution("top-level-only")
     return TaskSpec(
-        instruction=INSTRUCTION.format(note=NOTES[ctx.difficulty]),
+        instruction=INSTRUCTION,
         files=files,
         grader=FileTree("/app/docs", {rel: tree_entry(text) for rel, text in sorted(final.items())}),
         oracle=_py_solution("oracle"),
@@ -279,14 +300,15 @@ def build(ctx):
 
 FAMILY = Family(
     name="bulk-rename",
-    version=1,
+    version=2,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "rename", "collisions"),
     difficulties={
-        "easy": {"folders": {"": {"groups": [2, 2], "singles": 4}}},
-        "medium": {"folders": {"": {"groups": [2, 3], "singles": 3}, "Old Drafts": {"groups": [2], "singles": 2}}},
+        "easy": {"existing": False, "folders": {"": {"groups": [2, 2], "singles": 4}}},
+        "medium": {"existing": True, "folders": {"": {"groups": [2, 3], "singles": 3}, "Old Drafts": {"groups": [2], "singles": 2}}},
         "hard": {
+            "existing": True,
             "folders": {
                 "": {"groups": [2, 3], "singles": 3},
                 "Old Drafts": {"groups": [2], "singles": 2},

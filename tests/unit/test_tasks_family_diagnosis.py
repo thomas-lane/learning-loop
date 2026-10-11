@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from learning_loop.core.config import REPO_ROOT
+from learning_loop.tasks.generate import file_bytes, generate_spec, grade_in_process
 from learning_loop.tasks.render import render
 
 MODULES = {
@@ -38,12 +39,36 @@ def _load(path: Path):
     spec = importlib.util.spec_from_file_location(f"_family_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.FAMILY
+    return module
 
 
-FAMILIES = {name: _load(path) for name, path in MODULES.items()}
+LOADED = {name: _load(path) for name, path in MODULES.items()}
+FAMILIES = {name: module.FAMILY for name, module in LOADED.items()}
 CASES = [(name, d) for name, fam in FAMILIES.items() for d in fam.difficulties]
 SEEDS = [1, 2, 3]
+
+
+def _instance_fields(name: str, spec) -> dict[str, str]:
+    """The instance values a family's INSTRUCTION template takes (none for most)."""
+    if name == "traceback-locate":
+        pkg = spec.params["package"]
+        return {"pkg": pkg, "job": LOADED[name].JOBS[pkg]}
+    if name == "import-cycle":
+        modules = LOADED[name]._sources(file_bytes(spec))
+        return {"pkg": spec.params["package"], "example": min(modules).split(".", 1)[1]}
+    return {}
+
+
+@pytest.mark.parametrize("name", list(MODULES))
+@pytest.mark.parametrize("seed", SEEDS)
+def test_instruction_is_the_same_at_every_difficulty(name, seed):
+    """Difficulty comes from the data alone: every level gets the module's one INSTRUCTION,
+    filled only with values drawn for the instance (package, job and module names)."""
+    module, fam = LOADED[name], FAMILIES[name]
+    for d in fam.difficulties:
+        spec = generate_spec(fam, d, seed).spec
+        fields = _instance_fields(name, spec)
+        assert spec.instruction == (module.INSTRUCTION.format(**fields) if fields else module.INSTRUCTION), (name, d)
 
 
 def _expected(d: Path):
@@ -77,9 +102,26 @@ def _tb_lines(text: str) -> list[str]:
     return out
 
 
-def _run(app: Path, pkg: str) -> subprocess.CompletedProcess:
+def _python312() -> str | None:
+    """A Python 3.12 interpreter (the task image's version), whose traceback layout, caret
+    lines included, the planted traceback reproduces; None when this host has none."""
+    if sys.version_info[:2] == (3, 12):
+        return sys.executable
+    if found := shutil.which("python3.12"):
+        return found
+    if uv := shutil.which("uv"):
+        r = subprocess.run([uv, "python", "find", "3.12"], capture_output=True, text=True, env={**os.environ, "UV_PYTHON_DOWNLOADS": "never"})
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return None
+
+
+PY312 = _python312()
+
+
+def _run(app: Path, pkg: str, python: str = sys.executable) -> subprocess.CompletedProcess:
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1", "LC_ALL": "C.UTF-8"}
-    return subprocess.run([sys.executable, "-B", "-m", f"{pkg}.main"], cwd=app, capture_output=True, text=True, env=env, timeout=60)
+    return subprocess.run([python, "-B", "-m", f"{pkg}.main"], cwd=app, capture_output=True, text=True, env=env, timeout=60)
 
 
 @pytest.mark.parametrize("difficulty", list(FAMILIES["traceback-locate"].difficulties))
@@ -90,10 +132,15 @@ def test_traceback_locate_traps(tmp_path, difficulty, seed):
     log = (app / "incident" / "traceback.txt").read_text()
     recorded = log[log.index("Traceback") : log.rindex("\n", 0, log.rindex("cron:")) + 1]
 
-    # The recorded traceback is what Python prints for this code.
+    # The recorded traceback is what Python prints for this code: exactly, caret lines
+    # included, under Python 3.12; without the version-specific runpy frames and carets under
+    # any other version.
     run = _run(app, pkg)
     assert run.returncode == 1
     assert _tb_lines(run.stderr.replace(str(app), "/app")) == _tb_lines(recorded)
+    if PY312:
+        run = _run(app, pkg, PY312)
+        assert run.stderr.replace(str(app.resolve()), "/app").replace(str(app), "/app") == recorded
 
     # The answer is a line of the package that holds the key, and is not a traceback frame.
     frames = [(m.group(1), int(m.group(2))) for ln in recorded.splitlines() if (m := _FRAME.match(ln))]
@@ -123,6 +170,47 @@ def test_traceback_locate_traps(tmp_path, difficulty, seed):
         assert len(hits) > 1 and hits[0] != (rel, expected["line"])
     if difficulty != "easy":
         assert params["active_profile"] != "prod"
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["traceback-locate"].difficulties))
+def test_traceback_locate_prints_python_312_carets(difficulty):
+    """Python 3.12 underlines the failing expression of a frame whose line holds more than that
+    expression; the planted traceback does too (the traps test compares it with a real run)."""
+    for seed in SEEDS:
+        tb = generate_spec(FAMILIES["traceback-locate"], difficulty, seed).spec.files["incident/traceback.txt"].splitlines()
+        source = next(i for i, ln in enumerate(tb) if ln.strip() in ("return int(value)", "return total // parts"))
+        assert tb[source + 1] in ("           ^^^^^^^^^^", "           ~~~~~~^^~~~~~~")
+        main = tb.index("    main()")
+        assert tb[main + 1].startswith("  File ")  # a whole-line call gets no carets
+
+
+def _overrides_with_bad_value(spec) -> list[str]:
+    """Profiles of the OVERRIDES entries that set the traceback's key to the run's bad value, in
+    file order, read from overrides.py with the stock ast module."""
+    pkg, key = spec.params["package"], spec.params["key"]
+    tree = ast.parse(spec.files[f"{pkg}/overrides.py"])
+    entries = next(n.value for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "OVERRIDES")
+    values = {p.value: {k.value: ast.literal_eval(v) for k, v in zip(d.keys, d.values)} for p, d in zip(entries.keys, entries.values)}
+    bad = values[spec.params["active_profile"]][key]
+    return [p for p, kv in values.items() if kv.get(key) == bad]
+
+
+def test_traceback_locate_hard_override_decoys_follow_no_fixed_rule():
+    """The override decoys are drawn from every other profile and listed in no fixed order, so
+    neither "skip dev's override" (a declared shortcut) nor a fixed position finds the answer
+    on every instance."""
+    fam = FAMILIES["traceback-locate"]
+    decoys, positions = Counter(), Counter()
+    for seed in range(20):
+        gen = generate_spec(fam, "hard", seed)
+        spec, active = gen.spec, gen.spec.params["active_profile"]
+        assert gen.shortcut_rewards["skip-dev"] < 1
+        bad = _overrides_with_bad_value(spec)
+        assert len(bad) == 3 and next(p for p in bad if p != "dev") != active
+        decoys.update(p for p in bad if p != active)
+        positions[bad.index(active)] += 1
+    assert set(decoys) >= {"dev", "prod"} and decoys["dev"] < 20
+    assert len(positions) > 1
 
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +273,14 @@ def test_slow_query_traps(tmp_path, difficulty, seed):
             assert _top(total([name], lambda q: q in full)) != expected, name
 
 
+def test_slow_query_hard_declares_reading_either_log_alone():
+    """Reading only the plain log and reading only the rotated gzip log are both checked
+    shortcuts on hard, where the time is split between the two."""
+    for seed in SEEDS:
+        rewards = generate_spec(FAMILIES["slow-query"], "hard", seed).shortcut_rewards
+        assert rewards["plain-only"] < 1 and rewards["gzip-only"] < 1
+
+
 # --------------------------------------------------------------------------- #
 # broken-symlinks: the real filesystem and a follow-until-it-exists walk of the log
 # --------------------------------------------------------------------------- #
@@ -237,6 +333,22 @@ def test_broken_symlinks_traps(tmp_path, difficulty, seed):
         assert any(not os.readlink(p).startswith("/") and "/" in k and posixpath.normpath(os.readlink(p)) != target_of(p) for k, p in broken.items())
     if difficulty == "hard":
         assert any(follow(target_of(p), dirs=False) != expected[k] for k, p in broken.items()), "a directory rename matters"
+    else:
+        assert not any(kind == "dir" for kind, *_ in renames)
+    longest = max(len([1 for kind, old, _, _ in renames if kind == "file" and old in _chain(renames, v)]) for v in expected.values())
+    assert longest <= FAMILIES["broken-symlinks"].difficulties[difficulty]["max_chain"]
+
+
+def _chain(renames, final: str) -> set[str]:
+    """Every earlier name of the file `final` under the log's file renames."""
+    names, grew = {final}, True
+    while grew:
+        grew = False
+        for kind, old, _, new in renames:
+            if kind == "file" and new in names and old not in names:
+                names.add(old)
+                grew = True
+    return names
 
 
 # --------------------------------------------------------------------------- #
@@ -317,6 +429,31 @@ def test_import_cycle_traps(tmp_path, difficulty, seed):
         assert _cycles(_import_graph(mods, top_level_only=True)) == set()
 
 
+@pytest.mark.parametrize("difficulty", list(FAMILIES["import-cycle"].difficulties))
+def test_import_cycle_instruction_lists_every_form_the_data_uses(difficulty):
+    """Each import statement, with the package written as in the instruction, its module and
+    symbol names replaced by the instruction's `b`/`name`/`x` and an absolute subpackage path
+    shortened to the package (the instruction says those forms take a subpackage too), is one
+    of the instruction's examples."""
+    for seed in SEEDS:
+        spec = generate_spec(FAMILIES["import-cycle"], difficulty, seed).spec
+        pkg = spec.params["package"]
+        mods = LOADED["import-cycle"]._sources(file_bytes(spec))
+        leaves = "|".join(sorted({m.rsplit(".", 1)[1] for m in mods}))
+        subs = "|".join(sorted({m.split(".")[1] for m in mods if m.count(".") == 2}) or ["-"])
+        for src in mods.values():
+            for node in ast.walk(ast.parse(src)):
+                if not isinstance(node, (ast.Import, ast.ImportFrom)) or getattr(node, "module", None) == "__future__":
+                    continue
+                form = ast.unparse(node)
+                form = re.sub(r"\bload_\w+", "name", form)
+                form = re.sub(r" as \w+", " as x", form)
+                form = re.sub(rf"\b(?:{subs})\b", "sub", form)
+                form = re.sub(rf"\b(?:{leaves})\b", "b", form)
+                form = re.sub(rf"\b{pkg}\.sub\b", pkg, form)
+                assert f"`{form}`" in spec.instruction, (difficulty, ast.unparse(node), form)
+
+
 # --------------------------------------------------------------------------- #
 # config-drift
 # --------------------------------------------------------------------------- #
@@ -355,3 +492,45 @@ def test_config_drift_traps(tmp_path, difficulty, seed):
     if difficulty == "hard":
         assert any(str(v["baseline"]) == str(v["host"]) for v in found)
         assert any(hosts[n].parent != cfg / "hosts" for n in expected)
+
+
+def _one_sided_objects(base, host, prefix=""):
+    """(dotted path, side) of every object present on only one side."""
+    out = []
+    for k in sorted(set(base) | set(host)):
+        b, h = base.get(k), host.get(k)
+        if isinstance(b, dict) and isinstance(h, dict):
+            out += _one_sided_objects(b, h, prefix + k + ".")
+        elif isinstance(b, dict) or isinstance(h, dict):
+            out.append((prefix + k, "baseline" if isinstance(b, dict) else "host"))
+    return out
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["config-drift"].difficulties))
+def test_config_drift_one_sided_objects_by_level(difficulty):
+    """An object on only one side is a per-level property, not chance: never on easy/medium,
+    and on hard both an object the host lacks and a section only the host has, which makes
+    reporting the object as one entry (a declared shortcut) fail."""
+    for seed in range(8):
+        gen = generate_spec(FAMILIES["config-drift"], difficulty, seed)
+        files = {k: json.loads(v) for k, v in gen.spec.files.items()}
+        base = files.pop("configs/baseline.json")
+        sides = {side for host in files.values() for _, side in _one_sided_objects(base, host)}
+        if difficulty == "hard":
+            assert sides == {"baseline", "host"}
+            assert gen.shortcut_rewards["whole-object"] < 1
+        else:
+            assert sides == set() and "whole-object" not in gen.shortcut_rewards
+
+
+def test_config_drift_compares_numbers_by_value():
+    """`1.0` for a baseline `1` is the same JSON number, so an answer that writes integers as
+    floats is graded correct."""
+    rewritten = 0
+    for d in FAMILIES["config-drift"].difficulties:
+        for seed in SEEDS:
+            spec = generate_spec(FAMILIES["config-drift"], d, seed).spec
+            floats = json.dumps(json.loads(json.dumps(spec.grader.expected), parse_int=float))
+            rewritten += floats != json.dumps(spec.grader.expected)
+            assert grade_in_process(spec, file_bytes(spec), {"/app/answer.json": floats}) == 1.0
+    assert rewritten

@@ -1,13 +1,24 @@
 """import-cycle: find the one import cycle among a package's modules and report it in a
 canonical rotation.
 
+The instruction is the same at every difficulty: it lists every import form any level uses
+and says that the package may have subpackages and that imports inside functions count. The
+data per difficulty:
+
+- easy: no subpackages, a 3-module cycle, the forms `import a.b`, `from a.b import name` and
+  `from a import b`, and fake imports in comments;
+- medium: more modules, the forms `import a.b as x`, `import os, a.b`, `from .b import name`
+  and `from . import b` too, and fake imports in string constants too;
+- hard: more modules, in subpackages too (so imports also take forms such as
+  `from a.sub import b`, `from .sub.b import name`, `from .. import b` and
+  `from ..sub import b`), a 4-module cycle with an import inside a function, and fake
+  imports in docstrings too.
+
 Construction: a package `/app/<pkg>/` (with subpackages on hard). The import graph is a
 random DAG over "units" (the modules outside the cycle, and the cycle as one unit) plus one
 simple cycle of 3 (easy/medium) or 4 (hard) modules, so exactly one cycle exists. The module
 whose name sorts first is never in the cycle and imports into it. Each import is written in
-one of several forms: `import a.b`, `from a.b import name`, `from a import b`, and on
-medium/hard `import a.b as x`, `import os, a.b` and relative forms (`from .b import name`,
-`from . import b`, `from ..sub import b`); hard puts one import inside a function. Fake
+one of the forms above; hard puts one import of the cycle inside a function. Fake
 imports in comments, docstrings and string constants point "upward" in the DAG, so a
 reader that counts them sees extra cycles.
 
@@ -35,8 +46,8 @@ SUBPACKAGES = ["api", "core", "workers"]
 
 INSTRUCTION = """The `{pkg}` package in `/app/{pkg}/` has a circular import that we need to break. Find the import cycle among its modules. Exactly one cycle exists.
 
-- The modules are the `.py` files in the package{subs}, named by their dotted names (e.g. `{pkg}.{example}`). The `__init__.py` files are empty and are not modules for this purpose.
-- Module A imports module B when A has an import statement that imports B: `import {pkg}.b`, `from {pkg}.b import name`, `from {pkg} import b`{rel}. Import statements inside functions count; text in comments and strings does not.
+- The modules are the `.py` files in the package and in any of its subpackages, named by their dotted names (e.g. `{pkg}.{example}`). The `__init__.py` files are empty and are not modules for this purpose.
+- Module A imports module B when A has an import statement that imports B, in any form: absolute (`import {pkg}.b`, `import {pkg}.b as x`, `import os, {pkg}.b`, `from {pkg}.b import name`, `from {pkg} import b`, and the same with a subpackage, e.g. `from {pkg}.sub import b`) or relative (`from .b import name`, `from . import b`, `from .sub import b`, `from .sub.b import name`, `from ..b import name`, `from .. import b`, `from ..sub import b`, `from ..sub.b import name`). Import statements inside functions count; text in comments and strings does not.
 
 Write the cycle to `/app/answer.json` as a JSON list of dotted module names. Start with the name that sorts first (plain string comparison), then list the modules in import order, so that each module imports the next one and the last imports the first. Do not repeat the first module at the end.
 """
@@ -338,16 +349,8 @@ def build(ctx):
     if "function" in forms:
         names.append("top-level-only")
     shortcuts = {n: _solution(n, pkg) for n in names}
-    rel = ""
-    if "relative-mod" in forms:
-        rel = ", or the relative forms (`from .b import name`, `from . import b`" + (", `from ..sub import b`" if p["subpackages"] else "") + ")"
     return TaskSpec(
-        instruction=INSTRUCTION.format(
-            pkg=pkg,
-            subs=" and its subpackages" if p["subpackages"] else "",
-            example=min(mods).split(".", 1)[1],
-            rel=rel,
-        ),
+        instruction=INSTRUCTION.format(pkg=pkg, example=min(mods).split(".", 1)[1]),
         files=files,
         grader=ParsedAnswer("/app/answer.json", "json", expected),
         oracle=_solution("oracle", pkg),
@@ -358,7 +361,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="import-cycle",
-    version=1,
+    version=2,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "imports", "graphs", "code-reading", "diagnosis"),

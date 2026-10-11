@@ -1,26 +1,44 @@
 """traceback-locate: a nightly job crashed; from its traceback and source, name the line that
 set the bad setting value the run used (not the line that raised).
 
+The instruction is the same at every difficulty: it says that a setting can appear in several
+places (several profiles, or overrides applied on top of a profile) and that the answer is
+the entry whose value the run used. The data per difficulty:
+
+- easy: profiles dev, staging and prod; the active profile (staging or prod) is a literal in
+  `main.py`; the error is a ValueError;
+- medium: profiles dev, test, staging and prod; the active profile (test or staging) is
+  imported from `deploy.py`, which also mentions an older profile in a comment; a pipeline
+  module adds a frame; the error can also be a ZeroDivisionError;
+- hard: medium's set-up plus `overrides.py`, whose entries `load_settings` applies on top of
+  the profile, and a worker that re-raises the error as a RuntimeError.
+
 Construction: a small package `/app/<pkg>/` started with `python3 -m <pkg>.main`. The job
 loads a settings profile and hands it down a call chain to a consumer that reads one key,
 `settings["<key>"]`, and passes it to a helper in `util.py` that raises: `int(value)` on a
 malformed string such as "30s" or "1,000" (ValueError, whose message shows the literal), or
-`total // parts` on 0 (ZeroDivisionError, medium/hard only, whose message shows nothing).
-The traceback in `/app/incident/traceback.txt` is exactly what Python prints for that code
-(the unit test runs the package and compares). The answer is the dictionary entry that holds
-the value the run used: on easy/medium the active profile's entry in `settings.py`; on hard
-the active profile's entry in `overrides.py`, which `load_settings` applies on top of a
-profile that has a good value. The active profile is a literal in `main.py` on easy and is
-imported from `deploy.py` (which also mentions an older profile in a comment) on
-medium/hard; it is never `prod`.
+`total // parts` on 0 (ZeroDivisionError, whose message shows nothing). The traceback in
+`/app/incident/traceback.txt` is what Python 3.12 (the task image's Python) prints for that
+code, caret lines included (the unit test runs the package and compares). The answer is the
+dictionary entry that holds the value the run used: on easy/medium the active profile's
+entry in `settings.py`; on hard the active profile's entry in `overrides.py`, applied on top
+of a profile entry that has a good value.
 
-Traps: the root-cause line is never in the traceback, so reporting the last frame, the first
-frame in the package's own code or the frame that read the setting fails. The same bad
-literal sits in other, unused profiles (and on hard in another profile's overrides) before
-the real one, so taking the first `grep` hit of the literal fails. Medium/hard: assuming the
-`prod` profile fails. Hard: the worker re-raises the error as a RuntimeError, so the
-traceback has two sections and its last frame is the re-raise; ignoring the overrides and
-reporting the profile's own entry fails.
+Traps, by construction or checked (each a declared shortcut where it applies):
+
+- the root-cause line is never in the traceback, so reporting the last frame
+  (`last-frame`), the first frame in the package's own code (`first-app-frame`) or the frame
+  that read the setting (`caller-frame`) fails;
+- the bad value also sits in one or two other, unused profiles (any but the active one);
+  on easy/medium one of them comes before the active profile in the file, so the first
+  `grep` hit of the literal (`grep-first`, ValueError only) and the first entry of the key
+  with the bad value (`first-bad`, overrides first) fail;
+- medium/hard: assuming the `prod` profile fails (`assume-prod`);
+- hard: the traceback has two sections and its last frame is the re-raise; ignoring the
+  overrides and reporting the profile's own entry fails (`profile-line`); two other
+  profiles' overrides set the same bad value, the overrides are listed in no fixed order, and
+  the first override with the bad value that is not dev's is never the active one, so
+  skipping dev's override and taking the next fails (`skip-dev`).
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode, as in
 csv-revenue, so the shell and model forms cannot drift apart.
@@ -50,7 +68,7 @@ NOISE_MODULES = {
 
 INSTRUCTION = """Last night's {job} job crashed. Its log, with the Python traceback, is in `/app/incident/traceback.txt`. The job is the `{pkg}` package in `/app/{pkg}/`, started with `cd /app && python3 -m {pkg}.main`.
 
-The line that raised the exception is correct: it was handed a bad setting value. Find the line of source code that set the value this run actually used, i.e. the dictionary entry you would have to change to fix the crash.{extra}
+The line that raised the exception is correct: it was handed a bad setting value. Find the line of source code that set the value this run actually used, i.e. the dictionary entry you would have to change to fix the crash. The same setting can appear in several places (for example in several settings profiles, or in overrides applied on top of a profile); the answer is the one entry whose value this run used.
 
 Write a JSON object to `/app/answer.json` with two keys: `"file"`, the absolute path of that source file as it would appear in a traceback, and `"line"`, its line number as an integer. For example: `{{"file": "/app/{pkg}/example.py", "line": 12}}`.
 """
@@ -94,18 +112,28 @@ def _const(sources, module, name, depth=0):
     return None
 
 
-def _entry(sources, module, var, profile, key):
-    """Line of `var[profile][key]` in `module`, where `var` is a dict literal of dict literals."""
+def _entries(sources, module, var, key):
+    """[(profile, value, line)] of every `var[profile][key]` in `module`, in file order, where
+    `var` is a dict literal of dict literals with constant values."""
     if module not in sources:
-        return None
+        return []
+    out = []
     for node in ast.parse(sources[module]).body:
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) and any(isinstance(t, ast.Name) and t.id == var for t in node.targets):
             for k, v in zip(node.value.keys, node.value.values):
-                if isinstance(k, ast.Constant) and k.value == profile and isinstance(v, ast.Dict):
-                    for k2 in v.keys:
-                        if isinstance(k2, ast.Constant) and k2.value == key:
-                            return k2.lineno
-    return None
+                if isinstance(k, ast.Constant) and isinstance(v, ast.Dict):
+                    for k2, v2 in zip(v.keys, v.values):
+                        if isinstance(k2, ast.Constant) and k2.value == key and isinstance(v2, ast.Constant):
+                            out.append((k.value, v2.value, k2.lineno))
+    return out
+
+
+def _bad_value(tb):
+    """The bad value the error message shows: the int() literal, or 0 for a division by zero."""
+    m = re.search(r"invalid literal for int\(\) with base 10: '(.*)'", tb)
+    if m:
+        return m.group(1)
+    return 0 if "ZeroDivisionError" in tb else None
 
 
 def answer(tb, sources, mode):
@@ -136,13 +164,21 @@ def answer(tb, sources, mode):
         if k:
             key = k.group(1)
     pkg = next(f for f in frames if f[0].startswith("/app/"))[0].split("/")[2]
+    places = [("overrides", "OVERRIDES"), ("settings", "PROFILES")]
+    if mode in ("first-bad", "skip-dev"):
+        # The first entry that holds the bad value, overrides first (skip-dev: ignoring dev's).
+        bad = _bad_value(tb)
+        for module, var in places:
+            for prof, value, line in _entries(sources, pkg + "." + module, var, key):
+                if value == bad and not (mode == "skip-dev" and prof == "dev"):
+                    return ("/app/" + pkg + "/" + module + ".py", line)
+        return None
     profile = "prod" if mode == "assume-prod" else _const(sources, pkg + ".main", "PROFILE")
-    if mode != "profile-line":
-        line = _entry(sources, pkg + ".overrides", "OVERRIDES", profile, key)
-        if line is not None:
-            return ("/app/" + pkg + "/overrides.py", line)
-    line = _entry(sources, pkg + ".settings", "PROFILES", profile, key)
-    return None if line is None else ("/app/" + pkg + "/settings.py", line)
+    for module, var in places[1:] if mode == "profile-line" else places:
+        for prof, _, line in _entries(sources, pkg + "." + module, var, key):
+            if prof == profile:
+                return ("/app/" + pkg + "/" + module + ".py", line)
+    return None
 '''
 
 _SHELL = """python3 - <<'PY'
@@ -179,8 +215,23 @@ def _solution(mode):
 def _line(text, needle):
     """1-based number of the only line of `text` that contains `needle`."""
     hits = [i for i, ln in enumerate(text.splitlines(), 1) if needle in ln]
-    assert len(hits) == 1, (needle, hits)
+    if len(hits) != 1:
+        raise Reject(f"{needle.strip()!r} is on {len(hits)} lines")
     return hits[0]
+
+
+def _carets(source, expr):
+    """The caret line Python 3.12 prints under the source line `source` (stripped) when the
+    failing expression `expr` covers only part of it: `^` under a call, and for `a // b`
+    `~` under the operands (with their spaces) and `^` under the operator. None when `expr`
+    is the whole line, which Python prints without carets."""
+    if expr == source:
+        return None
+    pad = " " * (4 + source.index(expr))
+    if " // " in expr:
+        left, right = expr.split(" // ")
+        return pad + "~" * (len(left) + 1) + "^^" + "~" * (len(right) + 1)
+    return pad + "^" * len(expr)
 
 
 def _entry_line(text, profile, key):
@@ -221,39 +272,49 @@ def build(ctx):
         bad = f"{good // 60}m" if fmt == "minutes" else fmt.format(good)
     bad_src = repr(bad).replace("'", '"')
 
-    # Profiles: every key with a good value; the bad literal in the active profile (easy/medium)
-    # or in its overrides (hard), and in decoy profiles listed before it.
+    # Profiles: every key with a good value. The bad value sits in 1-2 decoy profiles and, on
+    # easy/medium, in the active profile, after a decoy in file order; on hard the active
+    # profile's own entry is good and the bad value is in its override.
     keys = sorted(INT_KEYS) + [ZERO_KEY, "log_level"]
     rng.shuffle(keys)
-    decoys = set(rng.sample(others, p["decoys"]))
-    if "dev" in others:
-        decoys.add("dev")  # first in the file, so the first grep hit is a decoy
-    values = {}
-    for prof in profiles:
-        kv = []
-        for k in keys:
-            if k == "log_level":
-                v = repr(rng.choice(LOG_LEVELS)).replace("'", '"')
-            elif k == ZERO_KEY:
-                v = str(rng.randint(2, 8))
-            else:
-                v = str(rng.choice(INT_KEYS[k][4]))
-            kv.append((k, v))
-        values[prof] = kv
+
+    def good_value(k):
+        if k == "log_level":
+            return repr(rng.choice(LOG_LEVELS)).replace("'", '"')
+        if k == ZERO_KEY:
+            return str(rng.randint(2, 8))
+        return str(rng.choice(INT_KEYS[k][4]))
+
+    values = {prof: [(k, good_value(k)) for k in keys] for prof in profiles}
+    decoys = rng.sample(others, rng.randint(*p["decoys"]))
+    bad_profiles = set(decoys) if p["overrides"] else set(decoys) | {active}
+    for prof in bad_profiles:
+        values[prof] = [(k, bad_src if k == key else v) for k, v in values[prof]]
+    if min(bad_profiles, key=profiles.index) == active:
+        raise Reject("the first profile with the bad value is the active one")
     overrides = None
     if p["overrides"]:
-        for prof in decoys:
-            values[prof] = [(k, bad_src if k == key else v) for k, v in values[prof]]
-        decoy = sorted(decoys, key=profiles.index)[0]
-        extra_key = rng.choice([k for k in sorted(INT_KEYS) if k != key])
-        ov_active = [(key, bad_src), (extra_key, str(rng.choice(INT_KEYS[extra_key][4])))]
+        # The active profile's override, decoy overrides with the same bad value and
+        # perhaps an unrelated one, in a random order in which the first override with the
+        # bad value that is not dev's is a decoy.
+        def other_entry():
+            k = rng.choice([k for k in sorted(INT_KEYS) if k != key])
+            return (k, good_value(k))
+
+        ov_active = [(key, bad_src), other_entry()]
         rng.shuffle(ov_active)
-        overrides = [(decoy, [(key, bad_src)]), (active, ov_active)]
-        if "prod" not in (decoy, active):
-            overrides.append(("prod", [(extra_key, str(rng.choice(INT_KEYS[extra_key][4])))]))
-    else:
-        for prof in decoys | {active}:
-            values[prof] = [(k, bad_src if k == key else v) for k, v in values[prof]]
+        overrides = [(active, ov_active)]
+        ov_decoys = rng.sample(others, p["override_decoys"])
+        for prof in ov_decoys:
+            kv = [(key, bad_src)] + ([other_entry()] if rng.random() < 0.5 else [])
+            rng.shuffle(kv)
+            overrides.append((prof, kv))
+        rest = [x for x in others if x not in ov_decoys]
+        if rest and rng.random() < 0.7:
+            overrides.append((rng.choice(rest), [other_entry()]))
+        rng.shuffle(overrides)
+        if next(prof for prof, kv in overrides if prof != "dev" and (key, bad_src) in kv) == active:
+            raise Reject("the first override with the bad value that is not dev's is the active one")
 
     files = {}
     P = f"/app/{pkg}"
@@ -319,16 +380,19 @@ def build(ctx):
     for name in rng.sample(sorted(NOISE_MODULES), p["noise"]):
         files[f"{pkg}/{name}.py"] = NOISE_MODULES[name].format()
 
-    # The traceback Python prints for this code.
-    def fr(module, func, needle):
+    # The traceback Python 3.12 prints for this code: each frame's source line, with carets
+    # under the failing expression when it is only part of the line.
+    def fr(module, func, needle, expr=None):
         text = files[f"{pkg}/{module}.py"]
-        return f'  File "{P}/{module}.py", line {_line(text, needle)}, in {func}\n    {needle.strip()}\n'
+        source = needle.strip()
+        carets = _carets(source, expr or source)
+        return f'  File "{P}/{module}.py", line {_line(text, needle)}, in {func}\n    {source}\n' + (carets + "\n" if carets else "")
 
-    inner = [fr("worker", "run", f"    resource = {first_call}(settings)")]
+    inner = [fr("worker", "run", f"    resource = {first_call}(settings)", f"{first_call}(settings)")]
     if p["pipeline"]:
-        inner.append(fr("pipeline", "prepare", f"    resource = {fn}(settings)"))
-    inner.append(fr(mod, fn, f"    {call}"))
-    inner.append(fr("util", helper, "    return total // parts" if zero else "    return int(value)"))
+        inner.append(fr("pipeline", "prepare", f"    resource = {fn}(settings)", f"{fn}(settings)"))
+    inner.append(fr(mod, fn, f"    {call}", call.split(" = ", 1)[1]))
+    inner.append(fr("util", helper, "    return total // parts", "total // parts") if zero else fr("util", helper, "    return int(value)", "int(value)"))
     error = "ZeroDivisionError: integer division or modulo by zero" if zero else f"ValueError: invalid literal for int() with base 10: {bad!r}"
     outer = [
         '  File "<frozen runpy>", line 198, in _run_module_as_main\n',
@@ -349,19 +413,19 @@ def build(ctx):
     mod_path = "overrides" if overrides else "settings"
     target = (f"{P}/{mod_path}.py", _entry_line(files[f"{pkg}/{mod_path}.py"], active, key))
 
-    shortcuts = {m: _solution(m) for m in ("last-frame", "first-app-frame", "caller-frame")}
+    shortcuts = {m: _solution(m) for m in ("last-frame", "first-app-frame", "caller-frame", "first-bad")}
     if not zero:
         shortcuts["grep-first"] = _solution("grep-first")
     if p["deploy"]:
         shortcuts["assume-prod"] = _solution("assume-prod")
     if overrides:
         shortcuts["profile-line"] = _solution("profile-line")
+        shortcuts["skip-dev"] = _solution("skip-dev")
     oracle = _solution("oracle")
     if oracle.model({k: v.encode() for k, v in files.items()}) != {"/app/answer.json": '{"file": "%s", "line": %d}\n' % target}:
         raise Reject("the oracle does not find the planted line")
-    extra = " The settings may be overridden in more than one place." if overrides else ""
     return TaskSpec(
-        instruction=INSTRUCTION.format(job=job, pkg=pkg, extra=extra),
+        instruction=INSTRUCTION.format(job=job, pkg=pkg),
         files=files,
         grader=ParsedAnswer("/app/answer.json", "json", {"file": target[0], "line": target[1]}),
         oracle=oracle,
@@ -372,14 +436,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="traceback-locate",
-    version=1,
+    version=2,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "tracebacks", "code-reading", "diagnosis"),
     difficulties={
-        "easy": {"profiles": ["dev", "staging", "prod"], "active_choices": ["staging", "prod"], "decoys": 0, "deploy": False, "pipeline": False, "overrides": False, "reraise": False, "zero_kind": False, "noise": 0},
-        "medium": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": 1, "deploy": True, "pipeline": True, "overrides": False, "reraise": False, "zero_kind": True, "noise": 1},
-        "hard": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": 1, "deploy": True, "pipeline": True, "overrides": True, "reraise": True, "zero_kind": True, "noise": 3},
+        "easy": {"profiles": ["dev", "staging", "prod"], "active_choices": ["staging", "prod"], "decoys": [1, 2], "deploy": False, "pipeline": False, "overrides": False, "reraise": False, "zero_kind": False, "noise": 0},
+        "medium": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": [1, 2], "deploy": True, "pipeline": True, "overrides": False, "reraise": False, "zero_kind": True, "noise": 1},
+        "hard": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": [1, 2], "override_decoys": 2, "deploy": True, "pipeline": True, "overrides": True, "reraise": True, "zero_kind": True, "noise": 3},
     },
     build=build,
 )

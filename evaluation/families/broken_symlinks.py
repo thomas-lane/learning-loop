@@ -1,6 +1,18 @@
 """broken-symlinks: find the broken symlinks under /app/srv and the existing file each one
 should point to now, following the rename log.
 
+The instruction is the same at every difficulty: it describes file and directory renames and
+says that renaming a directory moves everything inside it. The data per difficulty:
+
+- easy: each broken link's file was renamed once; links are relative and sit in `/app/srv`
+  and `www/`;
+- medium: one more broken link, files renamed up to twice, links absolute at random, and
+  links also in `www/static/` (relative targets with `../../`);
+- hard: more directories, files and links, files renamed up to three times, a directory
+  rename, and links also in `current/` and `etc/app/`.
+
+`FAMILY.difficulties` holds the exact counts.
+
 Construction: a deployment tree of files in `/app/srv/` and symlinks (`TaskSpec.symlinks`)
 to some of them, relative or absolute. A history of renames, oldest first, is written to
 `/app/renames.log` (`<timestamp> <file|dir> <old> -> <new>`, paths relative to /app/srv).
@@ -11,8 +23,8 @@ history, so the replay is unambiguous. Unrelated renames are mixed in.
 Traps, by construction: at least one broken link sits in a subdirectory (checking only the
 top level fails, e.g. `find -maxdepth 1 -xtype l`), working links exist (reporting every
 link fails), and the raw link text never names the intended file (reporting the dangling
-target fails). Medium/hard: some files were renamed two or three times (following one
-rename fails), and some relative targets start with `../` from a subdirectory (resolving a
+target fails). Medium/hard: some files were renamed more than once (following one rename
+fails), and some relative targets start with `../` from a subdirectory (resolving a
 relative target from /app/srv instead of the link's directory fails). Hard: a directory
 rename moved a linked file, and the file was renamed again afterwards (ignoring directory
 renames fails).
@@ -41,11 +53,11 @@ LINK_DIRS = ["", "www", "www/static", "current", "etc/app"]
 SUFFIXES = ["-old", "-v1", "-v2", "-2025", "-draft", "-bak", "-prev"]
 OLD_STEMS = ["main", "default", "base", "legacy", "current", "primary", "common", "core", "latest", "stable", "local"]
 
-INSTRUCTION = """The deployment tree `/app/srv/` uses symlinks to point at shared files, and some of them broke when files{dirs} were renamed. Every rename is recorded in `/app/renames.log`, oldest first, one per line: `<timestamp> <file|dir> <old path> -> <new path>`, with paths relative to `/app/srv`.{dir_rule}
+INSTRUCTION = """The deployment tree `/app/srv/` uses symlinks to point at shared files, and some of them broke when files or directories were renamed. Every rename is recorded in `/app/renames.log`, oldest first, one per line: `<timestamp> <file|dir> <old path> -> <new path>`, with paths relative to `/app/srv`. Renaming a directory moves everything inside it.
 
 Find every broken symlink under `/app/srv/`, at any depth, and the existing file it should point to now: take the path the link points to (a relative target is relative to the link's own directory) and follow the renames in the log to the file that path became.
 
-Write a JSON object to `/app/answer.json` that maps each broken symlink's path to that file's path, both relative to `/app/srv` (for example `{{"site/a.png": "media/b.png"}}`). Leave out symlinks that work.
+Write a JSON object to `/app/answer.json` that maps each broken symlink's path to that file's path, both relative to `/app/srv` (for example `{"site/a.png": "media/b.png"}`). Leave out symlinks that work.
 """
 
 SOLVER = r'''
@@ -275,10 +287,7 @@ def build(ctx):
     if dir_renamed:
         shortcuts["file-only"] = _solution("file-only", links)
     return TaskSpec(
-        instruction=INSTRUCTION.format(
-            dirs=" and directories" if dir_renamed else "",
-            dir_rule=" Renaming a directory moves everything inside it." if dir_renamed else "",
-        ),
+        instruction=INSTRUCTION,
         files=files,
         symlinks=links,
         grader=ParsedAnswer("/app/answer.json", "json", expected),
@@ -290,14 +299,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="broken-symlinks",
-    version=1,
+    version=2,
     cluster="diagnosis",
     category="shell",
     skills=("shell", "symlinks", "filesystem", "diagnosis"),
     difficulties={
         "easy": {"dirs": 3, "broken": 2, "working": 2, "max_chain": 1, "noise": 1, "dir_rename": False, "absolute_rate": 0.0, "link_dirs": ["", "www"]},
-        "medium": {"dirs": 4, "broken": 4, "working": 3, "max_chain": 3, "noise": 2, "dir_rename": False, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static", "current"]},
-        "hard": {"dirs": 5, "broken": 5, "working": 4, "max_chain": 3, "noise": 3, "dir_rename": True, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static", "current", "etc/app"]},
+        "medium": {"dirs": 3, "broken": 3, "working": 2, "max_chain": 2, "noise": 2, "dir_rename": False, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static"]},
+        "hard": {"dirs": 5, "broken": 4, "working": 4, "max_chain": 3, "noise": 3, "dir_rename": True, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static", "current", "etc/app"]},
     },
     build=build,
 )

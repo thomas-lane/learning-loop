@@ -3,25 +3,31 @@
 
 `/app/paging.py` holds 4 / 5 / 6 small functions (page count, slice bounds, the page of an
 item, an "Items 11-20 of 45" label; medium adds a window of page links, hard a page dict),
-and 1 / 2 / 4 of them carry a bug from a catalog of classic pagination mistakes. The visible
-tests in `/app/test_paging.py` expose all / half / a quarter of the bugs; a function with a
-bug no visible test exposes gets no visible test. Hidden checks use fresh seed-specific
-inputs and always include the boundaries: an exactly full and a partly filled last page, zero
-items, the first page, an item index on a page boundary and link windows at either end.
+and 1 / 2 / 4 of them carry a bug from a catalog of classic pagination mistakes. Each
+function's bug is drawn uniformly from its catalog entries. The instruction is the same at
+every difficulty apart from the function list: some visible tests fail, and they may not
+cover every bug.
+
+`/app/test_paging.py` holds two visible tests per function, of different kinds and at least
+one of them not an error check, so neither the tested functions nor their number of tests
+say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
+test of that function fails because of its bug, both with that bug alone and with every bug
+in place. Every other function's tests pass on the module as given; for a function with a
+*hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
+only the hidden bugs are left. Hidden checks use fresh seed-specific inputs (never a visible
+test's) and always include the boundaries: an exactly full and a partly filled last page,
+zero items, the first page, an item index on a page boundary and link windows at either end.
 
 Traps, each declared as a shortcut that must fail:
-- `visible-bugs-only` (when some bug has no visible test): fix only the bugs the visible
-  tests expose;
-- `hardcode-visible`: return the visible tests' expected values for their exact inputs and
-  keep the buggy code for everything else;
-- `wrong-fix-<function>`: every bug fixed correctly except one, which gets a plausible wrong
-  fix from the catalog (e.g. `total // per_page + 1` for a floor-divided page count, wrong for
-  an exactly full last page and for zero items).
+- `visible-bugs-only` (when some bug is hidden): fix only the bugs the visible tests expose;
+- `wrong-fix-<function>`, for every bug: every bug fixed correctly except this one, which
+  gets a plausible wrong fix from the catalog (e.g. `total // per_page + 1` for a
+  floor-divided page count, wrong for an exactly full last page and for zero items;
+  catching `ValueError` to return "No items", which also hides the error for a page past
+  the end).
 
 Expected values come from reference implementations written independently of the module's
-source, and `build` checks that the correct module passes every hidden check. `build`
-redraws a visible test until it exposes its function's bug (or, for a function without a
-visible bug, passes with the hidden-only bugs still in place).
+source, and `build` checks that the correct module passes every hidden check.
 """
 
 import json
@@ -99,7 +105,8 @@ CORRECT = {
 ''',
 }
 
-# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix, or None}
+# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix}.
+# Every bug has a wrong fix, so the bug is drawn uniformly among its function's bugs.
 BUGS = {
     "page_count": {
         "floor": {
@@ -108,7 +115,7 @@ BUGS = {
         },
         "zero_is_one_page": {
             "bug": [("return (total + per_page - 1) // per_page", "return max(1, (total + per_page - 1) // per_page)")],
-            "naive": None,
+            "naive": [("    if total < 0 or per_page < 1:\n", "    if total <= 0:\n        return 0  # no items, no pages\n    if total < 0 or per_page < 1:\n")],
         },
     },
     "page_bounds": {
@@ -138,7 +145,12 @@ BUGS = {
         },
         "no_empty_case": {
             "bug": [('    if total == 0:\n        return "No items"\n', "")],
-            "naive": None,
+            "naive": [
+                (
+                    '    if total == 0:\n        return "No items"\n    start, stop = page_bounds(page, per_page, total)\n',
+                    '    try:\n        start, stop = page_bounds(page, per_page, total)\n    except ValueError:\n        return "No items"\n',
+                )
+            ],
         },
     },
     "page_window": {
@@ -151,11 +163,11 @@ BUGS = {
         },
         "even_width": {
             "bug": [("start = current - (width - 1) // 2", "start = current - width // 2")],
-            "naive": None,
+            "naive": [("start = current - (width - 1) // 2", "start = current - width // 2 + 1")],
         },
         "few_pages": {
             "bug": [("    if last <= width:\n        return list(range(1, last + 1))\n", "")],
-            "naive": None,
+            "naive": [("return list(range(1, last + 1))", "return list(range(1, last))")],
         },
     },
     "paginate": {
@@ -165,7 +177,7 @@ BUGS = {
         },
         "has_prev_on_first": {
             "bug": [('"has_prev": page > 1,', '"has_prev": page > 0,')],
-            "naive": None,
+            "naive": [('"has_prev": page > 1,', '"has_prev": 1 < page < pages,')],
         },
     },
 }
@@ -198,6 +210,11 @@ def _eq(name, func, args, expected):
 
 def _raises(name, func, args):
     return {"name": name, "func": func, "kind": "raises", "args": args}
+
+
+# Kinds of check whose input is the same in every instance, so a visible test and a hidden
+# check of that kind may share it (hard-coding it gives the specified answer anyway).
+FIXED_INPUTS = ()
 
 
 def _cases(rng, func):
@@ -288,6 +305,9 @@ def _cases(rng, func):
 # The fix-code engine: buggy module, visible tests, shortcuts
 # --------------------------------------------------------------------------- #
 
+VISIBLE_PER_FUNCTION = 2  # visible tests per function, each of a different kind
+DRAWS_PER_KIND = 20
+
 
 def _apply(func, swaps):
     src = CORRECT[func]
@@ -328,7 +348,7 @@ def _test_function(c):
     else:  # no_mutation
         rest = "".join(", " + repr(a) for a in c["args"][1:])
         body = f"    arg = {c['args'][0]!r}\n    {c['func']}(arg{rest})\n    assert arg == {c['args'][0]!r}, \"the argument was modified\"\n"
-    return f"def test_{c['func']}():\n{body}"
+    return f"def test_{c['name'][len('visible_'):]}():\n{body}"
 
 
 TEST_RUNNER = """
@@ -347,18 +367,39 @@ if __name__ == "__main__":
 """
 
 
-def _hardcoded(src, visible):
-    """`src` plus wrappers that answer the given visible tests from their expectations."""
-    for c in visible:
-        f = c["func"]
-        if c["kind"] == "equal":
-            then = f"return {c['expected']!r}"
-        elif c["kind"] == "raises":
-            then = f"raise {c.get('exception', 'ValueError')}(\"invalid input\")"
+def _visible_tests(rng, f, ok, exposing):
+    """VISIBLE_PER_FUNCTION visible tests for `f`, each of a different kind of `_cases`, at
+    least one of them not a `raises` check, drawn with fresh inputs until `ok(check,
+    exposing)` holds; with `exposing`, the first must expose `f`'s bug. Every function gets
+    the same number and mix, so a function whose bug is hidden (whose tests must avoid it)
+    does not stand out. Returns fewer when that is impossible. The tests are in the order
+    `_cases` lists their kinds, so the failing one is not always first."""
+    first = _cases(rng, f)
+    order, kind_of = [c["name"] for c in first], {c["name"]: c["kind"] for c in first}
+    kinds = list(order)
+    rng.shuffle(kinds)
+
+    def draw(kind, expose):
+        for _ in range(DRAWS_PER_KIND):
+            c = _canonical(dict(next(c for c in _cases(rng, f) if c["name"] == kind), name=f"visible_{kind}"))
+            if ok(c, expose):
+                return c
+        return None
+
+    chosen = []
+    while len(chosen) < VISIBLE_PER_FUNCTION:
+        expose = exposing and not chosen
+        need_value = not expose and all(c["kind"] == "raises" for c in chosen) and len(chosen) == VISIBLE_PER_FUNCTION - 1
+        for kind in kinds:
+            if need_value and kind_of[kind] == "raises":
+                continue
+            if c := draw(kind, expose):
+                chosen.append(c)
+                kinds.remove(kind)
+                break
         else:
-            continue
-        src += f"\n\n_{f}_original = {f}\n\n\ndef {f}(*args):\n    if list(args) == {c['args']!r}:\n        {then}\n    return _{f}_original(*args)\n"
-    return src
+            break
+    return sorted(chosen, key=lambda c: order.index(c["name"][len("visible_") :]))
 
 
 def _write(source, then=""):
@@ -374,49 +415,55 @@ def build_fix(ctx, instruction, extra_imports=()):
     funcs = p["functions"]
     bugged = sorted(rng.sample(funcs, p["n_bugs"]))
     bugs = {f: rng.choice(sorted(BUGS[f])) for f in bugged}
-    if not any(BUGS[f][b]["naive"] for f, b in bugs.items()):
-        raise Reject("no injected bug has a catalogued wrong fix")
     visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
     bug_src = {f: _apply(f, BUGS[f][b]["bug"]) for f, b in bugs.items()}
     hidden_only = {f: s for f, s in bug_src.items() if f not in visible_bugs}
     ref, buggy, partial = _exec(_module(funcs, {})), _exec(_module(funcs, bug_src)), _exec(_module(funcs, hidden_only))
 
+    # Every function gets visible tests, and all of them pass once only the hidden bugs are
+    # left. A function with a visible bug gets one test that fails because of that bug (with
+    # it alone and with every bug in place); every other function's tests pass on the module
+    # as given, so they exercise behavior its hidden bug (if any) does not touch.
     visible = []
     for f in funcs:
-        if f in bugs and f not in visible_bugs:
-            continue  # a hidden bug gets no visible test
-        for _ in range(100):
-            c = _canonical(dict(rng.choice(_cases(rng, f)), name=f"visible_{f}"))
-            if _passes(ref, [c]) and _passes(partial, [c]) and (f not in visible_bugs or not _passes(buggy, [c])):
-                visible.append(c)
-                break
-        else:
-            raise Reject(f"no visible test for {f}")
+        if f in visible_bugs:
+            alone = _exec(_module(funcs, {f: bug_src[f]}))
 
-    seen = [(c["func"], c["args"]) for c in visible]
+            def ok(c, exposing, alone=alone):
+                if not (_passes(ref, [c]) and _passes(partial, [c])):
+                    return False
+                return not _passes(alone, [c]) and not _passes(buggy, [c]) if exposing else True
+
+        else:
+
+            def ok(c, exposing):
+                return _passes(ref, [c]) and _passes(partial, [c]) and _passes(buggy, [c])
+
+        tests = _visible_tests(rng, f, ok, exposing=f in visible_bugs)
+        if len(tests) < VISIBLE_PER_FUNCTION:
+            raise Reject(f"too few visible tests for {f}")
+        visible += tests
+
+    seen = [(c["func"], c["args"]) for c in visible if c["name"][len("visible_") :] not in FIXED_INPUTS]
     for _ in range(100):
         checks = [_canonical(c) for f in funcs for c in _cases(rng, f)]
         if not any((c["func"], c["args"]) in seen for c in checks):
             break  # hidden inputs differ from every visible test's, so hard-coding those cannot pass
     else:
         raise Reject("hidden checks keep repeating a visible test")
-    failed = [c["name"] for c in checks if not _passes(ref, [c])]
-    if failed:
-        raise RuntimeError(f"{ctx.family}: the correct module fails hidden checks {failed}")
+    if failed := [c["name"] for c in checks if not _passes(ref, [c])]:
+        raise Reject(f"the correct module fails hidden checks {failed}")
 
     names = ", ".join(funcs + list(extra_imports))
     tests = "\n\n".join(_test_function(c) for c in visible)
     test_src = f'"""Run with: python3 test_{MODULE}.py"""\n\nfrom {MODULE} import {names}  # noqa: F401\n\n\n{tests}' + TEST_RUNNER
     fixed = _module(funcs, {})
-    shortcuts = {"hardcode-visible": _solution(_hardcoded(_module(funcs, bug_src), [c for c in visible if c["func"] in visible_bugs]))}
+    shortcuts = {f"wrong-fix-{f}": _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])})) for f, b in bugs.items()}
     if hidden_only:
         shortcuts["visible-bugs-only"] = _solution(_module(funcs, hidden_only))
-    for f, b in bugs.items():
-        if BUGS[f][b]["naive"]:
-            shortcuts[f"wrong-fix-{f}"] = _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])}))
     listed = ", ".join(f"`{f}`" for f in funcs)
     return TaskSpec(
-        instruction=instruction.format(functions=listed, hint=p["hint"]),
+        instruction=instruction.format(functions=listed),
         files={f"{MODULE}.py": _module(funcs, bug_src), f"test_{MODULE}.py": test_src},
         grader=Checks(PATH, MODULE, tuple(checks)),
         oracle=_solution(fixed, f"cd /app && python3 test_{MODULE}.py\n"),
@@ -425,16 +472,10 @@ def build_fix(ctx, instruction, extra_imports=()):
     )
 
 
-INSTRUCTION = """The pagination helpers in `/app/paging.py` ({functions}) are used by our list endpoints, and users report wrong page counts, missing items and broken page links. {hint}
+INSTRUCTION = """The pagination helpers in `/app/paging.py` ({functions}) are used by our list endpoints, and users report off-by-one and boundary mistakes in their results. Some of the tests in `/app/test_paging.py` fail, and those tests may not cover every bug.
 
 Fix `paging.py` so that every function behaves exactly as its docstring describes. Keep the function names and signatures, and use only the Python standard library. You may add tests to `/app/test_paging.py` (run it with `python3 test_paging.py`), but do not change what the existing tests assert.
 """
-
-HINTS = {
-    "easy": "One function has a bug, and a test in `/app/test_paging.py` fails because of it.",
-    "medium": "Some tests in `/app/test_paging.py` fail, and some bugs may not be covered by those tests at all.",
-    "hard": "Several functions have bugs; the tests in `/app/test_paging.py` catch only a few of them.",
-}
 
 
 def build(ctx):
@@ -443,19 +484,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-pagination",
-    version=1,
+    version=2,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "off-by-one", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["page_count", "page_bounds", "page_of", "page_label"], "n_bugs": 1, "visible_bug_tests": 1.0, "hint": HINTS["easy"]},
-        "medium": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window"], "n_bugs": 2, "visible_bug_tests": 0.5, "hint": HINTS["medium"]},
-        "hard": {
-            "functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window", "paginate"],
-            "n_bugs": 4,
-            "visible_bug_tests": 0.25,
-            "hint": HINTS["hard"],
-        },
+        "easy": {"functions": ["page_count", "page_bounds", "page_of", "page_label"], "n_bugs": 1, "visible_bug_tests": 1.0},
+        "medium": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window"], "n_bugs": 2, "visible_bug_tests": 0.5},
+        "hard": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window", "paginate"], "n_bugs": 4, "visible_bug_tests": 0.25},
     },
     build=build,
 )

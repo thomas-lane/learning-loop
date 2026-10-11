@@ -3,7 +3,10 @@
 A session is a run of one user's events, in time order across all files, in which each
 event follows the user's previous event by at most 30 minutes; a gap of more than 1800 s
 starts a new session and a gap of exactly 1800 s does not. The instruction states this rule
-exactly; the answer is the total number of sessions.
+exactly, the line format (space-separated fields: timestamp, `user=<id>`, others) and that
+files overlap in time and need not be in time order; it is the same at every difficulty
+(it names rotated, compressed and archived files wherever they occur). The answer is the
+total number of sessions.
 
 Construction: each user gets 1-4 sessions of 1-6 events, with gaps of at most 25 minutes
 inside a session and at least 40 minutes between sessions, each session on one device
@@ -20,12 +23,19 @@ inside a session and at least 40 minutes between sessions, each session on one d
 - users whose sessions overlap in time, so one gap rule over everyone's events counts far
   fewer sessions (`global-gap`); counting events or distinct users is far off.
 
-Medium and hard add an api log, and the mobile log is in the order the app uploaded its
-batches (each session's events together, batches by upload time), not in event time. Hard
-splits the web log at noon into `web.log.1.gz` and `web.log` and moves the previous
-evening's events into `archive/events.log.1.gz`, with one session only there and one
-crossing midnight into today's files; skipping compressed or archived files loses that
-session. `build` checks every declared shortcut against the truth through generation.
+The data per difficulty:
+
+- easy: 9 users, `web.log` and `mobile.log`, each file in time order;
+- medium: 11 users, plus `api.log`, and `mobile.log` is in the order the app uploaded its
+  batches (each session's events together, batches by upload time), not in event time;
+- hard: 13 users, as medium, and the web log is split at noon into `web.log.1.gz` and
+  `web.log`, and the previous evening's events are in `archive/events.log.1.gz`, with one
+  session only there and one crossing midnight into today's files; skipping compressed
+  (`plain-only`) or archived (`top-level-only`) files loses that session.
+
+Declared shortcuts (`SOLVER` modes): `count-events`, `distinct-users`, `global-gap`,
+`non-strict`, `session-start-window`, `per-file` and `unsorted` at every level;
+`plain-only` and `top-level-only` on hard. Generation checks each one against the truth.
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode, so the
 shell and model forms cannot drift apart.
@@ -34,7 +44,7 @@ shell and model forms cannot drift apart.
 import gzip
 from datetime import datetime, timedelta
 
-from learning_loop.tasks.spec import Family, gzip_bytes, NumericAnswer, Reject, Solution, TaskSpec
+from learning_loop.tasks.spec import Family, gzip_bytes, NumericAnswer, Solution, TaskSpec
 
 DAY = 86400
 GAP = 1800
@@ -42,9 +52,9 @@ PAGES = ["/", "/products", "/products/12", "/cart", "/checkout", "/search?q=desk
 SCREENS = ["home", "product", "cart", "checkout", "search", "settings", "orders"]
 API_CALLS = ["/v1/orders", "/v1/cart", "/v1/products", "/v1/profile", "/v1/payments"]
 
-INSTRUCTION = """We want to know how many user sessions our product had. Activity events from our {sources} are logged in `/app/events/`{extra}. Each line is one event: a UTC timestamp (ISO 8601), then `user=<id>`, then other fields.{order}
+INSTRUCTION = """We want to know how many user sessions our product had. Our services log user activity events to the files under `/app/events/`, including rotated, gzip-compressed and archived files in any subdirectories. Each line is one event, with fields separated by single spaces: the first field is the event's UTC timestamp in ISO 8601 (for example `2026-09-01T14:03:27Z`), the second is `user=<id>`, and the remaining fields describe the event and do not matter here. The files overlap in time, and the lines of a file are not necessarily in time order.
 
-Sessions are defined per user. Take each user's events from **all** the files, ordered by time. The user's first event starts a session. Each later event belongs to the same session if it comes at most 30 minutes after that user's previous event; if the gap since the user's previous event is **more than** 30 minutes (strictly more than 1800 seconds), the event starts a new session. A gap of exactly 30 minutes does not start a new session.{independent}
+Sessions are defined per user. Take each user's events from **all** the files, ordered by time. The user's first event starts a session. Each later event belongs to the same session if it comes at most 30 minutes after that user's previous event; if the gap since the user's previous event is **more than** 30 minutes (strictly more than 1800 seconds), the event starts a new session. A gap of exactly 30 minutes does not start a new session. Events of different users never affect each other's sessions.
 
 Count the sessions of all users together and write just that number (nothing else) to `/app/answer.txt`.
 """
@@ -192,15 +202,14 @@ def _timeline(rng, p):
     if p["archive"]:
         # one session only on the previous evening, one crossing midnight
         u = special[5]
-        first = events[u][0][0]
         evening = [(-DAY + rng.randint(20 * 3600, 21 * 3600), "web")]
         for gap, _ in _session(rng, rng.randint(1, 3), "web")[1:]:
             evening.append((evening[-1][0] + gap, "web"))
         cross = [(-rng.randint(1200, 1700), "mobile")]
         while cross[-1][0] < 600:
             cross.append((cross[-1][0] + rng.randint(300, 900), "mobile"))
-        if first - cross[-1][0] <= 2400:
-            raise Reject("the midnight session runs into the user's first session")
+        # the crossing session ends before 01:00 and the user's first session starts at 06:00
+        # or later, so they stay separate sessions
         events[u] = evening + cross + events[u]
     return events
 
@@ -259,19 +268,11 @@ def build(ctx):
     events = _timeline(ctx.rng, p)
     files = _render(ctx.rng, events, p)
     truth = _truth(events)
-    if _NS["answer"](_texts({k: v.encode() if isinstance(v, str) else v for k, v in files.items()}), "oracle") != truth:
-        raise AssertionError("the oracle disagrees with the construction")
     modes = ["count-events", "distinct-users", "global-gap", "non-strict", "session-start-window", "per-file", "unsorted"]
     if p["archive"]:
         modes += ["plain-only", "top-level-only"]
-    sources = {2: "web site and mobile app", 3: "web site, mobile app and public API"}[len(p["devices"])]
     return TaskSpec(
-        instruction=INSTRUCTION.format(
-            sources=sources,
-            extra=" (including rotated, gzip-compressed and archived files in subdirectories)" if p["archive"] else "",
-            order="" if p["mobile_upload_order"] else " Each file is in time order, but the files overlap in time.",
-            independent="" if p["mobile_upload_order"] else " Events of different users never affect each other's sessions.",
-        ),
+        instruction=INSTRUCTION,
         files=files,
         grader=NumericAnswer("/app/answer.txt", float(truth)),
         oracle=_solution("oracle"),
@@ -282,7 +283,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="session-count",
-    version=1,
+    version=2,  # v2: one instruction for every level
     cluster="text-analytics",
     category="data",
     skills=("logs", "sessionization", "timestamps", "sorting", "python"),

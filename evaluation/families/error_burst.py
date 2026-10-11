@@ -1,9 +1,16 @@
 """error-burst: in which UTC minute did the services under /app/logs write the most ERROR lines?
 
-Each service logs in its own time zone. Every timestamp carries its UTC offset
-(`2026-09-01T14:03:27+02:00`, or `Z`), except on hard, where one file has offset-less local
-timestamps and declares its offset in its first line (`# timezone: UTC-04:00 ...`). The
-level is the second field of each line. The answer is the minute as `YYYY-MM-DD HH:MM`.
+Each service logs in its own time zone. The level is the second field of each line. The
+answer is the minute as `YYYY-MM-DD HH:MM`. The instruction is the same at every difficulty:
+it states both ways a file can give its offset (in every timestamp, `+02:00` or `Z`, with a
+worked example; or, for offset-less timestamps, in the file's first line) and that rotated
+logs may be gzip-compressed. The data per difficulty:
+
+- easy: `payments-eu.log` (+02:00) and `orders-us.log` (-04:00), offsets in every timestamp;
+- medium: easy's files plus `search-in.log` (+05:30), and look-alike lines (below);
+- hard: `payments-eu.log`, `orders-us-legacy.log` (offset-less local times, first line
+  `# timezone: UTC-04:00 ...`), `search-in.log` and `gateway.log.1.gz` (`Z`), with
+  look-alike lines.
 
 Construction (minutes are UTC; o_f is file f's offset):
 
@@ -23,7 +30,9 @@ Construction (minutes are UTC; o_f is file f's offset):
 - medium/hard: at one minute, more WARN/INFO lines whose message contains `ERROR` than the
   target has ERROR lines, so counting every line that contains `ERROR` fails (`grep-error`).
 
-Background ERROR lines never share a planted minute. `build` checks the unique answer and
+Declared shortcuts (`SOLVER` modes): `ignore-offsets` and `offset-sign-flipped` at every
+level; `grep-error` and `hours-only-offset` on medium/hard; `naive-as-utc` and `plain-only`
+on hard. Background ERROR lines never share a planted minute. `build` checks the unique answer and
 every proper subset of the files; generation checks every declared shortcut. Every
 solution, right or wrong, is one Python source (`SOLVER`) run with a mode, so the shell
 and model forms cannot drift apart.
@@ -48,16 +57,14 @@ OTHERS = [("INFO", "request served"), ("INFO", "cache refreshed"), ("DEBUG", "po
 LOOKALIKES = ["WARN alerting: ERROR rate above threshold", "INFO error-report: forwarded ERROR summary", "WARN monitor: ERROR budget burning fast"]
 FIRST, LAST = 60, 1380  # planted UTC minutes of the day
 
-INSTRUCTION = """Several of our services wrote their logs to `/app/logs/`{extra}, and we need to know when the worst burst of errors happened.
+INSTRUCTION = """Several of our services wrote their logs to `/app/logs/` (rotated logs may be gzip-compressed), and we need to know when the worst burst of errors happened.
 
-The servers run in different time zones. {tz} The level of a log line is its second field.
+The servers run in different time zones. A timestamp that ends in a UTC offset is local time at that offset: for example `2026-01-31T09:05:00+02:00` is 07:05 UTC, and `Z` means UTC. A file whose timestamps have no offset declares, in its first line, the UTC offset of all of its timestamps. The level of a log line is its second field.
 
 Count the lines whose level is `ERROR` in **all** the logs, grouped by the minute in which they were written in **UTC**, and find the UTC minute with the most ERROR lines.
 
 Write that minute as `YYYY-MM-DD HH:MM` in UTC (for example `2026-01-31 07:05`), nothing else, to `/app/answer.txt`.
 """
-TZ_LINE = "Every timestamp carries its UTC offset (for example `2026-01-31T09:05:00+02:00` is 07:05 UTC, and `Z` means UTC)."
-TZ_HEADER = "Timestamps carry their UTC offset (`Z` means UTC), except in a file whose first line declares the offset of all of its timestamps."
 
 SOLVER = '''
 from collections import Counter
@@ -258,12 +265,8 @@ def build(ctx):
         modes.append("naive-as-utc")
     if any(f.endswith(".gz") for f in names):
         modes.append("plain-only")
-    header = any(SERVICES[f][2] == "header" for f in names)
     return TaskSpec(
-        instruction=INSTRUCTION.format(
-            extra=" (including rotated, gzip-compressed logs)" if any(f.endswith(".gz") for f in names) else "",
-            tz=TZ_HEADER if header else TZ_LINE,
-        ),
+        instruction=INSTRUCTION,
         files=_render(rng, planted, used, names, day),
         grader=ExactAnswer("/app/answer.txt", expected),
         oracle=_solution("oracle"),
@@ -274,7 +277,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="error-burst",
-    version=1,
+    version=2,  # v2: one instruction for every level
     cluster="text-analytics",
     category="data",
     skills=("logs", "timezones", "timestamps", "aggregation", "python"),

@@ -1,6 +1,7 @@
 """The tabular-data families join-orders, sqlite-query, json-aggregate and dedupe-contacts:
 deterministic renders, and their traps re-derived from the rendered files, independently of
-each family's own solution models."""
+each family's own solution models; and, for the whole cluster (with csv-revenue), one
+instruction at every difficulty."""
 
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from learning_loop.core.config import REPO_ROOT
+from learning_loop.tasks.generate import file_bytes, generate_spec, grade_in_process
 from learning_loop.tasks.render import render
 
 MODULES = ("join_orders", "sqlite_query", "json_aggregate", "dedupe_contacts")
@@ -30,10 +32,11 @@ def _load(module: str):
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.FAMILY
+    return mod
 
 
-FAMILIES = {m: _load(m) for m in MODULES}
+MODS = {m: _load(m) for m in (*MODULES, "csv_revenue")}
+FAMILIES = {m: MODS[m].FAMILY for m in MODULES}
 SEEDS = [1, 2, 3]
 
 
@@ -118,13 +121,15 @@ def test_sqlite_query_traps(tmp_path, difficulty, seed):
     level, region, month = params["level"], params["region"], f"2026-{params['month']:02d}"
     customers = {r["id"]: dict(r) for r in con.execute("SELECT * FROM customers")}
     orders = [dict(r) for r in con.execute("SELECT * FROM orders")]
-    addresses = [dict(r) for r in con.execute("SELECT * FROM addresses")] if level == 3 else []
+    addresses = [dict(r) for r in con.execute("SELECT * FROM addresses")]
     con.close()
-    if level == 3:
-        primary = {a["customer_id"]: a["region"] for a in addresses if a["is_primary"]}
-        assert len(primary) == len(customers) == len({a["customer_id"] for a in addresses})
-        for c in customers.values():
-            c["region"] = primary[c["id"]]
+    primary = {a["customer_id"]: a["region"] for a in addresses if a["is_primary"]}
+    assert len(primary) == len(customers) == len({a["customer_id"] for a in addresses}) == sum(a["is_primary"] for a in addresses)
+    for c in customers.values():
+        c["region"] = primary[c["id"]]
+    if level < 3:  # one address per customer, and every order ships from its customer's region
+        assert len(addresses) == len(customers)
+        assert all(o["region"] == customers[o["customer_id"]]["region"] for o in orders)
     deleted = lambda c: bool(c.get("deleted_at"))  # noqa: E731
 
     def in_month(o, col="placed_at"):
@@ -151,6 +156,26 @@ def test_sqlite_query_traps(tmp_path, difficulty, seed):
             for o in orders
         )  # a secondary address in the region
         assert any(o["region"] != region for o in good)  # orders.region is the warehouse, not the customer
+
+
+def _schema(db: bytes) -> dict[str, list[str]]:
+    con = sqlite3.connect(":memory:")
+    con.deserialize(db)
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
+    out = {t: [r[1] for r in con.execute(f"PRAGMA table_info({t})")] for t in tables}
+    con.close()
+    return out
+
+
+def test_sqlite_schema_is_the_same_at_every_difficulty():
+    """The instruction's rules name `addresses`, `created_at` and `customers.deleted_at` at every
+    difficulty, so every difficulty's database has them; only the data differs."""
+    fam = FAMILIES["sqlite_query"]
+    schemas = {d: _schema(generate_spec(fam, d, 1).spec.files["data/shop.db"]) for d in fam.difficulties}
+    assert len({json.dumps(v) for v in schemas.values()}) == 1, schemas
+    assert schemas["easy"]["addresses"] == ["id", "customer_id", "region", "city", "is_primary"]
+    assert {"created_at", "placed_at", "deleted_at", "region"} <= set(schemas["easy"]["orders"])
+    assert "deleted_at" in schemas["easy"]["customers"]
 
 
 def test_sqlite_database_bytes_do_not_carry_the_host_sqlite_version(tmp_path):
@@ -268,7 +293,8 @@ def test_dedupe_contacts_traps(tmp_path, difficulty, seed):
         return _components(rows, keys)
 
     expected = _expected(tmp_path)
-    assert count() == expected == params["people"]
+    assert count() == expected == params["people"]  # one group per person built
+    assert count(email=lambda e: _email(e, 2), phone=lambda p: _phone(p, 2)) == expected  # the instruction's full rules, at every level
     assert count(email=lambda e: e, phone=lambda p: p) > expected  # no normalization
     assert count(phone=lambda p: p) > expected  # emails normalized, phones raw
     assert count(email=lambda e: e) > expected  # phones normalized, emails raw
@@ -288,3 +314,70 @@ def test_dedupe_contacts_traps(tmp_path, difficulty, seed):
         assert greedy > expected
     if level == 3:
         assert count(rows=rows[: len(files["contacts.csv"].splitlines()) - 1]) < expected  # contacts.csv only
+
+
+def test_dedupe_contacts_answer_varies_across_seeds():
+    """A policy cannot memorize one count per difficulty: the number of people is drawn."""
+    fam = FAMILIES["dedupe_contacts"]
+    for difficulty in fam.difficulties:
+        answers = {generate_spec(fam, difficulty, seed).spec.grader.expected for seed in range(30)}
+        assert len(answers) >= 4, (difficulty, answers)
+
+
+# ----------------------------------------------------------------------------- json-aggregate: numbers by value
+
+
+def test_json_aggregate_accepts_an_integral_mean_written_as_an_integer():
+    """"rounded to 2 decimal places" allows `23` for a mean of 23.0; the grader compares by value."""
+    fam = FAMILIES["json_aggregate"]
+    for seed in range(1, 400):
+        spec = generate_spec(fam, "easy", seed).spec
+        expected = spec.grader.expected
+        if any(v["mean_temp_c"] == int(v["mean_temp_c"]) for v in expected.values()):
+            break
+    else:
+        pytest.fail("no seed with an integral mean")
+    assert spec.grader.key()["numbers"] == "value"
+    as_ints = {s: {"count": v["count"], "mean_temp_c": int(v["mean_temp_c"]) if v["mean_temp_c"] == int(v["mean_temp_c"]) else v["mean_temp_c"]} for s, v in expected.items()}
+    text = json.dumps(as_ints)
+    assert re.search(r'"mean_temp_c": -?\d+[},]', text), text
+    files = file_bytes(spec)
+    assert grade_in_process(spec, files, {"/app/answer.json": text}) == 1.0
+    wrong = {s: dict(v, mean_temp_c=v["mean_temp_c"] + 0.01) for s, v in expected.items()}
+    assert grade_in_process(spec, files, {"/app/answer.json": json.dumps(wrong)}) == 0.0
+
+
+# ----------------------------------------------------------------------------- one instruction per family
+
+
+def _instruction_for(module: str, params: dict) -> str:
+    """The family's one instruction template, filled in with the instance's own values."""
+    mod = MODS[module]
+    if module == "sqlite_query":
+        return mod.INSTRUCTION.format(month=mod.MONTHS[params["month"] - 3], region=params["region"])
+    return mod.INSTRUCTION
+
+
+@pytest.mark.parametrize("module", (*MODULES, "csv_revenue"))
+def test_instruction_is_one_template_at_every_difficulty(module):
+    """Difficulty comes from the data: every level gets the same instruction text, which states
+    every rule that can apply at any level."""
+    fam = MODS[module].FAMILY
+    for difficulty in fam.difficulties:
+        for seed in (1, 2, 3):
+            spec = generate_spec(fam, difficulty, seed).spec
+            assert spec.instruction == _instruction_for(module, spec.params), (difficulty, seed)
+
+
+def test_instructions_state_the_rules_of_the_hardest_data():
+    """The rules that only the harder levels' data exercises are stated at every level."""
+    must = {
+        "join_orders": ["leading zeros", "`XY-000417`", "order of the columns can differ"],
+        "json_aggregate": ["including subdirectories", "`.gz`", "`location.site`"],
+        "sqlite_query": ["`created_at` is when the shopping cart was opened", "every order of a deleted customer", "`addresses.is_primary = 1`"],
+        "dedupe_contacts": ["`+tag`", "`gmail.com` addresses only", "country code", "their own column names", "`Ann+News@Example.org`"],
+    }
+    for module, phrases in must.items():
+        text = MODS[module].INSTRUCTION
+        for phrase in phrases:
+            assert phrase in text, (module, phrase)

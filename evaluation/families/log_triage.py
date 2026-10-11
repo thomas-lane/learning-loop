@@ -1,13 +1,30 @@
 """log-triage: which client IP caused the most HTTP 5xx responses across all access logs?
 
+The instruction is the same at every difficulty: every log under /app/logs counts, including
+rotated, gzip-compressed and archived ones in subdirectories. The data per difficulty:
+
+- easy: `access.log` and `access.log.1.gz`;
+- medium: `access.log`, `access.log.1` and `access.log.2.gz`, and a size decoy with 4-digit
+  sizes (below);
+- hard: medium's files plus `archive/access.log.3.gz`, and a size decoy with 3-digit sizes.
+
 Construction: target T has c_f 5xx in each file f; for every file g a decoy D_g appears in
 all files except g with c_f + delta 5xx each, so any subset missing g is won by D_g, while
-over all files T wins because c_g > (n-1)*delta. A 404-heavy decoy wins if every status
->= 400 counts; on medium/hard a decoy whose response *sizes* are 500-599 wins if any
-` 5xx ` field counts. `build` redraws until the answer is a unique maximum and every proper
-subset of the files gives a different one (that covers skipping rotated, compressed or
-archived files, and `cat a b | zcat c.gz`, which reads only c.gz). The declared shortcuts
-are those wrong methods as runnable shell pipelines.
+over all files T wins because c_g > (n-1)*delta. `build` redraws until the answer is a unique
+maximum and every proper subset of the files gives a different one; that covers skipping
+compressed (`plain-only`) or archived (`top-level-only`, hard) files, and
+`cat a b | zcat c.gz`, which reads only c.gz.
+
+Traps that do not depend on the files read, each a declared shortcut:
+
+- a 404-heavy decoy wins if every status >= 400 counts (`all-4xx`, every level);
+- the size decoy: an IP with more 200 responses than the target has 5xx, whose response
+  *sizes* start with 5. On medium they are 5000-5999, so only a grep for ` 5[0-9]{2}` that
+  is not anchored at the end of the field picks it (`unanchored-5xx-grep`); on hard they are
+  500-599, so a grep for ` 5[0-9]{2} ` with spaces on both sides picks it too
+  (`any-5xx-field`, and `unanchored-5xx-grep`). No other response size starts with 5.
+
+The declared shortcuts are those wrong methods as runnable shell pipelines.
 """
 
 import gzip
@@ -22,7 +39,7 @@ PATHS = ["/", "/api/users", "/api/orders", "/login", "/static/app.js", "/api/sea
 
 INSTRUCTION = """Our web server has been throwing server errors and we need to know which client is triggering the most of them.
 
-The nginx access logs are in `/app/logs/`. Find the client IP address responsible for the most HTTP **5xx** responses across **all** of the logs there{extra}.
+The nginx access logs (in nginx's default `combined` format) are in `/app/logs/`. Find the client IP address responsible for the most HTTP **5xx** responses across **all** of the logs there, including rotated, gzip-compressed and archived logs in any subdirectories.
 
 Write just that IP address (nothing else) to `/app/answer.txt`.
 """
@@ -34,6 +51,7 @@ PLAIN_ONLY = "find /app/logs -type f ! -name '*.gz' | sort | xargs cat | awk '$9
 ALL_4XX = _ALL + " | awk '$9 >= 400 { print $1 }'" + _TOP
 TOP_LEVEL_ONLY = "find /app/logs -maxdepth 1 -type f | sort | while read -r f; do zcat -f \"$f\"; done | awk '$9 >= 500 && $9 < 600 { print $1 }'" + _TOP
 ANY_5XX_FIELD = _ALL + " | grep -E ' 5[0-9]{2} ' | awk '{ print $1 }'" + _TOP
+UNANCHORED_5XX = _ALL + " | grep -E ' 5[0-9]{2}' | awk '{ print $1 }'" + _TOP
 
 
 def _ips(rng, n):
@@ -50,8 +68,8 @@ def _line(rng, ts, ip, status, size=None):
     path = rng.choice(PATHS)
     if size is None:
         size = rng.randint(200, 50_000)
-        while 500 <= size <= 599:
-            size = rng.randint(200, 50_000)  # sizes in 500-599 are reserved for the size decoy
+        while str(size).startswith("5"):
+            size = rng.randint(200, 50_000)  # sizes starting with 5 are reserved for the size decoy
     stamp = ts.strftime("%d/%b/%Y:%H:%M:%S +0000")
     return f'{ip} - - [{stamp}] "GET {path} HTTP/1.1" {status} {size} "-" "curl/8.5.0"'
 
@@ -72,10 +90,7 @@ def _counts(lines, take):
 def _top(lines, take):
     """The IP `sort | uniq -c | sort -rn | head -1` prints: the highest count, and among equal
     counts the byte-wise largest line, i.e. the largest IP string (the profile sets LC_ALL=C.UTF-8)."""
-    c = _counts(lines, take)
-    if not c:
-        raise Reject("no matching lines")
-    return max(c.items(), key=lambda kv: (kv[1], kv[0].encode()))[0]
+    return max(_counts(lines, take).items(), key=lambda kv: (kv[1], kv[0].encode()))[0]
 
 
 def _unique_top(lines, take):
@@ -100,7 +115,7 @@ def _solution(shell, select, take):
     return Solution(shell, lambda f: _answer(_texts(f), [n for n in _texts(f) if select(n)], take))
 
 
-def _build_logs(rng, names, size_trap):
+def _build_logs(rng, names, decoy_sizes):
     n = len(names)
     delta = rng.randint(1, 2)
     ips = _ips(rng, n + 3)
@@ -116,8 +131,8 @@ def _build_logs(rng, names, size_trap):
                 recs += [(d, rng.choice([500, 502, 503, 504]), None) for _ in range(c[name] + delta)]
         share = total_t // n + 6
         recs += [(decoy404, 404, None) for _ in range(share)] + [(decoy404, 500, None)]
-        if size_trap:
-            recs += [(decoy_size, 200, rng.randint(500, 599)) for _ in range(share)]
+        if decoy_sizes:
+            recs += [(decoy_size, 200, rng.randint(*decoy_sizes)) for _ in range(share)]
         for _ in range(rng.randint(450, 650)):
             recs.append((f"192.168.{rng.randint(0, 3)}.{rng.randint(1, 254)}", rng.choices([200, 301, 404, 500], weights=[85, 5, 8, 2])[0], None))
         rng.shuffle(recs)
@@ -131,8 +146,10 @@ def _build_logs(rng, names, size_trap):
 
 
 def build(ctx):
-    names, size_trap = ctx.params["files"], ctx.params["size_trap"]
-    texts, target = _build_logs(ctx.rng, names, size_trap)
+    p = ctx.params
+    names = p["files"]
+    decoy_sizes = [500, 599] if p["size_trap"] else [5000, 5999] if p["long_size_trap"] else None
+    texts, target = _build_logs(ctx.rng, names, decoy_sizes)
     if _unique_top([ln for t in texts.values() for ln in t.splitlines()], _is_5xx) != target:
         raise Reject("the target is not the unique top IP")
     for k in range(1, len(names)):
@@ -146,29 +163,31 @@ def build(ctx):
     }
     if any("/" in n for n in names):
         shortcuts["top-level-only"] = _solution(TOP_LEVEL_ONLY, lambda n: "/" not in n, _is_5xx)
-    if size_trap:
+    if decoy_sizes:
+        shortcuts["unanchored-5xx-grep"] = _solution(UNANCHORED_5XX, lambda n: True, lambda ln: re.search(r" 5[0-9]{2}", ln) is not None)
+    if p["size_trap"]:
         shortcuts["any-5xx-field"] = _solution(ANY_5XX_FIELD, lambda n: True, lambda ln: re.search(r" 5[0-9]{2} ", ln) is not None)
-    hard = any("/" in n for n in names)
     return TaskSpec(
-        instruction=INSTRUCTION.format(extra=" (including rotated, compressed and archived files in subdirectories)" if hard else ""),
+        instruction=INSTRUCTION,
         files=files,
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution(ORACLE, lambda n: True, _is_5xx),
         shortcuts=shortcuts,
-        params={"files": list(names), "size_trap": size_trap},
+        params={"files": list(names), "size_trap": p["size_trap"], "long_size_trap": p["long_size_trap"]},
     )
 
 
 FAMILY = Family(
     name="log-triage",
-    version=4,  # v4: portable gzip bytes (stored blocks)
+    version=5,  # v5: one instruction for every level; medium's size decoy has 4-digit sizes
     cluster="text-analytics",
     category="shell",
     skills=("shell", "logs", "gzip", "aggregation"),
     difficulties={
-        "easy": {"files": ["access.log", "access.log.1.gz"], "size_trap": False},
-        "medium": {"files": ["access.log", "access.log.1", "access.log.2.gz"], "size_trap": True},
-        "hard": {"files": ["access.log", "access.log.1", "access.log.2.gz", "archive/access.log.3.gz"], "size_trap": True},
+        # size_trap: the size decoy's sizes are 500-599; long_size_trap: they are 5000-5999
+        "easy": {"files": ["access.log", "access.log.1.gz"], "size_trap": False, "long_size_trap": False},
+        "medium": {"files": ["access.log", "access.log.1", "access.log.2.gz"], "size_trap": False, "long_size_trap": True},
+        "hard": {"files": ["access.log", "access.log.1", "access.log.2.gz", "archive/access.log.3.gz"], "size_trap": True, "long_size_trap": False},
     },
     build=build,
 )

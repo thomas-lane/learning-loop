@@ -1,19 +1,38 @@
 """organize-files: move support tickets into queue folders chosen by their header fields.
 
-Each ticket in /app/tickets is a file with a header of `Name: value` lines up to the first
-empty line, then a body. The queue is `urgent` when the header's Priority is urgent,
-otherwise the header's Team in lowercase, and (medium/hard) `unassigned` without a Team
-line. The grader is a FileTree over /app/tickets: every ticket at `<queue>/<name>` and
-nothing else, so copying (originals remain) and partial sorts score below 1.
+Each ticket in /app/tickets is a file with a header of `<field>:<value>` lines up to the first
+empty line, then a body; the value is the rest of the line after the first colon, without the
+spaces around it. The queue is `urgent` when the header's Priority is urgent (in any letter
+case), otherwise the header's Team in lowercase, and `unassigned` without a Team line. The
+grader is a FileTree over /app/tickets: every ticket at `<queue>/<name>` and nothing else, so
+copying (originals remain) and partial sorts score below 1. The instruction states every rule
+and note at every difficulty, including the exact folder names (all lowercase), so an agent
+never needs two folders that differ only in letter case.
 
-Construction plants a decoy for every wrong method: file names carry the team the ticket was
-opened with, and some tickets were reassigned since (sorting by name fails), and some are
-urgent (routing by Team alone fails). On medium/hard some tickets lack a Team line, and
-some bodies quote a forwarded message whose own `Team:`/`Priority:` lines start a line: one
-ticket without a header Team forwards a Team line and one without a header Priority
-forwards `Priority: urgent`, so a `grep -m1 '^Team:'` over the whole file routes them
-wrongly. On hard, values vary in letter case and spacing (each team has one spelling, at
-least one not lowercase), so using the raw value as the folder name fails. Every trap holds by construction, so the first draw is always used.
+Data per difficulty: easy has 8 tickets for 3 teams, with Team and Priority lines written
+`Team: billing` (one space, lowercase value); medium has 12 tickets for 4 teams, adding tickets
+without a Team line and bodies that quote forwarded messages; hard has 16 tickets for 5 teams
+and adds messy values: zero to two spaces before and after a Team or Priority value
+(`Team:accounts`), and letter case varying (Priority per ticket; Team per team, one spelling
+each, at least one not lowercase, so folders named by the raw value never differ only in
+case).
+
+Traps and the shortcut that checks each:
+
+- file names carry the team the ticket was opened with, and some tickets were reassigned
+  since, so sorting by name (`by-name`) fails;
+- some tickets are urgent and have a Team, so routing by Team alone (`ignore-urgent`) fails;
+- copying instead of moving (`copy-not-move`) leaves the originals;
+- medium/hard: some tickets lack a Team line, so leaving them in place (`skip-missing-team`)
+  fails; some bodies quote a forwarded message whose own `Team:`/`Priority:` lines start a
+  line: one ticket without a header Team forwards a Team line and one without a header
+  Priority forwards `Priority: urgent`, so a `grep -m1 '^Team:'` over the whole file
+  (`grep-whole-file`) routes them wrongly;
+- hard: a non-urgent ticket of a team spelled not in lowercase, so using the raw value as the
+  folder name (`case-sensitive`) fails.
+
+Each shortcut is declared only on the levels whose data contains its trap. Every trap holds by
+construction, so the first draw is always used.
 """
 
 from learning_loop.tasks.spec import Family, FileTree, Solution, TaskSpec, tree_entry
@@ -42,23 +61,20 @@ BODIES = [
     "We rely on this for our daily work, so a quick answer would help.",
 ]
 
-INSTRUCTION = """Support tickets are in `/app/tickets/`, one file per ticket. Each file starts with a header of `Name: value` lines; the header ends at the first empty line, and the message body follows.
+INSTRUCTION = """Support tickets are in `/app/tickets/`, one file per ticket. Each file starts with a header of one field per line, written `<field>:<value>`: the field name (such as `Team`), a colon, then the value. The value is the rest of the line after the first colon, without the spaces around it: `Team: billing`, `Team:billing` and `Team:  billing ` all have the value `billing`. The header ends at the first empty line, and the message body follows.
 
 Sort the tickets into queue folders: move every ticket file, keeping its file name and contents, to `/app/tickets/<queue>/<file name>`, where `<queue>` is chosen from the ticket's header:
 
-1. If its `Priority` is `urgent`, the queue is `urgent`.
-2. Otherwise the queue is its `Team` value in lowercase (`Team: Billing` goes to `billing`).
-{rule3}
-{notes}
+1. If its `Priority` is `urgent`, the queue is `urgent`. A header without a `Priority` line is not urgent.
+2. Otherwise, if it has a `Team` line, the queue is the `Team` value in lowercase (`Team: Billing` goes to `billing`).
+3. Otherwise the queue is `unassigned`.
+
+Compare values ignoring letter case (`Priority: URGENT` is urgent). Queue folder names are always lowercase: `urgent`, `unassigned` or a team name in lowercase.
+
+Only the header counts: file names were given when a ticket was opened and do not show later reassignments, and a message body can quote a forwarded message with its own `Team:` or `Priority:` lines.
+
 Create the queue folders as needed. When you are done, `/app/tickets/` must contain only the queue folders, with every ticket in exactly one of them.
 """
-
-RULE3 = "3. A ticket whose header has no `Team` line goes to `unassigned`. A ticket whose header has no `Priority` line is not urgent.\n"
-NOTES = {
-    "easy": "File names were given when a ticket was opened and do not show later reassignments: only the header counts.\n",
-    "medium": "File names were given when a ticket was opened and do not show later reassignments, and some bodies quote forwarded messages: only the header counts.\n",
-    "hard": "Only the header counts. Compare values ignoring letter case and the spaces around them.\n",
-}
 
 # Every solution that needs header parsing is this one source, run in the container by the
 # shell form and in-process by the model, so the two cannot drift apart.
@@ -258,7 +274,7 @@ def build(ctx):
     if p["messy"]:
         shortcuts["case-sensitive"] = _py_solution("case-sensitive")
     return TaskSpec(
-        instruction=INSTRUCTION.format(rule3=RULE3 if p["unassigned"] else "", notes=NOTES[ctx.difficulty]),
+        instruction=INSTRUCTION,
         files=files,
         grader=FileTree("/app/tickets", expected),
         oracle=_py_solution("oracle"),
@@ -269,7 +285,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="organize-files",
-    version=1,
+    version=2,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "parsing", "mv"),

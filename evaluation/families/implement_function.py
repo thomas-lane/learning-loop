@@ -1,25 +1,31 @@
-"""implement-function: implement a function from its docstring and a few examples.
+"""implement-function: implement two functions from their docstrings and examples.
 
-`/app/<module>.py` holds stubs that raise `NotImplementedError`. Each stub's docstring
-specifies the function precisely and shows doctest examples. The functions come from
-`CATALOG`, a set of small, precisely specified functions; each entry draws its own spec
-parameters from the seed (separators, run lengths, how touching intervals or trailing
-slashes are treated), so instances differ in behavior, not only in their examples.
+`/app/toolkit.py` holds two stubs that raise `NotImplementedError`. Each stub's docstring
+specifies the function precisely and shows doctest examples. The two functions are drawn
+from `CATALOG`, a set of small, precisely specified functions, the same way at every
+difficulty; each entry draws its own spec parameters from the seed (separators, run
+lengths, how touching intervals or trailing slashes are treated), so instances differ in
+behavior, not only in their examples. The instruction is the same at every difficulty (only
+the two names differ) and says that all code goes in the module, because the `Checks`
+grader imports that file on its own: a helper in another module would make the import fail.
 
-Grading: hidden `Checks` call the functions on seed-specific inputs that are not the
-visible examples, plus every edge case the docstring states (`equal` for results, `raises`
-for the stated ValueErrors, `no_mutation` where the docstring promises it).
+Grading: hidden `Checks` call each function on four fresh typical inputs and on every edge
+case its catalog entry lists (`equal` for results, `raises` for the stated ValueErrors), plus
+a `no_mutation` check where the docstring promises it.
+
+Difficulty is in the examples: easy's docstrings show three typical examples and one example
+of every edge case the hidden checks test (drawn separately, so the values usually differ);
+medium's show two typical examples and half of the edge cases; hard's show two typical
+examples and no edge case. An edge case that raises is shown as a doctest of the exception
+(`+IGNORE_EXCEPTION_DETAIL`, so any message passes).
 
 Traps, each a declared shortcut that fails by construction because a hidden check targets it:
 `hardcode-examples` (returns the visible examples' outputs and nothing else), and per catalog
 entry the plausible wrong implementations: ignoring a stated edge case (unsorted input, an
 empty string, `..` above the start of a relative path), off-by-one boundaries (a run of
 exactly the minimum length, the last window, intervals that only touch) and wrong escaping
-(toggling on every quote instead of honoring doubled quotes).
-
-Difficulty: easy is one easy-tier function with four examples, one of them an edge case;
-medium one medium-tier function with three typical examples; hard two functions in one
-module (one hard-tier, one medium-tier) with two typical examples each.
+(toggling on every quote instead of honoring doubled quotes). Shortcut names are unique
+across the catalog, so any two entries can share an instance.
 """
 
 from dataclasses import dataclass
@@ -28,18 +34,12 @@ from typing import Any, Callable
 from learning_loop.tasks.runtime.grade import run_checks
 from learning_loop.tasks.spec import Checks, Family, Reject, Solution, TaskSpec
 
-INSTRUCTION_ONE = """Implement the function `{name}` in `/app/{module}` so that it does what its docstring says.
+MODULE = "toolkit.py"
+INSTRUCTION = """Implement the functions `{a}` and `{b}` in `/app/toolkit.py` so that each does what its docstring says.
 
-The docstring specifies the behavior precisely and shows a few examples; you can run the examples with `python3 -m doctest -v {module}` in `/app`. The function will also be called with other inputs, including the edge cases the docstring describes.
+The docstrings specify the behavior precisely and show examples; you can run the examples with `python3 -m doctest -v toolkit.py` in `/app`. The functions will also be called with other inputs, including the edge cases the docstrings describe.
 
-Keep the function name and signature, use only the Python standard library, and do not print anything.
-"""
-
-INSTRUCTION_MANY = """Implement the functions {names} in `/app/{module}` so that each does what its docstring says.
-
-The docstrings specify the behavior precisely and show a few examples; you can run the examples with `python3 -m doctest -v {module}` in `/app`. The functions will also be called with other inputs, including the edge cases the docstrings describe.
-
-Keep the function names and signatures, use only the Python standard library, and do not print anything.
+Keep the function names and signatures, use only the Python standard library, and do not print anything. Put all of your code in `/app/toolkit.py`: it is tested by importing that file on its own, from a directory that holds no other file.
 """
 
 N_HIDDEN_TYPICAL = 4
@@ -51,12 +51,10 @@ PATH_NAMES = ["usr", "lib", "home", "etc", "var", "src", "docs", "tmp", "data", 
 @dataclass(frozen=True)
 class Entry:
     """One catalog function. `body(p)` is the reference body, `wrong(p)` maps shortcut names
-    to wrong bodies, `typical(rng, p)` draws one argument list, `edges(rng, p)` the stated edge
-    cases as (label, args) and `shown_edge` the label an easy instance shows as an example."""
+    (unique across the catalog) to wrong bodies, `typical(rng, p)` draws one argument list and
+    `edges(rng, p)` the stated edge cases as (label, args)."""
 
     name: str
-    module: str
-    tier: str
     signature: str
     params: Callable[[Any], dict]
     doc: Callable[[dict], str]
@@ -64,7 +62,6 @@ class Entry:
     wrong: Callable[[dict], dict[str, str]]
     typical: Callable[[Any, dict], list]
     edges: Callable[[Any, dict], list[tuple[str, list]]]
-    shown_edge: str
     no_mutation: Callable[[Any, dict], list] | None = None  # args whose first element must not change
 
 
@@ -75,7 +72,7 @@ def _sub(src: str, **values) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# compress_ranges (easy)
+# compress_ranges
 # --------------------------------------------------------------------------- #
 
 COMPRESS_BODY = """    values = sorted(set(nums))
@@ -130,23 +127,20 @@ def _compress_edges(rng, p):
 
 COMPRESS = Entry(
     name="compress_ranges",
-    module="ranges.py",
-    tier="easy",
     signature="nums: list[int]) -> str",
     params=lambda rng: {"sep": rng.choice(["-", "..", "~"]), "min_run": rng.choice([2, 3]), "joiner": rng.choice([",", ", "])},
     doc=_compress_doc,
     body=lambda p: _sub(COMPRESS_BODY, MIN_RUN=p["min_run"], SEP=p["sep"], JOINER=p["joiner"]),
     wrong=lambda p: {
-        "unsorted-input": _sub(COMPRESS_BODY.replace("values = sorted(set(nums))", "values = list(nums)"), MIN_RUN=p["min_run"], SEP=p["sep"], JOINER=p["joiner"]),
+        "unsorted-nums": _sub(COMPRESS_BODY.replace("values = sorted(set(nums))", "values = list(nums)"), MIN_RUN=p["min_run"], SEP=p["sep"], JOINER=p["joiner"]),
         "run-length-off-by-one": _sub(COMPRESS_BODY.replace(">= @MIN_RUN@", "> @MIN_RUN@"), MIN_RUN=p["min_run"], SEP=p["sep"], JOINER=p["joiner"]),
     },
     typical=_compress_typical,
     edges=_compress_edges,
-    shown_edge="unsorted",
 )
 
 # --------------------------------------------------------------------------- #
-# rle_encode (easy)
+# rle_encode
 # --------------------------------------------------------------------------- #
 
 RLE_FMT = """    def run(ch, n):
@@ -228,8 +222,6 @@ def _rle_sub(src, p):
 
 RLE = Entry(
     name="rle_encode",
-    module="rle.py",
-    tier="easy",
     signature="s: str) -> str",
     params=lambda rng: {"count_first": rng.choice([True, False]), "omit_one": rng.choice([True, False])},
     doc=_rle_doc,
@@ -237,11 +229,10 @@ RLE = Entry(
     wrong=lambda p: {"drops-last-run": _rle_sub(RLE_DROPS_LAST, p), "empty-input-crash": _rle_sub(RLE_EMPTY_CRASH, p)},
     typical=_rle_typical,
     edges=_rle_edges,
-    shown_edge="long_run",
 )
 
 # --------------------------------------------------------------------------- #
-# window_sums (easy)
+# window_sums
 # --------------------------------------------------------------------------- #
 
 WINDOW_BODY = """    if k < 1:
@@ -269,8 +260,6 @@ def _window_edges(rng, p):
 
 WINDOW = Entry(
     name="window_sums",
-    module="windows.py",
-    tier="easy",
     signature="xs: list[int], k: int) -> list[int]",
     params=lambda rng: {},
     doc=lambda p: (
@@ -285,11 +274,10 @@ WINDOW = Entry(
     },
     typical=_window_typical,
     edges=_window_edges,
-    shown_edge="k_too_big",
 )
 
 # --------------------------------------------------------------------------- #
-# merge_intervals (medium)
+# merge_intervals
 # --------------------------------------------------------------------------- #
 
 MERGE_BODY = """    out = []
@@ -356,26 +344,23 @@ def _merge_edges(rng, p):
 
 MERGE = Entry(
     name="merge_intervals",
-    module="intervals.py",
-    tier="medium",
     signature="intervals: list[list[int]]) -> list[list[int]]",
     params=lambda rng: {"touching": rng.choice(["merge", "separate"])},
     doc=_merge_doc,
     body=_merge_src,
     wrong=lambda p: {
         "touching-off-by-one": _merge_src(p, flip=True),
-        "unsorted-input": _merge_src(p, unsorted=True),
+        "unsorted-intervals": _merge_src(p, unsorted=True),
         "contained-interval": _merge_src(p, contained=True),
         "sorts-in-place": _merge_src(p, in_place=True),
     },
     typical=_merge_typical,
     edges=_merge_edges,
-    shown_edge="touching",
     no_mutation=_merge_typical,  # an unsorted list, which sorting in place would reorder
 )
 
 # --------------------------------------------------------------------------- #
-# top_words (medium)
+# top_words
 # --------------------------------------------------------------------------- #
 
 TOP_BODY = """    import re
@@ -433,8 +418,6 @@ def _top_edges(rng, p):
 
 TOP = Entry(
     name="top_words",
-    module="words.py",
-    tier="medium",
     signature="text: str, k: int) -> list[list]",
     params=lambda rng: {"min_len": rng.choice([2, 3, 4])},
     doc=lambda p: (
@@ -452,11 +435,10 @@ TOP = Entry(
     },
     typical=_top_typical,
     edges=_top_edges,
-    shown_edge="tie_order",
 )
 
 # --------------------------------------------------------------------------- #
-# version_compare (medium)
+# version_compare
 # --------------------------------------------------------------------------- #
 
 VERSION_PARTS = """    def parts(v):
@@ -512,8 +494,6 @@ def _version_edges(rng, p):
 
 VERSION = Entry(
     name="version_compare",
-    module="versions.py",
-    tier="medium",
     signature="a: str, b: str) -> int",
     params=lambda rng: {"allow_v": rng.choice([True, False])},
     doc=lambda p: (
@@ -532,11 +512,10 @@ VERSION = Entry(
     },
     typical=_version_typical,
     edges=_version_edges,
-    shown_edge="trailing_zero",
 )
 
 # --------------------------------------------------------------------------- #
-# normalize_path (hard)
+# normalize_path
 # --------------------------------------------------------------------------- #
 
 PATH_BODY = """    absolute = path.startswith("/")
@@ -623,8 +602,6 @@ def _path_sub(src, p):
 
 PATH = Entry(
     name="normalize_path",
-    module="paths.py",
-    tier="hard",
     signature="path: str) -> str",
     params=lambda rng: {"keep_trailing": rng.choice([True, False])},
     doc=_path_doc,
@@ -636,11 +613,10 @@ PATH = Entry(
     },
     typical=_path_typical,
     edges=_path_edges,
-    shown_edge="leading_dotdot",
 )
 
 # --------------------------------------------------------------------------- #
-# split_fields (hard)
+# split_fields
 # --------------------------------------------------------------------------- #
 
 SPLIT_BODY = """    fields = []
@@ -754,8 +730,6 @@ def _split_edges(rng, p):
 
 SPLIT = Entry(
     name="split_fields",
-    module="fields.py",
-    tier="hard",
     signature="line: str) -> list[str]",
     params=lambda rng: {"sep": rng.choice([",", ";", "|"])},
     doc=_split_doc,
@@ -767,7 +741,6 @@ SPLIT = Entry(
     },
     typical=_split_typical,
     edges=_split_edges,
-    shown_edge="doubled_quotes",
 )
 
 CATALOG = {e.name: e for e in (COMPRESS, RLE, WINDOW, MERGE, TOP, VERSION, PATH, SPLIT)}
@@ -776,15 +749,20 @@ CATALOG = {e.name: e for e in (COMPRESS, RLE, WINDOW, MERGE, TOP, VERSION, PATH,
 # Assembling an instance
 # --------------------------------------------------------------------------- #
 
-MODULE_DOC = '"""{title}"""\n'
-
-
 def _call(name, args):
     return f"{name}({', '.join(repr(a) for a in args)})"
 
 
+def _example_text(entry, args, outcome):
+    """One doctest example; an exception matches by its type only."""
+    kind, result = outcome
+    if kind == "raises":
+        return f">>> {_call(entry.name, args)}  # doctest: +IGNORE_EXCEPTION_DETAIL\nTraceback (most recent call last):\nValueError\n"
+    return f">>> {_call(entry.name, args)}\n{result!r}\n"
+
+
 def _docstring(entry, p, examples):
-    text = entry.doc(p) + "\n\n" + "".join(f">>> {_call(entry.name, args)}\n{result!r}\n" for args, result in examples)
+    text = entry.doc(p) + "\n\n" + "".join(_example_text(entry, args, outcome) for args, outcome in examples)
     lines = text.rstrip("\n").split("\n")
     body = "\n".join(("    " + ln) if ln else "" for ln in lines)
     return f'    """{body[4:]}\n    """\n'
@@ -812,17 +790,29 @@ def _hardcoded(entry, examples):
     """What an agent writes when it special-cases the docstring examples."""
     names = _argnames(entry)
     lines = []
-    for args, result in examples:
+    for args, (kind, result) in examples:
         if len(args) == 1:
             cond = f"{names[0]} == {args[0]!r}"
         else:
             cond = f"({', '.join(names)}) == ({', '.join(repr(a) for a in args)})"
-        lines.append(f"    if {cond}:\n        return {result!r}\n")
+        lines.append(f"    if {cond}:\n        " + ('raise ValueError("example")' if kind == "raises" else f"return {result!r}") + "\n")
     return "".join(lines) + "    raise NotImplementedError\n"
 
 
 def _write(module, source):
     return f"cat > /app/{module} <<'PY'\n{source}PY\n"
+
+
+def _copy(v):
+    return [_copy(x) for x in v] if isinstance(v, list) else v
+
+
+def _outcome(fn, args):
+    """("value", result) or ("raises", None) for a ValueError."""
+    try:
+        return ("value", fn(*_copy(args)))
+    except ValueError:
+        return ("raises", None)
 
 
 def _checks_for(rng, entry, p, ref, examples):
@@ -840,45 +830,45 @@ def _checks_for(rng, entry, p, ref, examples):
     checks = []
     for i, (label, args) in enumerate(cases):
         name = f"{entry.name}_{label}_{i}"
-        try:
-            result = ref[entry.name](*[_copy(a) for a in args])
-        except ValueError:
+        kind, result = _outcome(ref[entry.name], args)
+        if kind == "raises":
             checks.append({"name": name, "func": entry.name, "kind": "raises", "args": args})
-            continue
-        checks.append({"name": name, "func": entry.name, "kind": "equal", "args": args, "expected": result})
+        else:
+            checks.append({"name": name, "func": entry.name, "kind": "equal", "args": args, "expected": result})
     if entry.no_mutation is not None:
         checks.append({"name": f"{entry.name}_no_mutation", "func": entry.name, "kind": "no_mutation", "args": entry.no_mutation(rng, p)})
     return checks
 
 
-def _copy(v):
-    return [_copy(x) for x in v] if isinstance(v, list) else v
-
-
-def _examples(rng, entry, p, ref, n, show_edge):
+def _examples(rng, entry, p, ref, cfg):
+    """[(args, outcome)]: distinct typical examples, then the shown edge cases (from a draw of
+    their own), in a shuffled order. Returns the examples and the labels of the shown edges."""
+    edges = entry.edges(rng, p)
+    labels = [label for label, _ in edges]
+    n_shown = {"all": len(labels), "half": len(labels) // 2, "none": 0}[cfg["shown_edges"]]
+    shown = sorted(rng.sample(labels, n_shown), key=labels.index)
     examples, seen = [], []
-    edge = dict(entry.edges(rng, p))[entry.shown_edge] if show_edge else None
-    while len(examples) < n - (1 if edge else 0):
+    while len(examples) < cfg["typical_examples"]:
         args = entry.typical(rng, p)
         if args in seen:
             continue
         seen.append(args)
-        examples.append((args, ref[entry.name](*_copy(args))))
-    if edge is not None:
-        examples.insert(rng.randint(0, len(examples)), (edge, ref[entry.name](*_copy(edge))))
-    return examples
+        examples.append((args, _outcome(ref[entry.name], args)))
+    for label, args in edges:
+        if label in shown:
+            examples.insert(rng.randint(0, len(examples)), (args, _outcome(ref[entry.name], args)))
+    return examples, shown
 
 
 def build(ctx):
     rng, cfg = ctx.rng, ctx.params
-    entries = [CATALOG[rng.choice(sorted(n for n, e in CATALOG.items() if e.tier == tier))] for tier in cfg["tiers"]]
-    module = entries[0].module if len(entries) == 1 else "toolkit.py"
-    stubs, oracle_parts, all_checks, specs = [], [], [], {}
+    entries = [CATALOG[name] for name in rng.sample(sorted(CATALOG), 2)]
+    stubs, oracle_parts, all_checks, specs, shown_edges = [], [], [], {}, {}
     wrong_by_entry, hard_parts = {}, []
     for entry in entries:
         p = entry.params(rng)
         ref = _exec(_function(entry, "", entry.body(p)))
-        examples = _examples(rng, entry, p, ref, cfg["examples"], cfg["show_edge"])
+        examples, shown_edges[entry.name] = _examples(rng, entry, p, ref, cfg)
         doc = _docstring(entry, p, examples)
         if '"""' in doc[7:-8] or "\\" in doc:
             raise Reject("an example does not fit in a docstring")
@@ -898,34 +888,28 @@ def build(ctx):
     shortcuts = {"hardcode-examples": _module(hard_parts)}
     for i, entry in enumerate(entries):
         for name, src in wrong_by_entry[entry.name].items():
-            if name in shortcuts:
-                raise AssertionError(f"duplicate shortcut name {name}")
             shortcuts[name] = _module(oracle_parts[:i] + [src] + oracle_parts[i + 1 :])
     names = [e.name for e in entries]
-    if len(names) == 1:
-        instruction = INSTRUCTION_ONE.format(name=names[0], module=module)
-    else:
-        instruction = INSTRUCTION_MANY.format(names=" and ".join(f"`{n}`" for n in names), module=module)
     return TaskSpec(
-        instruction=instruction,
-        files={module: _module(stubs)},
-        grader=Checks(f"/app/{module}", module[:-3], tuple(all_checks)),
-        oracle=Solution(_write(module, oracle), lambda f, s=oracle: {f"/app/{module}": s}),
-        shortcuts={k: Solution(_write(module, v), lambda f, s=v: {f"/app/{module}": s}) for k, v in shortcuts.items()},
-        params={"functions": names, "spec": specs, "n_checks": len(all_checks)},
+        instruction=INSTRUCTION.format(a=names[0], b=names[1]),
+        files={MODULE: _module(stubs)},
+        grader=Checks(f"/app/{MODULE}", MODULE[:-3], tuple(all_checks)),
+        oracle=Solution(_write(MODULE, oracle), lambda f, s=oracle: {f"/app/{MODULE}": s}),
+        shortcuts={k: Solution(_write(MODULE, v), lambda f, s=v: {f"/app/{MODULE}": s}) for k, v in shortcuts.items()},
+        params={"functions": names, "spec": specs, "shown_edges": shown_edges, "n_checks": len(all_checks)},
     )
 
 
 FAMILY = Family(
     name="implement-function",
-    version=1,
+    version=2,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases"),
     difficulties={
-        "easy": {"tiers": ["easy"], "examples": 4, "show_edge": True},
-        "medium": {"tiers": ["medium"], "examples": 3, "show_edge": False},
-        "hard": {"tiers": ["hard", "medium"], "examples": 2, "show_edge": False},
+        "easy": {"typical_examples": 3, "shown_edges": "all"},
+        "medium": {"typical_examples": 2, "shown_edges": "half"},
+        "hard": {"typical_examples": 2, "shown_edges": "none"},
     },
     build=build,
 )

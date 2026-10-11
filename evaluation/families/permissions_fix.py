@@ -3,18 +3,30 @@
 /app/perms.policy has one `<pattern> <mode>` rule per line. A pattern matches a file's path
 relative to /app/site, where `*` matches any characters including `/` and a leading `.`; the
 last matching rule wins, and files no rule matches keep their mode. The grader is a FileTree
-over /app/site with every file's content and mode.
+over /app/site with every file's content and mode. The instruction, including its examples of
+`*` crossing `/` and matching a leading `.`, is the same at every difficulty.
 
-Construction: the rules go from general to specific, and some files match two rules with
-different modes (`secrets/*` then `secrets/*.pub`; on medium/hard `*.env` then
-`config/prod/*`; on hard `secrets/*` then `*.key`), so applying the first matching rule
-fails. Files that a rule matches only because `*` crosses `/` sit in subfolders
-(`scripts/x.sh` under `*.sh`; on medium/hard also `public/css/x.css` under `public/*`) and on
-medium/hard a hidden `.env` matches `*.env`, so running `chmod <mode> <pattern>` with shell
-globbing fails. Some files match no rule and have modes other than 0644, so resetting
-every file to 0644 before applying the rules fails. Every file starts with a mode
-other than its target, so doing nothing fails. Every trap holds by construction, so the
-first draw is always used.
+Data per difficulty: easy has 9 files under `public/`, `bin/`, `scripts/`, `secrets/` and
+`data/` plus `index.html`, and 5 rules (`public/*`, `*.sh`, `bin/*`, `secrets/*`,
+`secrets/*.pub`); medium adds `public/css/`, `bin/tools/`, a hidden `.env` and `config/`
+files with the rules `*.env` and `config/prod/*`; hard adds `secrets/ssh/`, `logs/`,
+`vendor/` and `docs/` files with the rules `logs/*` and `*.key`, and a comment line before
+each group of rules.
+
+Traps and the shortcut that checks each:
+
+- the rules go from general to specific, and some files match two rules with different modes
+  (`secrets/*` then `secrets/*.pub`; on medium/hard `*.env` then `config/prod/*`; on hard
+  `secrets/*` then `*.key`), so applying the first matching rule (`first-match`) fails;
+- files that a rule matches only because `*` crosses `/` sit in subfolders (`scripts/x.sh`
+  under `*.sh`; on medium/hard also `public/css/x.css` under `public/*`) and on medium/hard a
+  hidden `.env` matches `*.env`, so running `chmod <mode> <pattern>` with shell globbing
+  (`shell-glob`) fails;
+- some files match no rule and have modes other than 0644, so resetting every file to 0644
+  before applying the rules (`reset-then-apply`) fails;
+- every file starts with a mode other than its target, so doing nothing fails.
+
+Every trap holds by construction, so the first draw is always used.
 """
 
 from learning_loop.tasks.spec import Family, FileState, FileTree, Solution, TaskSpec, tree_entry
@@ -28,13 +40,12 @@ UNMATCHED_MODES = [0o600, 0o640, 0o660, 0o664, 0o666, 0o750, 0o775]  # never 064
 
 INSTRUCTION = """The deployment in `/app/site/` has messy file permissions. `/app/perms.policy` lists the modes its files must have, one rule per line: `<pattern> <mode>`, where the pattern is matched against a file's path relative to `/app/site/` (such as `bin/deploy.sh`) and the mode is octal. Lines starting with `#` and empty lines are comments.
 
-- In a pattern, `*` matches any sequence of characters, including none, `/` and a leading `.`; every other character matches itself. A pattern must match the whole path.{examples}
+- In a pattern, `*` matches any sequence of characters, including none, `/` and a leading `.`; every other character matches itself. A pattern must match the whole path. So `*.sh` matches `run.sh` and `tools/x/run.sh`, and `*.env` matches `.env`.
 - When several rules match a file, the **last** matching rule wins.
 - A file that no rule matches keeps its current mode.
 
 Set the mode of every regular file under `/app/site/`, in every subfolder, accordingly. Leave directory modes as they are, and do not change, add, remove or rename any file.
 """
-EXAMPLES = " So `*.sh` matches `run.sh` and `tools/x/run.sh`, and `*.env` matches `.env`."
 
 SOLVER = '''
 import re
@@ -223,7 +234,7 @@ def build(ctx):
         files[f"site/{path}"], modes[f"site/{path}"] = content, mode
         expected[path] = tree_entry(content, target.get(path, mode))
     return TaskSpec(
-        instruction=INSTRUCTION.format(examples=EXAMPLES if p["level"] < 2 else ""),
+        instruction=INSTRUCTION,
         files=files,
         modes=modes,
         grader=FileTree("/app/site", expected),
@@ -239,7 +250,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="permissions-fix",
-    version=1,
+    version=2,
     cluster="filesystem",
     category="shell",
     skills=("shell", "permissions", "chmod", "globs"),

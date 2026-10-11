@@ -1,10 +1,12 @@
 """cron-translate: translate job schedule descriptions into crontab lines.
 
-Task: `/app/jobs.txt` lists jobs (name, command, an English schedule; hard adds a status, and
-paused jobs are left out). The agent writes `/app/crontab`, one line per active job:
+Task: `/app/jobs.txt` lists jobs (name, command, an English schedule, a status of `active` or
+`paused`). The agent writes `/app/crontab`, one line per active job (paused jobs are left out):
 `minute hour day-of-month month day-of-week command`. The file is parsed (never run) with the
 grader's `crontab` format, which compares each job by the times it runs: any equivalent cron
 syntax (lists or ranges, `*/N` or an explicit list, names, 7 for Sunday, `@daily`) is correct.
+The key is built with the same parser from the oracle's lines. The instruction is the same at
+every difficulty; easy and medium simply have no paused job.
 
 Construction: each job is a structured schedule rendered into English. Every instance has an
 "every N minutes" job, a job that runs on Sunday, a day-of-month job and a job on other
@@ -46,7 +48,7 @@ JOBS = [
     ("archive-orders", "/opt/app/bin/archive orders --older-than 90d"),
 ]
 
-INSTRUCTION = """The scheduled jobs for our app server are described in `/app/jobs.txt`. Write the crontab for them to `/app/crontab`: one line per {which} job, in standard five-field cron syntax followed by the job's command exactly as given:
+INSTRUCTION = """The scheduled jobs for our app server are described in `/app/jobs.txt`. Write the crontab for them to `/app/crontab`: one line per active job (leave out every job whose status is `paused`), in standard five-field cron syntax followed by the job's command exactly as given:
 
 ```
 minute hour day-of-month month day-of-week command
@@ -86,12 +88,12 @@ def _at(t):
     return {"min": ("val", t[1]), "hour": ("val", t[0], t[2])}
 
 
-def _kind(rng, kind, fmt12, hard):
+def _kind(rng, kind, fmt12, spoken):
     """(description, schedule) for one kind of job."""
     t = _time(rng, fmt12)
     if kind == "every_min":
         n = rng.choice([5, 10, 15, 20, 30])
-        phrase = {15: "every quarter hour", 30: "every half hour"}.get(n) if hard and rng.random() < 0.6 else None
+        phrase = {15: "every quarter hour", 30: "every half hour"}.get(n) if spoken and rng.random() < 0.6 else None
         return phrase or f"every {n} minutes", {"min": ("step", n), "hour": ANY, "dom": ANY, "mon": ANY, "dow": ANY}
     if kind == "every_hours":
         n = rng.choice([2, 3, 4, 6, 8, 12])
@@ -170,51 +172,49 @@ def _fixed(text):
 
 def build(ctx):
     rng, p = ctx.rng, ctx.params
-    hard = p["paused"]
+    paused, spoken = p["paused"], p["spoken_intervals"]
     kinds = list(p["required"]) + rng.sample(p["extra"], p["n_jobs"] - len(p["required"]))
     rng.shuffle(kinds)
-    names = rng.sample(JOBS, len(kinds) + (1 if hard else 0))
+    names = rng.sample(JOBS, len(kinds) + (1 if paused else 0))
     fmt12 = [p["clock12"] and rng.random() < 0.5 for _ in kinds]
     jobs = []
     for i, (kind, (name, cmd)) in enumerate(zip(kinds, names)):
-        desc, sched = _kind(rng, kind, fmt12[i], hard)
+        desc, sched = _kind(rng, kind, fmt12[i], spoken)
         jobs.append({"name": name, "command": cmd, "desc": desc, "sched": sched, "paused": False})
     if p["clock12"]:
-        # an afternoon time on a 12-hour clock (hour 13-23), and on hard a 12:xx AM time (hour 0)
+        # an afternoon time on a 12-hour clock (hour 13-23), and with `midnight` a 12:xx AM time (hour 0)
         timed = [j for j in jobs if j["sched"]["hour"][0] == "val"]
         if len(timed) < 2:
             raise Reject("too few jobs with a time of day")
         pm, am = rng.sample(timed, 2)
-        _retime(rng, pm, rng.randint(13, 23))
-        if hard:
-            _retime(rng, am, 0)
-    if hard:
+        _retime(pm, rng.randint(13, 23))
+        if p["midnight"]:
+            _retime(am, 0)
+    if paused:
         name, cmd = names[-1]
-        desc, sched = _kind(rng, rng.choice(["daily", "weekly", "monthly"]), False, hard)
+        desc, sched = _kind(rng, rng.choice(["daily", "weekly", "monthly"]), False, spoken)
         jobs.insert(rng.randint(0, len(jobs)), {"name": name, "command": cmd, "desc": desc, "sched": sched, "paused": True})
     lines = [_line(j) for j in jobs if not j["paused"]]
     if len(set(lines)) != len(lines):
         raise Reject("two jobs share a crontab line")
     blocks = []
     for j in jobs:
-        block = [f"job: {j['name']}", f"command: {j['command']}", f"schedule: {j['desc']}"]
-        if hard:
-            block.append(f"status: {'paused' if j['paused'] else 'active'}")
+        block = [f"job: {j['name']}", f"command: {j['command']}", f"schedule: {j['desc']}", f"status: {'paused' if j['paused'] else 'active'}"]
         blocks.append("\n".join(block))
     text = "# Scheduled jobs for app-01. All times are server time (UTC).\n\n" + "\n\n".join(blocks) + "\n"
     expected = parse_crontab("".join(ln + "\n" for ln in lines))
-    bugs = ["sunday-is-1", "dom-dow-swap", "every-n-as-value"] + (["ignore-pm"] if p["clock12"] else []) + (["include-paused"] if hard else [])
+    bugs = ["sunday-is-1", "dom-dow-swap", "every-n-as-value"] + (["ignore-pm"] if p["clock12"] else []) + (["include-paused"] if paused else [])
     return TaskSpec(
-        instruction=INSTRUCTION.format(which="active (not paused)" if hard else "listed"),
+        instruction=INSTRUCTION,
         files={"jobs.txt": text},
         grader=ParsedAnswer("/app/crontab", "crontab", expected),
         oracle=_fixed(_crontab(jobs)),
         shortcuts={b: _fixed(_crontab(jobs, b)) for b in bugs},
-        params={"n_jobs": len(jobs), "clock12": p["clock12"], "paused": hard},
+        params={"n_jobs": len(jobs), **{k: p[k] for k in ("clock12", "midnight", "paused", "spoken_intervals")}},
     )
 
 
-def _retime(rng, job, hour):
+def _retime(job, hour):
     """Give a timed job a new hour on the 12-hour clock and re-render its description."""
     old = (job["sched"]["hour"][1], job["sched"]["min"][1], job["sched"]["hour"][2])
     new = (hour, old[1], True)
@@ -224,25 +224,29 @@ def _retime(rng, job, hour):
 
 FAMILY = Family(
     name="cron-translate",
-    version=1,
+    version=2,
     cluster="config-repair",
     category="config",
     skills=("cron", "translation", "canonical-form"),
     difficulties={
-        "easy": {"n_jobs": 4, "required": ["every_min", "sunday", "monthly", "weekly"], "extra": [], "clock12": False, "paused": False},
+        "easy": {"n_jobs": 4, "required": ["every_min", "sunday", "monthly", "weekly"], "extra": [], "clock12": False, "midnight": False, "paused": False, "spoken_intervals": False},
         "medium": {
             "n_jobs": 6,
             "required": ["every_min", "weekend", "monthly", "weekdays", "dow_list"],
             "extra": ["daily", "every_hours", "dom_list"],
             "clock12": True,
+            "midnight": False,
             "paused": False,
+            "spoken_intervals": False,
         },
         "hard": {
             "n_jobs": 8,
             "required": ["every_min", "sunday", "dom_list", "dow_list", "business", "month_list"],
             "extra": ["daily", "every_hours", "weekdays", "weekend", "monthly"],
             "clock12": True,
+            "midnight": True,
             "paused": True,
+            "spoken_intervals": True,
         },
     },
     build=build,

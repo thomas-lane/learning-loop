@@ -1,7 +1,9 @@
 """The write-code families (implement-function, format-converter, write-validator,
 refactor-preserve, cli-flags): deterministic, clean of stray randomness, and their answer
 keys and traps re-derived here from the rendered files with independent implementations,
-never with the families' own reference or wrong solutions."""
+never with the families' own reference or wrong solutions. Each family's instruction is the
+same at every difficulty, apart from values drawn for the instance (names, schemas, the
+example output); difficulty lives in the data."""
 
 from __future__ import annotations
 
@@ -23,7 +25,10 @@ from pathlib import Path
 import pytest
 
 from learning_loop.core.config import REPO_ROOT
+from learning_loop.tasks.generate import rng_for, verifier_key
 from learning_loop.tasks.render import render
+from learning_loop.tasks.runtime import grade as grade_runtime
+from learning_loop.tasks.spec import GenContext, Reject
 
 FAMILY_DIR = REPO_ROOT / "evaluation" / "families"
 MODULES = {
@@ -37,16 +42,31 @@ SEEDS = [1, 2, 3]
 DIFFICULTIES = ["easy", "medium", "hard"]
 
 
-def _load(module: str):
+def _load_module(module: str):
     path = FAMILY_DIR / f"{module}.py"
     spec = importlib.util.spec_from_file_location(f"write_code_{module}", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.FAMILY
+    return mod
 
 
-FAMILIES = {name: _load(module) for name, module in MODULES.items()}
+FAMILY_MODULES = {name: _load_module(module) for name, module in MODULES.items()}
+FAMILIES = {name: mod.FAMILY for name, mod in FAMILY_MODULES.items()}
+VERSIONS = {"implement-function": 2, "format-converter": 2, "write-validator": 2, "refactor-preserve": 2, "cli-flags": 2}
+
+
+def _build(family: str, difficulty: str, seed: int):
+    """The first spec `build` returns for (difficulty, seed), without generation's grading
+    (fast enough to scan many seeds); draws that `build` itself rejects are skipped."""
+    fam = FAMILIES[family]
+    rng = rng_for(fam, difficulty, seed)
+    for _ in range(100):
+        try:
+            return fam.build(GenContext(family=fam.name, difficulty=difficulty, seed=seed, params=fam.difficulties[difficulty], rng=rng))
+        except Reject:
+            continue
+    raise AssertionError("no draw")
 
 
 @pytest.fixture(scope="module")
@@ -80,7 +100,7 @@ def _files(d: Path) -> dict[str, str]:
 
 def test_family_metadata():
     for name, fam in FAMILIES.items():
-        assert fam.name == name and fam.cluster == "write-code" and fam.version == 1 and fam.profile == "python@1"
+        assert fam.name == name and fam.cluster == "write-code" and fam.version == VERSIONS[name] and fam.profile == "python@1"
         assert list(fam.difficulties) == DIFFICULTIES
 
 
@@ -172,20 +192,30 @@ REFS = {
 }
 
 
+RAISES = object()
+
+
 def _examples(source: str) -> dict[str, list[tuple[list, object]]]:
-    """Function name -> [(args, result)] from the doctest examples in its docstring."""
+    """Function name -> [(args, result)] from the doctest examples in its docstring; the result
+    of an example that shows an exception is `RAISES` (it must name ValueError)."""
     out = {}
     for node in ast.parse(source).body:
         if isinstance(node, ast.FunctionDef):
             ex = []
             for e in doctest.DocTestParser().get_examples(ast.get_docstring(node) or ""):
                 call = ast.parse(e.source, mode="eval").body
-                ex.append(([ast.literal_eval(a) for a in call.args], ast.literal_eval(e.want.strip())))
+                if e.exc_msg is not None:
+                    assert e.exc_msg.strip() == "ValueError" and e.options.get(doctest.IGNORE_EXCEPTION_DETAIL)
+                    ex.append(([ast.literal_eval(a) for a in call.args], RAISES))
+                else:
+                    ex.append(([ast.literal_eval(a) for a in call.args], ast.literal_eval(e.want.strip())))
             out[node.name] = ex
     return out
 
 
-def _traps_present(func, checks, p):
+def _traps_present(func, checks, p, mutation=True):
+    """Every trap of `func` has an input among `checks` (`mutation`: including the
+    no_mutation check, which examples cannot show)."""
     args = [c["args"] for c in checks]
     if func == "compress_ranges":
         assert any(a[0] != sorted(set(a[0])) and len(set(a[0])) < len(a[0]) for a in args)  # unsorted with duplicates
@@ -198,7 +228,7 @@ def _traps_present(func, checks, p):
     elif func == "merge_intervals":
         assert any(any(x[1] == y[0] for x in a[0] for y in a[0]) for a in args)  # intervals that only touch
         assert any(any(x != y and x[0] < y[0] and y[1] < x[1] for x in a[0] for y in a[0]) for a in args)  # one inside another
-        assert any(c["kind"] == "no_mutation" and c["args"][0] != sorted(c["args"][0]) for c in checks)
+        assert not mutation or any(c["kind"] == "no_mutation" and c["args"][0] != sorted(c["args"][0]) for c in checks)
     elif func == "top_words":
         def first_seen_differs(c):
             pos = {w: i for i, w in reversed(list(enumerate(re.findall("[a-z]+", c["args"][0].lower()))))}
@@ -228,13 +258,17 @@ def test_implement_function_key_and_traps(rendered, difficulty, seed):
     d, params = rendered("implement-function", difficulty, seed)
     key, files = _key(d), _files(d)
     ((module, source),) = files.items()
-    assert "raise NotImplementedError" in source and key["module"] == module[:-3]
+    assert module == "toolkit.py" and "raise NotImplementedError" in source and key["module"] == "toolkit"
     examples = _examples(source)
-    assert sorted(examples) == sorted(params["functions"])
+    assert sorted(examples) == sorted(params["functions"]) and len(examples) == 2
     for func in params["functions"]:
         p, ref = params["spec"][func], REFS[func]
         for args, want in examples[func]:
-            assert ref(*args, p) == want, (func, args)
+            if want is RAISES:
+                with pytest.raises(ValueError):
+                    ref(*args, p)
+            else:
+                assert ref(*args, p) == want, (func, args)
         checks = [c for c in key["checks"] if c["func"] == func]
         for c in checks:
             if c["kind"] == "raises":
@@ -403,19 +437,17 @@ def test_write_validator_key_and_traps(rendered, difficulty, seed):
     key, files = _key(d), _files(d)
     instruction = (d / "instruction.md").read_text()
     schema = _schema_from_instruction(instruction)
-    assert [f[0] for f in schema] == params["fields"]
-    api = "is_valid" if "`is_valid(record)`" in instruction else "validate"
-    unknown_rule, not_object = "`unknown_field`" in instruction, "not_an_object" in instruction
+    assert [f[0] for f in schema] == params["fields"] and sorted(f[1] for f in schema) == sorted(["ident", "int", "enum", "email", "tags", "date"])
+    assert "`validate(record)`" in instruction and "`unknown_field`" in instruction and "not_an_object" in instruction
 
     def result(record):
-        codes = _codes(record, schema, unknown_rule, not_object)
-        return not codes if api == "is_valid" else codes
+        return _codes(record, schema, True, True)
 
     for e in json.loads(files["examples.json"]):
         assert result(e["record"]) == e["expected"]
     shown = [e["record"] for e in json.loads(files["examples.json"])]
     records = [c["args"][0] for c in key["checks"]]
-    assert all(c["func"] == api and c["kind"] == "equal" for c in key["checks"])
+    assert all(c["func"] == "validate" and c["kind"] == "equal" for c in key["checks"])
     for c in key["checks"]:
         assert result(c["args"][0]) == c["expected"], c
     assert not any(r in shown for r in records)
@@ -426,21 +458,20 @@ def test_write_validator_key_and_traps(rendered, difficulty, seed):
     assert any(r.get(num[0]) is True for r in dicts) and num[3]["min"] <= 1 <= num[3]["max"]  # true would pass as 1
     assert any(type(r.get(num[0])) is str and r[num[0]].isdigit() for r in dicts)
     for bound in (num[3]["min"], num[3]["max"]):
-        assert any(type(r.get(num[0])) is int and r[num[0]] == bound and result(r) in (True, []) for r in dicts)
+        assert any(type(r.get(num[0])) is int and r[num[0]] == bound and result(r) == [] for r in dicts)
     assert any(isinstance(r.get(ident[0]), str) and r[ident[0]].endswith("\n") for r in dicts)
     assert any(isinstance(r.get(ident[0]), str) and re.match(r"[a-z][a-z0-9_-]*", r[ident[0]]) and not set(r[ident[0]]) <= ident[3]["chars"] for r in dicts)
-    if api == "validate":
-        names = [f[0] for f in schema]
+    names = [f[0] for f in schema]
 
-        def schema_order(code):
-            return next((i for i, n in enumerate(names) if code.startswith(n + "_")), len(names))
+    def schema_order(code):
+        return next((i for i, n in enumerate(names) if code.startswith(n + "_")), len(names))
 
-        multi = [result(r) for r in dicts if len(result(r)) >= 2]
-        assert multi and any(sorted(cs, key=schema_order) != cs for cs in multi)  # checking in schema order is not enough
-    if difficulty == "hard":
-        date = next(f[0] for f in schema if f[1] == "date")
-        assert any(r.get(date) == "2026-2-03" for r in dicts) and any(r.get(date) == "20260203" for r in dicts)
-        assert any("unknown_field" in result(r) for r in dicts) and any(type(r) is not dict for r in records)
+    multi = [result(r) for r in dicts if len(result(r)) >= 2]
+    assert multi and any(sorted(cs, key=schema_order) != cs for cs in multi)  # checking in schema order is not enough
+    assert any("unknown_field" in result(r) for r in dicts) and any(type(r) is not dict for r in records)
+    date = next(f[0] for f in schema if f[1] == "date")
+    library_traps = any(r.get(date) == "2026-2-03" for r in dicts) and any(r.get(date) == "20260203" for r in dicts)
+    assert library_traps == (difficulty != "easy")
 
 
 # --------------------------------------------------------------------------- #
@@ -542,6 +573,7 @@ def test_refactor_preserve_key_and_traps(rendered, difficulty, seed):
     if over:
         assert any(c["func"] == over[0] and c["kind"] == "equal" and any(_call_or_error(parse, [x])[0] == "raises" for x in c["args"][0]) for c in key["checks"])
     assert re.search(rf"{helper}\(", files[f"test_{module}"])  # the visible tests show the new form
+    assert len(exts) == 2 and len(params["functions"]) == 3
 
 
 def _strings(args):
@@ -557,11 +589,11 @@ def _strings(args):
 # --------------------------------------------------------------------------- #
 
 
-def _cli_expected(argv, inputs, difficulty):
+def _cli_expected(argv, inputs):
     """(stdout, exit) per the instruction, from a hand-rolled reading of argv."""
     path, rest = argv[2], argv[3:]
     opts = {"limit": None, "format": "text", "min": 1, "only": [], "exclude": []}
-    formats = ["text", "json"] + (["csv"] if difficulty != "easy" else [])
+    formats = ["text", "json", "csv"]
     i = 0
     while i < len(rest):
         flag, value = rest[i], rest[i + 1]
@@ -600,7 +632,7 @@ def test_cli_flags_key_and_traps(rendered, tmp_path, difficulty, seed):
     key, files = _key(d), _files(d)
     checks = {c["name"]: c for c in key["checks"]}
     for c in key["checks"]:
-        assert _cli_expected(c["argv"], c.get("inputs", {}), difficulty) == (c["stdout"], c["exit"]), c
+        assert _cli_expected(c["argv"], c.get("inputs", {})) == (c["stdout"], c["exit"]), c
     # the original script's output is the default output
     (tmp_path / "report.py").write_text(files["report.py"])
     (tmp_path / "events.log").write_text(checks["default"]["inputs"]["events.log"])
@@ -610,7 +642,7 @@ def test_cli_flags_key_and_traps(rendered, tmp_path, difficulty, seed):
     counts = Counter(line.split("\t")[1] for line in log.splitlines())
     instruction = (d / "instruction.md").read_text()
     example = instruction.split("```\n")[1]
-    assert _cli_expected(["python3", "report.py", "sample.log", "--limit", "2", "--format", "json"], {"sample.log": files["sample.log"]}, difficulty) == (example, 0)
+    assert _cli_expected(["python3", "report.py", "sample.log", "--limit", "2", "--format", "json"], {"sample.log": files["sample.log"]}) == (example, 0)
     assert all(c["stdout"] != example for c in key["checks"])
     assert any('"' in n for n in counts) and '\\"' in checks["json"]["stdout"]
     assert {checks["limit_zero"]["exit"], checks["limit_negative"]["exit"]} == {2}
@@ -624,3 +656,262 @@ def test_cli_flags_key_and_traps(rendered, tmp_path, difficulty, seed):
         assert c["argv"][c["argv"].index("--exclude") + 1] == top and len(c["stdout"].splitlines()) == 2
         assert checks["only_and_exclude"]["exit"] == 2 and checks["missing_log"]["exit"] == 1
         assert len(checks["only_repeated"]["stdout"].splitlines()) == 2
+
+
+# --------------------------------------------------------------------------- #
+# One instruction per family, difficulty in the data
+# --------------------------------------------------------------------------- #
+
+
+def _template(family: str, spec) -> tuple[str, str]:
+    """(variant, instruction with the instance's own values blanked out). Variants are the
+    seed's choice of domain or conversion, whose instructions legitimately differ."""
+    text, params = spec.instruction, spec.params
+    if family == "cli-flags":
+        return "", re.sub(r"```\n.*?```", "```{example}```", text, flags=re.S)
+    if family == "write-validator":
+        return params["domain"], re.sub(r"Schema:\n.*?\nRules:", "Schema:\n{fields}\nRules:", text, flags=re.S)
+    if family == "refactor-preserve":
+        return params["domain"], text
+    if family == "implement-function":
+        a, b = params["functions"]
+        return "", text.replace(f"`{a}`", "`{a}`", 1).replace(f"`{b}`", "`{b}`", 1)
+    if params["conversion"] == "kv-csv":
+        return "kv-csv", re.sub(r"header `[^`]*`", "header `{header}`", text)
+    return "fixed-jsonl", re.sub(r"(\| `\w+` \| \d+-\d+ \| \w+ \|\n)+", "{table}\n", text)
+
+
+@pytest.mark.parametrize("family", list(MODULES))
+def test_instruction_is_the_same_at_every_difficulty(family):
+    texts: dict[str, dict[str, set[str]]] = {}
+    for difficulty in DIFFICULTIES:
+        for seed in range(12):
+            variant, text = _template(family, _build(family, difficulty, seed))
+            texts.setdefault(variant, {}).setdefault(difficulty, set()).add(text)
+    for variant, by_level in texts.items():
+        assert len(set().union(*by_level.values())) == 1, (family, variant)
+    assert any(len(by_level) == 3 for by_level in texts.values())
+
+
+def test_checks_families_say_the_module_is_tested_on_its_own():
+    """The `checks` grader copies only the module file into an empty directory, so a helper in
+    another module fails the import; each instruction says so."""
+    for family in ("implement-function", "write-validator", "refactor-preserve"):
+        for difficulty in DIFFICULTIES:
+            assert "importing that file on its own, from a directory that holds no other file" in _build(family, difficulty, 1).instruction
+
+
+# --------------------------------------------------------------------------- #
+# cli-flags
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_flags_instruction_defines_every_output():
+    text = _build("cli-flags", "easy", 1).instruction
+    assert "An empty report is just the header line." in text and "An empty report is `[]`." in text
+    assert "every other field is written as it is, without quotes" in text
+    assert "`--format csv`" not in text and "`text`, `json` or `csv`" in text and "exit with status 1" in text
+
+
+def test_cli_flags_only_min_count_keeps_a_row():
+    """`--only a --only b --min-count min+1` on two categories with equal counts left only the
+    CSV header; a and b now have distinct counts, so one row remains."""
+    for seed in range(150):
+        checks = {c["name"]: c for c in _build("cli-flags", "hard", seed).grader.checks}
+        c = checks["only_min_count"]
+        only = [c["argv"][i + 1] for i, a in enumerate(c["argv"]) if a == "--only"]
+        counts = Counter(line.split("\t")[1] for line in c["inputs"]["events.log"].splitlines())
+        assert len({counts[n] for n in only}) == 2 and len(c["stdout"].splitlines()) == 2, seed
+
+
+def test_cli_flags_top_count_is_unique_by_construction():
+    mod = FAMILY_MODULES["cli-flags"]
+    for i in range(500):
+        rng = rng_for(FAMILIES["cli-flags"], "hard", i)
+        values = sorted(mod._counts(rng, rng.choice(DIFFICULTIES)).values(), reverse=True)
+        assert values[0] > values[1] and len(set(values)) == len(values) - 1
+
+
+# --------------------------------------------------------------------------- #
+# write-validator
+# --------------------------------------------------------------------------- #
+
+
+def _codes_for(spec, record):
+    return _codes(record, _schema_from_instruction(spec.instruction), True, True)
+
+
+def test_write_validator_ordering_record_breaks_only_plain_rules():
+    """The record planted for code ordering has two plain errors; its int field used to get
+    `True`, so the bool trap, not the ordering, decided the check."""
+    for difficulty in DIFFICULTIES:
+        for seed in range(40):
+            spec = _build("write-validator", difficulty, seed)
+            names = [f[0] for f in _schema_from_instruction(spec.instruction)]
+            (c,) = [c for c in spec.grader.checks if c["name"].startswith("multi_order_")]
+            record = c["args"][0]
+            codes = _codes_for(spec, record)
+            assert len(codes) == 2 and not any(type(v) is bool for v in record.values()), (seed, record)
+            order = [next(i for i, n in enumerate(names) if code.startswith(n + "_")) for code in codes]
+            assert order == sorted(order, reverse=True) and order[0] != order[1]
+
+
+def _validator_traps(spec, record):
+    """The traps a record exhibits, judged from the instruction's schema."""
+    schema = _schema_from_instruction(spec.instruction)
+    if type(record) is not dict:
+        return {"assumes-object"}
+    ident = next(f for f in schema if f[1] == "ident")
+    num = next(f for f in schema if f[1] == "int")
+    out = set()
+    v = record.get(num[0])
+    if v is True or v is False:
+        out.add("bool-is-int")
+    if type(v) is str and v.isdigit():
+        out.add("coerces-strings")
+    if type(v) is int and v in (num[3]["min"], num[3]["max"]):
+        out.add("range-off-by-one")
+    s = record.get(ident[0])
+    if type(s) is str and s.endswith("\n"):
+        out.add("dollar-newline")
+    if type(s) is str and re.fullmatch(r"[a-z][a-z0-9_-]*", s) and not set(s) <= ident[3]["chars"]:
+        out.add("re-match-prefix")
+    if any(k not in {f[0] for f in schema} for k in record):
+        out.add("unknown-fields-ignored")
+    return out
+
+
+def test_write_validator_examples_show_the_traps_by_difficulty():
+    shown_traps = {"assumes-object", "bool-is-int", "coerces-strings", "range-off-by-one", "dollar-newline", "re-match-prefix", "unknown-fields-ignored"}
+    for seed in range(10):
+        by_level = {}
+        for difficulty in DIFFICULTIES:
+            spec = _build("write-validator", difficulty, seed)
+            examples = json.loads(spec.files["examples.json"])
+            by_level[difficulty] = set().union(*(_validator_traps(spec, e["record"]) for e in examples))
+            for e in examples:
+                assert _codes_for(spec, e["record"]) == e["expected"]
+        assert by_level["easy"] == shown_traps and by_level["hard"] == set(), seed
+
+
+# --------------------------------------------------------------------------- #
+# refactor-preserve
+# --------------------------------------------------------------------------- #
+
+
+def _visible_calls(test_source: str, func: str) -> list[list]:
+    return [[ast.literal_eval(a) for a in node.args] for node in ast.walk(ast.parse(test_source)) if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == func]
+
+
+def test_refactor_preserve_legacy_test_exercises_each_legacy_rule():
+    """Easy's visible legacy test used [a, b, a.upper()], where .upper() changes nothing for a
+    bare number; now each string relies on a legacy rule."""
+    for seed in range(20):
+        spec = _build("refactor-preserve", "easy", seed)
+        tests = next(v for k, v in spec.files.items() if k.startswith("test_"))
+        (legacy,) = re.findall(r"def test_legacy_forms\(\):\n    assert \w+\.\w+\((\[.*?\])\)", tests)
+        strings = ast.literal_eval(legacy)
+        assert any(s != s.lower() for s in strings) and any(s != s.strip() for s in strings)
+        if spec.params["domain"] == "timesheet":
+            assert any(s.strip().isdigit() for s in strings)
+        else:
+            assert any(re.fullmatch(r"[0-9]+b", s.strip()) for s in strings)
+
+
+def test_refactor_preserve_invalid_limit_is_not_a_second_helper_case():
+    """The third function's invalid limit was another reversed-order duration, the case
+    `helper_invalid_5` already checks; it is now a form the helper checks do not use."""
+    for difficulty in DIFFICULTIES:
+        for seed in range(20):
+            checks = _build("refactor-preserve", difficulty, seed).grader.checks
+            forms = {re.sub("[0-9]+", "N", c["args"][0]) for c in checks if c["name"].startswith("helper_invalid")}
+            (limit,) = [c["args"][1] for c in checks if c["name"] == "over_invalid_limit"]
+            assert re.sub("[0-9]+", "N", limit) not in forms
+
+
+def test_refactor_preserve_difficulty_is_in_the_data():
+    for seed in range(10):
+        shown, invalid = {}, {}
+        for difficulty in DIFFICULTIES:
+            spec = _build("refactor-preserve", difficulty, seed)
+            assert len(spec.params["extensions"]) == 2 and len(spec.params["functions"]) == 3
+            tests = next(v for k, v in spec.files.items() if k.startswith("test_"))
+            shown[difficulty] = len(re.findall(r"def test_\w+_new_form_", tests))
+            invalid[difficulty] = sum(c["name"].startswith("helper_invalid") for c in spec.grader.checks)
+        assert shown["easy"] > shown["medium"] > shown["hard"] >= 1
+        assert invalid["easy"] < invalid["medium"] < invalid["hard"]
+
+
+# --------------------------------------------------------------------------- #
+# implement-function
+# --------------------------------------------------------------------------- #
+
+
+def test_implement_function_shortcut_names_are_unique_across_the_catalog():
+    """Any two catalog entries can share an instance, so no wrong variant may share a name
+    (merge_intervals and compress_ranges both had `unsorted-input`)."""
+    import random
+
+    names = [n for e in FAMILY_MODULES["implement-function"].CATALOG.values() for n in e.wrong(e.params(random.Random(0)))]
+    assert len(names) == len(set(names)) and "hardcode-examples" not in names
+
+
+def test_implement_function_examples_cover_edges_by_difficulty():
+    """Easy's docstring examples show every trap its hidden checks test, hard's none; the two
+    functions are drawn the same way at every difficulty."""
+    funcs = {d: Counter() for d in DIFFICULTIES}
+    for seed in range(12):
+        for difficulty in DIFFICULTIES:
+            spec = _build("implement-function", difficulty, seed)
+            examples = _examples(spec.files["toolkit.py"])
+            for func in spec.params["functions"]:
+                funcs[difficulty][func] += 1
+                p = spec.params["spec"][func]
+                as_checks = [
+                    {"args": a, "kind": "raises"} if r is RAISES else {"args": a, "kind": "equal", "expected": r}
+                    for a, r in examples[func]
+                ]
+                hidden_raises = any(c["kind"] == "raises" for c in spec.grader.checks if c["func"] == func)
+                if difficulty == "easy":
+                    _traps_present(func, as_checks, p, mutation=False)
+                    assert hidden_raises == any(c["kind"] == "raises" for c in as_checks)
+                if difficulty == "hard":
+                    assert all(c["kind"] == "equal" for c in as_checks) and len(as_checks) == 2
+    assert all(len(c) >= 6 for c in funcs.values())
+
+
+# --------------------------------------------------------------------------- #
+# format-converter
+# --------------------------------------------------------------------------- #
+
+
+def test_format_converter_instruction_matches_the_grader():
+    """The grader compares stdout after text-mode decoding (`\\r\\n` becomes `\\n`) and ignores
+    trailing line breaks, and runs the converter in a directory without the examples: the
+    instruction says both, and a converter writing CRLF without a final line break scores 1."""
+    for seed in range(6):
+        spec = _build("format-converter", "medium", seed)
+        text = spec.instruction
+        assert "Lines may end with `\\n` or `\\r\\n`, and the line break after the last line is optional." in text
+        assert "from a directory that holds only `convert.py`" in text and "cannot read the examples" in text
+        assert "Blank lines (empty or containing only spaces)" in text
+        key = verifier_key(spec)
+        outputs = {c["argv"][-1]: c["stdout"].replace("\n", "\r\n").rstrip("\r\n") for c in key["checks"]}
+        script = f"import sys\nsys.stdout.write({outputs!r}[sys.argv[1]])\n"
+        view = grade_runtime.MemoryView({"/app/convert.py": (script.encode(), 0o644)})
+        assert grade_runtime.grade(key, view, trusted=True)[0] == 1.0
+
+
+def test_format_converter_data_by_difficulty():
+    """Every difficulty can contain every case of the grammar; the data decides which do. A
+    fixed-width export always has an optional integer field (for spaces-only integers), and
+    from medium on both conversions contain a spaces-only blank line."""
+    for seed in range(30):
+        for difficulty in DIFFICULTIES:
+            spec = _build("format-converter", difficulty, seed)
+            if spec.params["conversion"] == "fixed-jsonl":
+                assert any(k == "int" and n != "id" for n, _, _, k in spec.params["fields"])
+            if difficulty != "easy":
+                for c in spec.grader.checks:
+                    ((_, text),) = c["inputs"].items()
+                    assert not text or any(ln and not ln.strip() for ln in text.splitlines())

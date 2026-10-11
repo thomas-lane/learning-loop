@@ -7,11 +7,16 @@ milliseconds, removed keys), in schema 1 names. The agent rewrites the file in p
 the structure is plain tables, an array of tables and scalar/array values, all writable by
 hand. The grader parses the file as TOML and compares it with the expected structure.
 
-Construction: each instance draws its changes from a pool: easy one of each kind; medium
-two of each, with a fractional seconds value (2.5 s must become the integer 2500); hard adds
-`[[workers]]` (several entries, each with a seconds value to convert), a removed key whose
-name also exists in another table (where it stays) and a "planned, not released" schema 3
-section that must not be applied.
+The instruction is the same at every difficulty, including the note about `tomllib` and the
+missing TOML writer.
+
+Construction: each instance draws its changes from a pool: easy one of each kind (rename,
+unit conversion, table move, removal); medium two of each, one of the two conversions always
+being `[database] connect_timeout`, which holds a fractional seconds value (2.5 s must become
+the integer 2500); hard has three renames and three moves, the same two conversions as medium
+plus `[[workers]] interval` (several entries, each with a seconds value to convert), the two
+removals plus `[server] debug`, whose name also exists in `[logging]` (where it stays), and a
+"planned, not released" schema 3 section that must not be applied.
 
 Traps (declared shortcuts, all failing by construction):
 - `no-unit-conversion`: renames the converted keys but keeps their old numbers;
@@ -238,6 +243,7 @@ CONVERTS = [
     ({"op": "convert", "table": "server", "key": "max_body_kb", "new": "max_body_bytes", "factor": 1024}, "`[server] max_body_kb` (kilobytes, 1 KB = 1024 bytes) is replaced by `max_body_bytes` (bytes)."),
     ({"op": "convert", "table": "logging", "key": "retention_days", "new": "retention_hours", "factor": 24}, "`[logging] retention_days` is replaced by `retention_hours` (1 day = 24 hours)."),
 ]
+FRACTIONAL = CONVERTS[1]  # `[database] connect_timeout`, which holds a fractional value when `fractional` is set
 WORKER_CONVERT = ({"op": "convert", "table": "workers", "key": "interval", "new": "interval_ms", "factor": 1000}, "`[[workers]] interval` (seconds) is replaced by `interval_ms` (milliseconds) in every worker.")
 MOVES = [
     ({"op": "move", "table": "database", "to": "storage.database"}, "`[database]` moves to `[storage.database]`."),
@@ -257,10 +263,8 @@ PLANNED = [
 
 INSTRUCTION = """`/app/config.toml` still uses config schema 1. Migrate it in place to schema 2, following the schema 2 changes in `/app/CHANGELOG.md`.
 
-Settings the changelog does not mention keep their values. A converted value is an integer in its new unit. {hint}
+Settings the changelog does not mention keep their values. A converted value is an integer in its new unit. Python's `tomllib` can read the file; there is no TOML writer installed, so write the TOML text yourself.
 """
-
-HINT = "Python's `tomllib` can read the file; there is no TOML writer installed, so write the TOML text yourself."
 
 
 def _changelog(rng, items, planned):
@@ -285,10 +289,11 @@ def build(ctx):
     rng, p = ctx.rng, ctx.params
     tables = _config(rng, p)
     text = _render(tables)
-    picked = rng.sample(RENAMES, p["renames"]) + rng.sample(CONVERTS, p["converts"]) + rng.sample(MOVES, p["moves"]) + rng.sample(REMOVES, p["removes"])
-    if p["fractional"]:
-        picked = [c for c in picked if c[0].get("key") != "connect_timeout"]
-        picked.append(CONVERTS[1])  # the fractional seconds value is always converted
+    if p["fractional"]:  # the fractional seconds value is always converted, as one of the `converts`
+        converts = rng.sample([c for c in CONVERTS if c is not FRACTIONAL], p["converts"] - 1) + [FRACTIONAL]
+    else:
+        converts = rng.sample(CONVERTS, p["converts"])
+    picked = rng.sample(RENAMES, p["renames"]) + converts + rng.sample(MOVES, p["moves"]) + rng.sample(REMOVES, p["removes"])
     if p["workers"]:
         picked += [WORKER_CONVERT, SERVER_DEBUG]
     touched = {(c[0].get("table"), c[0].get("key")) for c in picked}
@@ -307,7 +312,7 @@ def build(ctx):
     if p["planned"]:
         shortcuts["apply-planned"] = _solution("apply-planned", changes, planned_ops)
     return TaskSpec(
-        instruction=INSTRUCTION.format(hint="" if p["planned"] else HINT).rstrip() + "\n",
+        instruction=INSTRUCTION,
         files={"config.toml": text, "CHANGELOG.md": _changelog(rng, [c[1] for c in picked], [c[1] for c in planned])},
         grader=ParsedAnswer("/app/config.toml", "toml", expected),
         oracle=_solution("oracle", changes, planned_ops),
@@ -318,7 +323,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="toml-migrate",
-    version=1,
+    version=2,
     cluster="config-repair",
     category="config",
     skills=("toml", "migration", "unit-conversion", "config-repair"),

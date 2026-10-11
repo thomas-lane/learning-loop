@@ -4,30 +4,36 @@
 getters; medium adds merging two configs, hard adds writing INI text). The module docstring
 specifies the format; 1 / 2 / 4 functions carry a bug from a catalog of classic parser
 mistakes (inline-comment stripping, sloppy unquoting, case folding, duplicate detection,
-`;` comments, case-sensitive booleans, unstripped or empty list items, shallow merges,
-missing quotes on output). Errors are specified: malformed input raises the module's
-`ParseError`, invalid booleans `ValueError` and missing sections or keys `KeyError`. The
-visible tests in `/app/test_iniconf.py` expose all / half / a quarter of the bugs; a function
-with a bug no visible test exposes gets no visible test. Hidden checks use fresh
-seed-specific configs that always contain each feature the format defines (both comment
-characters, indented comments, mixed-case keys, section names and values, `=` and `#`
-inside values, quoted values with inner spaces, a value ending in a quote, the same key in
-two sections) and every specified error.
+`;` comments, case-sensitive booleans, invalid booleans read as False, unstripped or empty
+list items, shallow merges, merges where the base wins, missing quotes or blank lines
+between sections on output). Each function's bug is drawn uniformly from its catalog entries. Errors are
+specified: malformed input raises the module's `ParseError` (a `ValueError`), invalid
+booleans `ValueError` and missing sections or keys `KeyError`; a `raises` check also accepts
+a subclass of the named exception. The instruction is the same at every difficulty apart
+from the function list: some visible tests fail, and they may not cover every bug.
+
+`/app/test_iniconf.py` holds two visible tests per function, of different kinds and at least
+one of them not an error check, so neither the tested functions nor their number of tests
+say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
+test of that function fails because of its bug, both with that bug alone and with every bug
+in place. Every other function's tests pass on the module as given; for a function with a
+*hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
+only the hidden bugs are left. Hidden checks use fresh seed-specific configs (never a
+visible test's, except `dumps({})`, whose input is always the same) that always contain each
+feature the format defines (both comment characters, indented comments, mixed-case keys,
+section names and values, `=`, `#` and `;` inside values, quoted values with inner spaces, a
+value ending in a quote, the same key in two sections) and every specified error.
 
 Traps, each declared as a shortcut that must fail:
-- `visible-bugs-only` (when some bug has no visible test): fix only the bugs the visible
-  tests expose;
-- `hardcode-visible`: return the visible tests' expected values for their exact inputs and
-  keep the buggy code for everything else;
-- `wrong-fix-<function>`: every bug fixed correctly except one, which gets a plausible wrong
-  fix from the catalog (e.g. lower-casing the whole line instead of the key, tracking
-  duplicate keys across sections, `value.strip('"')` as unquoting, copying only the outer
-  dict when merging).
+- `visible-bugs-only` (when some bug is hidden): fix only the bugs the visible tests expose;
+- `wrong-fix-<function>`, for every bug: every bug fixed correctly except this one, which
+  gets a plausible wrong fix from the catalog (e.g. lower-casing the whole line instead of
+  the key, tracking duplicate keys across sections, `value.strip('"')` as unquoting,
+  treating `;` anywhere as a comment, forgetting `0` among the false values, copying only
+  the outer dict when merging).
 
 Expected values come from the data each config is generated from, not from the module's
-code, and `build` checks that the correct module passes every hidden check. `build` redraws
-a visible test until it exposes its function's bug (or, for a function without a visible
-bug, passes with the hidden-only bugs still in place).
+code, and `build` checks that the correct module passes every hidden check.
 """
 
 import json
@@ -143,7 +149,8 @@ CORRECT = {
 _UNQUOTE = "    if len(value) >= 2 and value[0] == '\"' and value[-1] == '\"':\n        return value[1:-1]\n    return value\n"
 _DUP_KEY = "            if key in section:\n                raise ParseError(f\"line {lineno}: duplicate key {key!r}\")\n"
 
-# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix, or None}
+# func -> bug -> {"bug": swaps applied to CORRECT[func], "naive": swaps for a plausible wrong fix}.
+# Every bug has a wrong fix, so the bug is drawn uniformly among its function's bugs.
 BUGS = {
     "parse_value": {
         "cuts_at_hash": {
@@ -169,7 +176,7 @@ BUGS = {
         },
         "hash_comments_only": {
             "bug": [('if not line or line[0] in "#;":', 'if not line or line[0] == "#":')],
-            "naive": None,
+            "naive": [("        line = raw.strip()\n", '        line = raw.split(";")[0].strip()  # drop ; comments\n')],
         },
     },
     "get_bool": {
@@ -183,7 +190,7 @@ BUGS = {
         },
         "anything_else_false": {
             "bug": [('    if value in ("0", "no", "false", "off"):\n        return False\n    raise ValueError(f"not a boolean: {value!r}")\n', "    return False\n")],
-            "naive": None,
+            "naive": [('if value in ("0", "no", "false", "off"):', 'if value in ("no", "false", "off"):')],
         },
     },
     "get_list": {
@@ -213,7 +220,7 @@ BUGS = {
         },
         "base_wins": {
             "bug": [("        merged.setdefault(name, {}).update(keys)\n", "        for key, value in keys.items():\n            merged.setdefault(name, {}).setdefault(key, value)\n")],
-            "naive": None,
+            "naive": [("        merged.setdefault(name, {}).update(keys)\n", "        merged[name] = dict(keys)\n")],
         },
     },
     "dumps": {
@@ -221,9 +228,9 @@ BUGS = {
             "bug": [("            if value != value.strip():\n                value = f'\"{value}\"'\n", "")],
             "naive": [("if value != value.strip():", 'if " " in value:')],
         },
-        "blank_after_every_section": {
-            "bug": [('    return "\\n".join(blocks)\n', '    return "".join(block + "\\n" for block in blocks)\n')],
-            "naive": [('    return "\\n".join(blocks)\n', '    return "".join(block + "\\n" for block in blocks).rstrip("\\n") + "\\n"\n')],
+        "sections_run_together": {
+            "bug": [('    return "\\n".join(blocks)\n', '    return "".join(blocks)\n')],
+            "naive": [('    return "\\n".join(blocks)\n', '    return "\\n".join(blocks) + "\\n"\n')],
         },
     },
 }
@@ -257,6 +264,9 @@ def _value_parts(rng, kind):
         return v, v
     if kind == "equals":
         v = rng.choice([f"user={w};level={n}", f"a={n}", f"{w}=={n}"])
+        return v, v
+    if kind == "semicolon":
+        v = rng.choice([f"{w};{n}", f"{w}; {_cap(rng, w)}", f"a={n}; b={w}"])
         return v, v
     if kind == "hash":
         v = rng.choice([f"{w} # {n}", f"color #{n:03d}", f"{w}#{n}; {w}"])
@@ -352,6 +362,11 @@ def _dumps_ref(config):
     return "\n".join(out)
 
 
+# Kinds of check whose input is the same in every instance, so a visible test and a hidden
+# check of that kind may share it (hard-coding it gives the specified answer anyway).
+FIXED_INPUTS = ("dumps_empty",)
+
+
 def _cases(rng, func):
     """The hidden checks for `func`, with fresh inputs; the visible tests draw from the same kinds."""
     w, n = rng.choice(WORDS), rng.randint(2, 999)
@@ -365,7 +380,7 @@ def _cases(rng, func):
         ]
     if func == "parse":
         text, expected = _rich_text(
-            rng, ["equals", "hash", "quoted", "inch", "mixed"], mixed_sections=True, shared_key=True, upper_keys=True, comments=True, indent_comments=True
+            rng, ["equals", "hash", "semicolon", "quoted", "inch", "mixed"], mixed_sections=True, shared_key=True, upper_keys=True, comments=True, indent_comments=True
         )
         cfg = _simple_config(rng, 2)
         (s1, k1), (_, k2) = [(s, list(v)) for s, v in cfg.items()]
@@ -377,6 +392,7 @@ def _cases(rng, func):
         garbage = "\n".join(lines[:2] + [f"{w} {n}"] + lines[2:]) + "\n"
         return [
             _eq("parse_full", func, [text], expected),
+            _eq("parse_plain", func, [base], cfg),
             _raises("parse_duplicate_key", func, [dup_key], "ParseError"),
             _raises("parse_duplicate_section", func, [dup_section], "ParseError"),
             _raises("parse_key_before_section", func, [orphan], "ParseError"),
@@ -423,8 +439,10 @@ def _cases(rng, func):
         expected = {name: dict(keys) for name, keys in base.items()}
         expected[shared].update(override[shared])
         expected[extra] = dict(override[extra])
+        added = {name: {k: rng.choice(WORDS) for k in rng.sample(KEYS, 2)} for name in rng.sample([s for s in SECTIONS if s not in base], 2)}
         return [
             _eq("merge_overlap", func, [base, override], expected),
+            _eq("merge_new_sections", func, [base, added], {**base, **added}),
             {"name": "merge_base_unchanged", "func": func, "kind": "no_mutation", "args": [base, override]},
         ]
     if func == "dumps":
@@ -446,6 +464,9 @@ def _cases(rng, func):
 # --------------------------------------------------------------------------- #
 # The fix-code engine: buggy module, visible tests, shortcuts
 # --------------------------------------------------------------------------- #
+
+VISIBLE_PER_FUNCTION = 2  # visible tests per function, each of a different kind
+DRAWS_PER_KIND = 20
 
 
 def _apply(func, swaps):
@@ -487,7 +508,7 @@ def _test_function(c):
     else:  # no_mutation
         rest = "".join(", " + repr(a) for a in c["args"][1:])
         body = f"    arg = {c['args'][0]!r}\n    {c['func']}(arg{rest})\n    assert arg == {c['args'][0]!r}, \"the argument was modified\"\n"
-    return f"def test_{c['func']}():\n{body}"
+    return f"def test_{c['name'][len('visible_'):]}():\n{body}"
 
 
 TEST_RUNNER = """
@@ -506,18 +527,39 @@ if __name__ == "__main__":
 """
 
 
-def _hardcoded(src, visible):
-    """`src` plus wrappers that answer the given visible tests from their expectations."""
-    for c in visible:
-        f = c["func"]
-        if c["kind"] == "equal":
-            then = f"return {c['expected']!r}"
-        elif c["kind"] == "raises":
-            then = f"raise {c.get('exception', 'ValueError')}(\"invalid input\")"
+def _visible_tests(rng, f, ok, exposing):
+    """VISIBLE_PER_FUNCTION visible tests for `f`, each of a different kind of `_cases`, at
+    least one of them not a `raises` check, drawn with fresh inputs until `ok(check,
+    exposing)` holds; with `exposing`, the first must expose `f`'s bug. Every function gets
+    the same number and mix, so a function whose bug is hidden (whose tests must avoid it)
+    does not stand out. Returns fewer when that is impossible. The tests are in the order
+    `_cases` lists their kinds, so the failing one is not always first."""
+    first = _cases(rng, f)
+    order, kind_of = [c["name"] for c in first], {c["name"]: c["kind"] for c in first}
+    kinds = list(order)
+    rng.shuffle(kinds)
+
+    def draw(kind, expose):
+        for _ in range(DRAWS_PER_KIND):
+            c = _canonical(dict(next(c for c in _cases(rng, f) if c["name"] == kind), name=f"visible_{kind}"))
+            if ok(c, expose):
+                return c
+        return None
+
+    chosen = []
+    while len(chosen) < VISIBLE_PER_FUNCTION:
+        expose = exposing and not chosen
+        need_value = not expose and all(c["kind"] == "raises" for c in chosen) and len(chosen) == VISIBLE_PER_FUNCTION - 1
+        for kind in kinds:
+            if need_value and kind_of[kind] == "raises":
+                continue
+            if c := draw(kind, expose):
+                chosen.append(c)
+                kinds.remove(kind)
+                break
         else:
-            continue
-        src += f"\n\n_{f}_original = {f}\n\n\ndef {f}(*args):\n    if list(args) == {c['args']!r}:\n        {then}\n    return _{f}_original(*args)\n"
-    return src
+            break
+    return sorted(chosen, key=lambda c: order.index(c["name"][len("visible_") :]))
 
 
 def _write(source, then=""):
@@ -533,49 +575,55 @@ def build_fix(ctx, instruction, extra_imports=()):
     funcs = p["functions"]
     bugged = sorted(rng.sample(funcs, p["n_bugs"]))
     bugs = {f: rng.choice(sorted(BUGS[f])) for f in bugged}
-    if not any(BUGS[f][b]["naive"] for f, b in bugs.items()):
-        raise Reject("no injected bug has a catalogued wrong fix")
     visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
     bug_src = {f: _apply(f, BUGS[f][b]["bug"]) for f, b in bugs.items()}
     hidden_only = {f: s for f, s in bug_src.items() if f not in visible_bugs}
     ref, buggy, partial = _exec(_module(funcs, {})), _exec(_module(funcs, bug_src)), _exec(_module(funcs, hidden_only))
 
+    # Every function gets visible tests, and all of them pass once only the hidden bugs are
+    # left. A function with a visible bug gets one test that fails because of that bug (with
+    # it alone and with every bug in place); every other function's tests pass on the module
+    # as given, so they exercise behavior its hidden bug (if any) does not touch.
     visible = []
     for f in funcs:
-        if f in bugs and f not in visible_bugs:
-            continue  # a hidden bug gets no visible test
-        for _ in range(100):
-            c = _canonical(dict(rng.choice(_cases(rng, f)), name=f"visible_{f}"))
-            if _passes(ref, [c]) and _passes(partial, [c]) and (f not in visible_bugs or not _passes(buggy, [c])):
-                visible.append(c)
-                break
-        else:
-            raise Reject(f"no visible test for {f}")
+        if f in visible_bugs:
+            alone = _exec(_module(funcs, {f: bug_src[f]}))
 
-    seen = [(c["func"], c["args"]) for c in visible]
+            def ok(c, exposing, alone=alone):
+                if not (_passes(ref, [c]) and _passes(partial, [c])):
+                    return False
+                return not _passes(alone, [c]) and not _passes(buggy, [c]) if exposing else True
+
+        else:
+
+            def ok(c, exposing):
+                return _passes(ref, [c]) and _passes(partial, [c]) and _passes(buggy, [c])
+
+        tests = _visible_tests(rng, f, ok, exposing=f in visible_bugs)
+        if len(tests) < VISIBLE_PER_FUNCTION:
+            raise Reject(f"too few visible tests for {f}")
+        visible += tests
+
+    seen = [(c["func"], c["args"]) for c in visible if c["name"][len("visible_") :] not in FIXED_INPUTS]
     for _ in range(100):
         checks = [_canonical(c) for f in funcs for c in _cases(rng, f)]
         if not any((c["func"], c["args"]) in seen for c in checks):
             break  # hidden inputs differ from every visible test's, so hard-coding those cannot pass
     else:
         raise Reject("hidden checks keep repeating a visible test")
-    failed = [c["name"] for c in checks if not _passes(ref, [c])]
-    if failed:
-        raise RuntimeError(f"{ctx.family}: the correct module fails hidden checks {failed}")
+    if failed := [c["name"] for c in checks if not _passes(ref, [c])]:
+        raise Reject(f"the correct module fails hidden checks {failed}")
 
     names = ", ".join(funcs + list(extra_imports))
     tests = "\n\n".join(_test_function(c) for c in visible)
     test_src = f'"""Run with: python3 test_{MODULE}.py"""\n\nfrom {MODULE} import {names}  # noqa: F401\n\n\n{tests}' + TEST_RUNNER
     fixed = _module(funcs, {})
-    shortcuts = {"hardcode-visible": _solution(_hardcoded(_module(funcs, bug_src), [c for c in visible if c["func"] in visible_bugs]))}
+    shortcuts = {f"wrong-fix-{f}": _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])})) for f, b in bugs.items()}
     if hidden_only:
         shortcuts["visible-bugs-only"] = _solution(_module(funcs, hidden_only))
-    for f, b in bugs.items():
-        if BUGS[f][b]["naive"]:
-            shortcuts[f"wrong-fix-{f}"] = _solution(_module(funcs, {f: _apply(f, BUGS[f][b]["naive"])}))
     listed = ", ".join(f"`{f}`" for f in funcs)
     return TaskSpec(
-        instruction=instruction.format(functions=listed, hint=p["hint"]),
+        instruction=instruction.format(functions=listed),
         files={f"{MODULE}.py": _module(funcs, bug_src), f"test_{MODULE}.py": test_src},
         grader=Checks(PATH, MODULE, tuple(checks)),
         oracle=_solution(fixed, f"cd /app && python3 test_{MODULE}.py\n"),
@@ -584,16 +632,10 @@ def build_fix(ctx, instruction, extra_imports=()):
     )
 
 
-INSTRUCTION = """Our services read their settings with the small INI module `/app/iniconf.py` ({functions}), and some settings come out wrong. {hint}
+INSTRUCTION = """Our services read their settings with the small INI module `/app/iniconf.py` ({functions}), and some settings come out wrong. Some of the tests in `/app/test_iniconf.py` fail, and those tests may not cover every bug.
 
 Fix `iniconf.py` so that every function behaves exactly as the module docstring and its own docstring describe, including the errors they raise (`ParseError`, `ValueError`, `KeyError`). Keep the function names, signatures and the `ParseError` class, and use only the Python standard library. You may add tests to `/app/test_iniconf.py` (run it with `python3 test_iniconf.py`), but do not change what the existing tests assert.
 """
-
-HINTS = {
-    "easy": "One function has a bug, and a test in `/app/test_iniconf.py` fails because of it.",
-    "medium": "Some tests in `/app/test_iniconf.py` fail, and some bugs may not be covered by those tests at all.",
-    "hard": "Several functions have bugs; the tests in `/app/test_iniconf.py` catch only a few of them.",
-}
 
 
 def build(ctx):
@@ -602,14 +644,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-parser",
-    version=1,
+    version=2,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "parsing", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["parse_value", "parse", "get_bool", "get_list"], "n_bugs": 1, "visible_bug_tests": 1.0, "hint": HINTS["easy"]},
-        "medium": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge"], "n_bugs": 2, "visible_bug_tests": 0.5, "hint": HINTS["medium"]},
-        "hard": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge", "dumps"], "n_bugs": 4, "visible_bug_tests": 0.25, "hint": HINTS["hard"]},
+        "easy": {"functions": ["parse_value", "parse", "get_bool", "get_list"], "n_bugs": 1, "visible_bug_tests": 1.0},
+        "medium": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge"], "n_bugs": 2, "visible_bug_tests": 0.5},
+        "hard": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge", "dumps"], "n_bugs": 4, "visible_bug_tests": 0.25},
     },
     build=build,
 )

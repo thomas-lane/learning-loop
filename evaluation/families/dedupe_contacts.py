@@ -1,16 +1,25 @@
-"""dedupe-contacts: count the distinct people in a contact list in which the same person
+"""dedupe-contacts: count the distinct people in contact lists in which the same person
 appears several times with differently formatted emails and phone numbers.
 
 Two rows are the same person when their normalized emails or normalized phone numbers are
-equal, transitively; empty values match nothing and names are not used. Easy normalizes
-emails by trimming and lowercasing and phones to their digits. Medium/hard also drop `+tags`
-from every email's local part, drop dots from the local part of `gmail.com` addresses only,
-and drop a leading US country code `1` from 11-digit numbers. Hard adds a second file (a CRM
-export with its own column names) and states the rules without examples.
+equal, transitively; empty values match nothing and names are not used. An email is
+normalized by trimming, lowercasing and dropping a `+tag` from the local part, and, for
+`gmail.com` only, dropping the local part's dots; a phone by keeping its digits and dropping
+a leading US country code `1` from 11-digit numbers. The instruction states every rule, with
+examples, at every difficulty; the data decides which rules matter.
 
-Construction: people with unique normalized emails and phones, one to three rows each, every
-person's rows connected through their own email or phone. Planted in every instance, each
-breaking one wrong method by construction:
+Data per difficulty (`level`): easy has `contacts.csv` only, with no `+tags`, no gmail
+addresses written with and without dots, and no country codes, so trimming, lowercasing and
+keeping digits suffice. Medium adds the `+tag`, gmail-dot and country-code variants (a
+quarter of phones are written with `+1`) and a bridging person. Hard adds a second file,
+`crm_export.csv`, with its own column names (`Full Name`, `E-mail`, `Phone Number`). The
+number of background people is drawn from a range per difficulty, so the answer varies
+across seeds.
+
+Construction: people with unique normalized emails and phones (unique even with every dot
+removed, so only planted pairs collide), one to three rows each, every person's rows
+connected through their own email or phone, so the answer is the number of people built.
+Planted in every instance, each breaking one wrong method by construction:
 
 - a person linked only by an email that differs in case or whitespace (breaks raw emails:
   `no-normalization`, `phone-only-normalized`, `phone-key-only`, `pair-key`);
@@ -22,7 +31,8 @@ breaking one wrong method by construction:
   merges them), a `+1` country-code person (`no-country-code`), and a person whose third row
   bridges two earlier, unconnected rows (`greedy`, which marks a row as a duplicate only if
   it matches an earlier row, counts that person twice);
-- hard: people whose rows are all in the second file (`first-file`).
+- hard: people whose rows are all in the second file (`first-file`); `build` redraws when
+  there is none.
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv_revenue: the shell
 form reads /app/data, the model runs the same source on the generated files.
@@ -39,43 +49,29 @@ DOMAINS = ["acme.io", "example.org", "mailbox.net", "fastmail.com", "northwind.c
 TAGS = ["news", "shop", "work", "2025", "promo"]
 CRM_COLUMNS = ["Contact ID", "Full Name", "Company", "E-mail", "Phone Number"]
 
-INSTRUCTION = """{files}, merged from several address books, so the same person often appears more than once. Count the distinct people.
+INSTRUCTION = """The CSV files in `/app/data/` list contacts merged from several address books, so the same person often appears more than once. Count the distinct people across **all** the files.
+
+Each file names its columns in a header row. `contacts.csv` has the columns `name`, `email` and `phone`; other files are exports from other systems that use their own column names for the same three fields.
 
 Two rows belong to the same person when their normalized emails are equal **or** their normalized phone numbers are equal. This is transitive: if row A matches row B and row B matches row C, all three are one person. An empty email or phone matches nothing. Names are not reliable (different people can share a name), so do not use them.
 
-{rules}
+Normalize an email by trimming surrounding whitespace and lowercasing it, then removing a `+tag` from the part before the `@` (`Ann+News@Example.org` becomes `ann@example.org`). For `gmail.com` addresses only, also remove every dot before the `@` (`a.nn@gmail.com` becomes `ann@gmail.com`); for every other domain, dots are significant (`a.nn@example.org` and `ann@example.org` are different addresses).
+
+Normalize a phone number by keeping only its digits (`(555) 201-3344` becomes `5552013344`); if that leaves 11 digits starting with `1`, drop the leading `1` (the US country code), so `+1 (555) 201-3344` and `555.201.3344` are the same number.
 
 Write just the number of distinct people (nothing else) to `/app/answer.txt`.
 """
-
-FILES = {
-    1: "`/app/data/contacts.csv` lists contacts (columns `name`, `email`, `phone`)",
-    2: "`/app/data/contacts.csv` lists contacts (columns `name`, `email`, `phone`)",
-    3: "Contacts are in `/app/data/contacts.csv` (columns `name`, `email`, `phone`) and in `/app/data/crm_export.csv`, an export from the CRM with its own column names. Together they list contacts",
-}
-RULES = {
-    1: "Normalize an email by trimming surrounding whitespace and lowercasing it. Normalize a phone number by keeping only its digits (`(555) 201-3344` becomes `5552013344`).",
-    2: (
-        "Normalize an email by trimming surrounding whitespace and lowercasing it, then removing a `+tag` from the part before the `@` (`ann+news@example.org` becomes `ann@example.org`). "
-        "For `gmail.com` addresses only, also remove every dot before the `@` (`a.nn@gmail.com` becomes `ann@gmail.com`); for every other domain, dots are significant.\n\n"
-        "Normalize a phone number by keeping only its digits; if that leaves 11 digits starting with `1`, drop the leading `1` (the US country code), so `+1 (555) 201-3344` and `555.201.3344` are the same number."
-    ),
-    3: (
-        "Normalize an email by trimming surrounding whitespace, lowercasing it and removing any `+tag` from the part before the `@`; for `gmail.com` addresses only, also remove the dots before the `@` (other domains keep them). "
-        "Normalize a phone number to its digits, dropping the leading US country code `1` from 11-digit numbers."
-    ),
-}
 
 SOLVER = '''
 import csv
 import io
 
 
-def norm_email(raw, level, mode):
+def norm_email(raw, mode):
     if mode in ("no-normalization", "phone-only-normalized"):
         return raw
     e = raw.strip().lower()
-    if level >= 2 and "@" in e:
+    if "@" in e:
         local, _, domain = e.rpartition("@")
         if mode != "no-plus-tags":
             local = local.split("+")[0]
@@ -85,11 +81,11 @@ def norm_email(raw, level, mode):
     return e
 
 
-def norm_phone(raw, level, mode):
+def norm_phone(raw, mode):
     if mode in ("no-normalization", "email-only-normalized"):
         return raw
     d = "".join(ch for ch in raw if ch.isdigit())
-    if level >= 2 and mode != "no-country-code" and len(d) == 11 and d.startswith("1"):
+    if mode != "no-country-code" and len(d) == 11 and d.startswith("1"):
         d = d[1:]
     return d
 
@@ -112,11 +108,11 @@ def rows_of(texts, mode):
     return out
 
 
-def answer(texts, level, mode):
+def answer(texts, mode):
     rows = rows_of(texts, mode)
     keyed = []
     for name, email, phone in rows:
-        e, p = norm_email(email, level, mode), norm_phone(phone, level, mode)
+        e, p = norm_email(email, mode), norm_phone(phone, mode)
         keys = []
         if mode != "phone-key-only" and (e.strip() or mode == "empty-match"):
             keys.append(("email", e))
@@ -159,7 +155,7 @@ import os
 
 texts = [(os.path.basename(p), open(p, newline="").read()) for p in sorted(glob.glob("/app/data/*.csv"))]
 with open("/app/answer.txt", "w") as f:
-    f.write("%d\\n" % answer(texts, {level!r}, {mode!r}))
+    f.write("%d\\n" % answer(texts, {mode!r}))
 PY
 """
 
@@ -171,8 +167,8 @@ def _texts(files):
     return [(rel.split("/")[-1], data.decode()) for rel, data in sorted(files.items()) if rel.startswith("data/") and rel.endswith(".csv")]
 
 
-def _solution(mode, level):
-    return Solution(_SHELL.format(solver=SOLVER, level=level, mode=mode), lambda files: {"/app/answer.txt": "%d\n" % _NS["answer"](_texts(files), level, mode)})
+def _solution(mode):
+    return Solution(_SHELL.format(solver=SOLVER, mode=mode), lambda files: {"/app/answer.txt": "%d\n" % _NS["answer"](_texts(files), mode)})
 
 
 # ----------------------------------------------------------------------------- generation
@@ -320,7 +316,7 @@ def _render(rows, columns, crm):
 def build(ctx):
     rng, p = ctx.rng, ctx.params
     level = p["level"]
-    people, bridge = _people(rng, level, p["n_background"])
+    people, bridge = _people(rng, level, rng.randint(*p["n_background"]))
     rows = [(i, j, person["name"], e, ph) for i, person in enumerate(people) for j, (e, ph) in enumerate(person["rows"])]
     rng.shuffle(rows)
     if bridge is not None:  # the bridging row comes after the two rows it connects
@@ -341,34 +337,32 @@ def build(ctx):
         crm = name == "crm_export.csv"
         files[f"data/{name}"] = _render([(r[2], r[3], r[4]) for r in part], CRM_COLUMNS if crm else ["name", "email", "phone"], crm)
     texts = sorted((n, t) for n, t in ((k.split("/")[-1], v) for k, v in files.items()))
-    count = _NS["answer"](texts, level, "oracle")
-    if count != len(people):
-        raise Reject("the rows do not form exactly one group per person")
+    count = _NS["answer"](texts, "oracle")
     modes = ["no-normalization", "email-only-normalized", "phone-only-normalized", "email-key-only", "phone-key-only", "pair-key", "empty-match", "by-name"]
     if level >= 2:
         modes += ["over-normalize", "no-gmail-dots", "no-plus-tags", "no-country-code", "greedy"]
     if level == 3:
         modes.append("first-file")
     return TaskSpec(
-        instruction=INSTRUCTION.format(files=FILES[level], rules=RULES[level]),
+        instruction=INSTRUCTION,
         files=files,
         grader=NumericAnswer("/app/answer.txt", float(count)),
-        oracle=_solution("oracle", level),
-        shortcuts={m: _solution(m, level) for m in modes},
-        params={"level": level, "people": count, "rows": len(rows)},
+        oracle=_solution("oracle"),
+        shortcuts={m: _solution(m) for m in modes},
+        params={"level": level, "people": len(people), "rows": len(rows)},
     )
 
 
 FAMILY = Family(
     name="dedupe-contacts",
-    version=1,
+    version=2,
     cluster="tabular-data",
     category="data",
     skills=("csv", "normalization", "deduplication", "union-find", "python"),
     difficulties={
-        "easy": {"level": 1, "n_background": 8},
-        "medium": {"level": 2, "n_background": 10},
-        "hard": {"level": 3, "n_background": 14},
+        "easy": {"level": 1, "n_background": [5, 12]},
+        "medium": {"level": 2, "n_background": [7, 14]},
+        "hard": {"level": 3, "n_background": [10, 18]},
     },
     build=build,
 )

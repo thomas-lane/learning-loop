@@ -22,6 +22,7 @@ import pytest
 
 from learning_loop.core.config import REPO_ROOT
 from learning_loop.tasks.family_lint import nondeterminism
+from learning_loop.tasks.generate import generate_spec
 from learning_loop.tasks.render import render
 
 MODULES = ["organize_files", "dedupe_files", "bulk_rename", "extract_subset", "permissions_fix"]
@@ -59,6 +60,16 @@ def test_clean_of_stray_randomness(module):
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+@pytest.mark.parametrize("module", MODULES)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_instruction_is_the_same_at_every_difficulty(module, seed):
+    """Difficulty comes from the data alone: these instructions draw no instance values, so the
+    text is identical at every level, and it states every rule and note any level needs."""
+    fam = FAMILIES[module]
+    texts = {d: generate_spec(fam, d, seed).spec.instruction for d in fam.difficulties}
+    assert len(set(texts.values())) == 1, texts
 
 
 # --------------------------------------------------------------------------- organize-files
@@ -104,6 +115,36 @@ def test_organize_files_answer_and_traps(tmp_path, difficulty, seed):
         assert all(len(v) == 1 for v in spellings.values())
 
 
+def _instruction(tmp_path: Path, module: str, difficulty: str, seed: int = 1) -> str:
+    d = tmp_path / f"{module}-{difficulty}-{seed}-instruction"
+    render(FAMILIES[module], difficulty, seed, d)
+    return (d / "instruction.md").read_text()
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_organize_files_header_lines_match_the_stated_format(tmp_path, seed):
+    """The instruction states the header format the data uses: `<field>:<value>` with optional
+    spaces around the value (no `Name: value` placeholder an agent could take literally), and
+    hard tickets do write values without a space after the colon."""
+    text = _instruction(tmp_path, "organize_files", "hard", seed)
+    assert "`<field>:<value>`" in text and "`Team:billing`" in text and "Name: value" not in text
+    files, _ = _render(tmp_path, "organize_files", "hard", seed)
+    heads = [t.decode().split("\n\n", 1)[0].splitlines() for t in _tree(files / "tickets").values()]
+    assert all(re.fullmatch(r"[A-Z][a-z]+:.*\S.*", line) for head in heads for line in head)
+    assert any(re.fullmatch(r"(Team|Priority):\S.*", line) for head in heads for line in head)
+
+
+def test_organize_files_names_lowercase_folders(tmp_path):
+    """Hard Priority and Team values vary in letter case; the instruction fixes the folder names
+    in lowercase, so no agent needs two folders that differ only in case."""
+    text = _instruction(tmp_path, "organize_files", "hard")
+    assert "Queue folder names are always lowercase" in text
+    files, key = _render(tmp_path, "organize_files", "hard", 1)
+    raw = "".join(t.decode().split("\n\n", 1)[0] for t in _tree(files / "tickets").values())
+    assert re.search(r"^(Team|Priority):\s*\S*[A-Z]", raw, re.M)
+    assert all(rel.split("/")[0] == rel.split("/")[0].lower() for rel in key["expected"])
+
+
 # --------------------------------------------------------------------------- dedupe-files
 
 
@@ -132,8 +173,9 @@ def test_dedupe_files_answer_and_traps(tmp_path, difficulty, seed):
     names = sorted({r.split("/")[0] for r in tree})
     chronological = sorted(names, key=_snapshot_key)
     assert names[0] != chronological[0] and names[-1] != chronological[0]
-    if difficulty != "easy":  # the tie rule decides inside the oldest snapshot
-        assert any(len([r for r in p if r.split("/")[0] == chronological[0]]) > 1 for p in dups.values())
+    # the tie rule decides inside the oldest snapshot on hard only
+    tie = any(len([r for r in p if r.split("/")[0] == chronological[0]]) > 1 for p in dups.values())
+    assert tie == (difficulty == "hard")
 
 
 # --------------------------------------------------------------------------- bulk-rename
@@ -149,6 +191,14 @@ def _std(name: str) -> str:
         else:
             out += ch
             run = False
+    return out
+
+
+def _groups(names: list[str]) -> dict[str, list[str]]:
+    out = defaultdict(list)
+    for n in sorted(names, key=str.encode):
+        if not n.startswith("."):
+            out[_std(n)].append(n)
     return out
 
 
@@ -180,12 +230,29 @@ def test_bulk_rename_answer_and_traps(tmp_path, difficulty, seed):
                 expected[os.path.join(folder, target)] = tree[os.path.join(folder, old)]
     assert len(expected) == len(tree)
     assert key["expected"] == {rel: {"sha256": _sha(data)} for rel, data in expected.items()}
-    assert standard_not_first  # "add a suffix when the name is taken" numbers the wrong file
+    # medium/hard: "add a suffix when the name is taken" numbers the wrong file; easy has no
+    # collision group holding a file already at the standard name, so that loop is correct
+    assert standard_not_first == (difficulty != "easy")
+    existing = any(len(olds) > 1 and new in olds for names in folders.values() for new, olds in _groups(names).items())
+    assert existing == (difficulty != "easy")
+    assert any(n.rpartition(".")[2].isupper() for names in folders.values() for n in names if not n.startswith("."))
     assert any(len({_std(n) for n in names if not n.startswith(".")}) < len([n for n in names if not n.startswith(".")]) for names in folders.values())
     if difficulty != "easy":
         sub = [f for f in folders if f]
         assert sub and all(any(_std(n) != n for n in folders[f] if not n.startswith(".")) for f in sub)  # top level only
         assert any(_std(part) != part for f in sub for part in f.split("/"))  # renaming folders
+    else:
+        assert list(folders) == [""]  # subfolders only on harder levels
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_bulk_rename_suffix_if_taken_is_declared_with_its_trap(seed):
+    """The `suffix-if-taken` loop is correct when no file already has its standard name (easy),
+    so it is declared exactly on the levels that plant that collision."""
+    fam = FAMILIES["bulk_rename"]
+    for difficulty in fam.difficulties:
+        shortcuts = generate_spec(fam, difficulty, seed).spec.shortcuts
+        assert ("suffix-if-taken" in shortcuts) == (difficulty != "easy")
 
 
 # --------------------------------------------------------------------------- extract-subset
@@ -225,6 +292,9 @@ def test_extract_subset_answer_and_traps(tmp_path, difficulty, seed):
     basenames = [rel.rsplit("/", 1)[-1] for rel in out]
     if difficulty != "easy":
         assert len(set(basenames)) < len(basenames)
+    top = [name for depth, name in levels if depth == 1]
+    assert len(top) == {"easy": 1, "medium": 3, "hard": 4}[difficulty]  # easy: a single inner archive
+    assert any("/" in name for name in top) == (difficulty == "hard")  # `services/` only on hard
     if difficulty == "hard":
         assert any(name.endswith(".tgz") for _, name in levels)
         assert any(depth == 2 for depth, _ in levels)
