@@ -70,8 +70,11 @@ class PreferenceError(ValueError):
 # --------------------------------------------------------------------------- #
 
 
-def check_single_call(message: Message, tools: list[ToolSchema], what: str) -> list[str]:
-    """A candidate completion: one assistant message with exactly one valid tool call."""
+def check_single_call(message: Message, tools: list[ToolSchema], what: str, *, schema: bool = True) -> list[str]:
+    """A candidate completion: one assistant message with exactly one tool call whose arguments are
+    a JSON object. `schema`: the call must also match its tool's schema. The rejected side is
+    checked without it, because it is the learner's own call, which may name an unknown tool or
+    pass a wrong argument type (the tool answered it with an [error])."""
     errs = []
     if message.get("role") != "assistant":
         errs.append(f"{what}:not_assistant")
@@ -86,7 +89,8 @@ def check_single_call(message: Message, tools: list[ToolSchema], what: str) -> l
         return errs + [f"{what}:arguments_not_object"]
     if not calls[0].get("id"):
         errs.append(f"{what}:missing_tool_call_id")
-    errs += [f"{what}:{e}" for e in validate_call(tools, fn.get("name", ""), args)]
+    if schema:
+        errs += [f"{what}:{e}" for e in validate_call(tools, fn.get("name", ""), args)]
     return errs
 
 
@@ -173,7 +177,7 @@ def build_preference(
     chosen = make_edited_message(rejected, proposal.replacement)
     later_ids = [c.get("id") for t in turns if t.turn_index >= k for c in tool_calls_of(t.assistant_message)]
     errs = check_prompt(prompt, k, [proposal.justification or "", *verifier_texts(verification)], later_ids)
-    errs += check_single_call(chosen, tools, "chosen") + check_single_call(rejected, tools, "rejected")
+    errs += check_single_call(chosen, tools, "chosen") + check_single_call(rejected, tools, "rejected", schema=False)
     if chosen == rejected:
         errs.append("chosen_equals_rejected")
     if tool_calls_of(chosen)[0].get("id") != tool_calls_of(rejected)[0].get("id"):

@@ -112,6 +112,16 @@ def test_refuses_invalid_candidates(tmp_path):
         build(src2, inst, prop)
 
 
+def test_rejected_side_may_violate_the_tool_schema(tmp_path):
+    # The learner's own call with a wrong argument type, which the tool refused: a valid rejected side.
+    turns = list(vb.DEFAULT_TURNS)
+    turns[2] = ("bash", {"command": ["sort", "-n"]}, "")
+    summary, path = vb.write_source_episode(tmp_path / "src", turns, overrides={2: {"tool_error": "'command' must be a string"}})
+    _, inst, prop = fixture(tmp_path / "x")
+    pair = build(SourceContext.load(summary, inst, path), inst, prop)
+    assert json.loads(pair.example.rejected[0]["tool_calls"][0]["function"]["arguments"]) == {"command": ["sort", "-n"]}
+
+
 def test_check_prompt_detects_leaks():
     prompt = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
     assert check_prompt(prompt, 0) == []

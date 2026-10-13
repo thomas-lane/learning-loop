@@ -330,15 +330,21 @@ them](../docs/operations.md#episodes-and-stages)):
 
 **Malformed tool calls** (arguments that are not a JSON object, or a block the server reports as
 `unparsed_tool_call`) are not executed; the model gets an `[error] ...` observation, the episode
-goes on, and the turn is marked malformed. The editor rejects a malformed turn
-(`malformed_turn`), so it never becomes the rejected side of a preference pair. Invalid arguments
-are replaced by `"{}"` in the history, because llama.cpp re-parses past arguments to render the
-chat template and would fail every later request. An unparsed block becomes a call in the history
-with the tool name recovered from the block (or `unparsed_call`) and arguments `{}`. Text the
-model wrote alongside tool calls is left out of the history, because Gemma 4's chat template
-renders it after the tool results, out of order in every later prompt. Each of these changes is
-kept in a `repair` event with the original. A tool-call block cut off by the output limit is a
-budget stop (`budget:output_truncated`), not a malformed call.
+goes on, and the turn is marked malformed. The history keeps a repaired call in its place, because
+chat templates render past calls from parsed arguments: Gemma 4's raises an error for arguments
+that are not a mapping, and llama.cpp re-parses them, so the original text would fail every later
+request. Invalid arguments become `"{}"`; an unparsed block becomes a call with the tool name
+recovered from the block (or `unparsed_call`) and arguments `{}`. So that the model still sees its
+own mistake, the `[error]` observation ends with the call as the model wrote it (`The call as you
+wrote it:`, cut to `QUOTED_CALL_LIMIT` characters in `episodes/episode.py`). Text the model wrote
+alongside tool calls is left out of the history, because Gemma 4's chat template renders it after
+the tool results, out of order in every later prompt. Each of these changes is kept in a `repair`
+event with the original. The editor rejects a malformed turn (`malformed_turn`): the rejected side
+of a preference pair must be what the learner generated, and the history holds the repaired call.
+A well-formed call that the tool refuses (a wrong argument type, a missing file, an unknown tool)
+is not malformed: it is recorded as not executed, with its `[error]`, and the editor may replace
+it. A tool-call block cut off by the output limit is a budget stop (`budget:output_truncated`),
+not a malformed call.
 
 **After the episode**, the agent gives the owner read access to any file under `/app` that lacks
 it and rwx to any directory that lacks it, because Harbor copies artifacts out through the host,

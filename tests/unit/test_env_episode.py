@@ -73,6 +73,8 @@ async def test_malformed_call_is_visible_and_not_a_successful_action(tmp_path, i
     te = t0.tool_executions[0]
     assert te.executed is False and te.executed_arguments is None
     assert te.requested_arguments_raw == rep[0].data["original"]  # exactly what the model emitted
+    # The history keeps "{}", so the observation quotes what the model wrote.
+    assert te.observation.endswith("The call as you wrote it:\n" + rep[0].data["original"].strip())
     assert t0.assistant_message["tool_calls"][0]["function"]["arguments"] == "{}"
     assert res.summary.n_malformed_turns == 1
     assert res.summary.success is False  # it then wrote a wrong answer

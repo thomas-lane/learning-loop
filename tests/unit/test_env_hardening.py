@@ -23,9 +23,9 @@ from learning_loop.core.storage import atomic_write_json
 from learning_loop.episodes.backends import LocalFixtureBackend, _stub_core
 from learning_loop.episodes.envs.harbor_session import HarborSession
 from learning_loop.episodes.envs.local_session import LocalSession, _LocalExec
-from learning_loop.episodes.episode import build_replay_spec, run_episode
+from learning_loop.episodes.episode import QUOTED_CALL_LIMIT, build_replay_spec, run_episode
 from learning_loop.episodes.events import EventLog, load_turns, read_events
-from learning_loop.episodes.policy import OpenAIChatPolicy
+from learning_loop.episodes.policy import OpenAIChatPolicy, normalize_message
 from learning_loop.tasks.instances import NETWORK_CAVEAT, load_state_spec
 
 
@@ -109,6 +109,30 @@ async def test_turn_with_valid_and_unparsed_call_is_malformed(tmp_path, instance
     turns = load_turns(evs)
     assert turns[0].malformed and turns[0].tool_executions[0].executed  # the valid call still ran
     assert run.core.n_malformed_turns == 1 and run.core.stop_reason == "model_finished"
+
+
+async def test_unparsed_block_is_quoted_back_in_its_error(tmp_path, instance):
+    block = 'call:bash{command:<|"|>ls \\*<|"|>'
+    long = "call:write_file{content:<|\"|>" + "x" * (QUOTED_CALL_LIMIT + 50)
+    raw = {"role": "assistant", "content": f"<|tool_call>{block}<tool_call|><|tool_call>{long}<tool_call|>"}
+    msg, call_errors, repairs = normalize_message(raw, "0", ["tool_call 0: bad escape", "tool_call 1: bad escape"])
+
+    class _Pol(_ListPolicy):
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
+            if self.steps:
+                self.steps.pop(0)
+                return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="stop", usage=Usage(input_tokens=5, output_tokens=5),
+                                      latency_sec=0.0, parse_errors=["unparsed_tool_call: a", "unparsed_tool_call: b"], repairs=repairs, call_errors=call_errors)
+            return await super().decide(messages, tools, seed)
+
+    log = EventLog(tmp_path / "events.jsonl", "quoted")
+    async with LocalSession(_files(instance), _cfg()) as s:
+        run = await run_episode(make_plan(instance, "quoted"), s, _Pol([None]), log)
+    first, second = load_turns(read_events(tmp_path / "events.jsonl"))[0].tool_executions
+    assert first.observation == f"[error] {call_errors[first.call_id]}\nThe call as you wrote it:\n{block}"
+    assert first.requested_arguments_raw == block and not first.executed
+    assert second.observation.endswith(long[:QUOTED_CALL_LIMIT] + f"\n... ({len(long) - QUOTED_CALL_LIMIT} more characters)")
+    assert run.core.stop_reason == "model_finished"  # the episode went on after the errors
 
 
 # --------------------------------------------------------------------------- #

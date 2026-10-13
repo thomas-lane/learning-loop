@@ -157,7 +157,7 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 | `replay:fingerprint:...` | the restored state differs from the source | fix the task's undeclared state |
 | `replay:image_mismatch` | the task image changed since the source episode | collect again with the current image |
 | `not_success:<branch>:rN`, `tie`, `no_saving:...`, `saving_below_min:...`, `relative_saving_below_min:...` | a branch failed, or the edit saved too few tokens | none: rejected by design |
-| `intervention_timeout:...`, `intervention_tool_error:...` | the fixed action itself timed out or raised a tool error | none: rejected by design |
+| `intervention_timeout:...`, `intervention_tool_error:...` | the edited action timed out or raised a tool error, or the original action failed differently from the source episode | none: rejected by design; on `original`, check the environment if it repeats |
 | `bad_stop:<branch>:rN:<stop reason>`, `not_graded:...`, `missing_cost:...` | a branch hit a budget, infra or safety stop, went ungraded, or had no usage | look up the stop reason above |
 
 ### Training

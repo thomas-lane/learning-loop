@@ -76,6 +76,16 @@ def test_ineligible_turns_rejected(tmp_path, overrides, expected):
     assert expected in reasons
 
 
+def test_a_call_the_tool_refused_can_be_edited(tmp_path):
+    # e.g. a wrong argument type or a missing file: a real model action answered with [error]
+    _, turns = source(tmp_path, overrides={0: {"tool_error": "'command' must be a string"}})
+    assert not turns[0].tool_executions[0].executed
+    assert check(prop(), turns) == []
+    _, turns = source(tmp_path / "nores")
+    turns[0].tool_executions.clear()
+    assert "original_without_result" in check(prop(), turns)
+
+
 def test_empty_reasoning_string_is_allowed(tmp_path):
     _, turns = source(tmp_path, overrides={0: {"reasoning": "  "}})
     assert check(prop(), turns) == []

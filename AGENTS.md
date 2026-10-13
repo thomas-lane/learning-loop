@@ -114,8 +114,8 @@ have failed before it.
   the per-family Docker test checks every model against the real scripts.
 - **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
   mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
-- **Acceptance** (`strict_all_success_v1`): valid replay, the fixed action ran without tool error or
-  timeout, complete success on both branches for every repetition, every branch ended by the model
+- **Acceptance** (`strict_all_success_v1`): valid replay, the edited action ran without tool error or
+  timeout (the original action may only fail exactly as in the source episode), complete success on both branches for every repetition, every branch ended by the model
   (stop category `model`), all costs present, a positive mean saving that meets both thresholds.
 - **Cost accounting**: counterfactual episode cost = shared prefix + intervention request input +
   learner-tokenizer length of the fixed turn + continuation usage; verification spend is separate.

@@ -198,8 +198,12 @@ contain several tool calls, or none.
 
 Proposals are checked by code before anything runs. An edit is rejected unless:
 
-- the original turn has exactly one tool call, which parsed cleanly and ran, and no assistant text.
-  Under `editor.assistant_text_policy: reject_nonempty` it also has no reasoning; under
+- the original turn has exactly one tool call, which parsed cleanly and has a tool result, and no
+  assistant text. A call the tool refused with an `[error]` (a wrong argument type, a missing
+  file, an unknown tool) is eligible: it is a real action of the learner, and fixing it is a
+  saving like any other. A malformed call is not, because the history holds a repaired version
+  of it (see [the agent's malformed-call handling](../evaluation/README.md#the-agent-agentstool_agentpy)), so the
+  rejected side of the pair would not be what the learner generated. Under `editor.assistant_text_policy: reject_nonempty` it also has no reasoning; under
   `keep_reasoning` its reasoning, if any, is not empty (see below);
 - the replacement is a different, schema-valid call to an existing tool;
 - no argument mentions a grader location: `/tests`, `/solution`, `/oracle`, `/logs/verifier`,
@@ -288,7 +292,10 @@ counted twice. Tokens spent on verification itself are tracked separately.
 **Acceptance rule `strict_all_success_v1`.** An edit is accepted only if all of these hold:
 
 - replay is valid on every branch;
-- the fixed action ran without a tool error or timeout on every branch;
+- the edited action ran without a tool error or timeout on every branch. The original action
+  may fail, because its failure can be the mistake the edit fixes, but only in exactly the way it
+  failed in the source episode (same error text, same timeout); any other failure comes from the
+  environment and rejects;
 - both branches fully succeed in every repetition (`verification.continuations_per_branch`);
 - no branch stopped for infrastructure, budget, safety, replay or model-error reasons;
 - every cost was measured;

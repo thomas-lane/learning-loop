@@ -498,9 +498,10 @@ def turn_ineligibility(turn: TurnRecord, assistant_text_policy: str = "reject_no
     if len(calls) == 1:
         if parse_call_arguments(calls[0]) is None:
             reasons.append("malformed_turn:arguments")
-        execs = [te for te in turn.tool_executions if te.call_id == calls[0].get("id")]
-        if not execs or not execs[0].executed:
-            reasons.append("original_not_executed")
+        # A call the tool refused (wrong argument type, missing file, unknown tool) is a real model
+        # action with an [error] observation, so it can be edited; a call with no result cannot.
+        if not any(te.call_id == calls[0].get("id") for te in turn.tool_executions):
+            reasons.append("original_without_result")
     content = turn.assistant_message.get("content")
     if (isinstance(content, str) and content.strip()) or (isinstance(content, list) and len(content) > 0):
         reasons.append("nonempty_assistant_content")

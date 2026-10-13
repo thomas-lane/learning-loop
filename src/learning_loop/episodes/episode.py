@@ -92,6 +92,7 @@ from .events import EventLog, first_request_messages, load_turns, read_events
 from .policy import parse_arguments
 
 CORE_SCHEMA_VERSION = 1
+QUOTED_CALL_LIMIT = 2000  # characters of a malformed call quoted back in its [error] observation
 
 
 class EpisodeCore(BaseModel):
@@ -219,6 +220,18 @@ def _length_stop(d: Any) -> tuple[str, StopCategory]:
     return ("budget:max_context" if d.context_capped else "budget:output_truncated"), StopCategory.BUDGET
 
 
+def _quote_call(call: dict[str, Any], original_raw: Any) -> str:
+    """The model's own text for a call that could not be parsed, for its [error] observation. The
+    history keeps the call with arguments `{}` (the chat template renders past calls from parsed
+    arguments), so without the quote the model would not see what it wrote."""
+    if not isinstance(original_raw, str) or not original_raw.strip() or original_raw == call["function"]["arguments"]:
+        return ""
+    text = original_raw.strip()
+    if len(text) > QUOTED_CALL_LIMIT:
+        text = text[:QUOTED_CALL_LIMIT] + f"\n... ({len(text) - QUOTED_CALL_LIMIT} more characters)"
+    return f"\nThe call as you wrote it:\n{text}"
+
+
 class _Episode:
     def __init__(self, plan: EpisodePlan, session: Any, policy: Policy, log: EventLog, on_turn: Callback | None):
         self.plan = plan
@@ -317,7 +330,7 @@ class _Episode:
                     "so it was not run. Keep reasoning shorter or split large writes into smaller pieces."
                 )
             else:
-                obs = f"[error] {error}"
+                obs = f"[error] {error}" + _quote_call(call, original_raw)
             te = ToolExecution(call_id=cid, name=name, requested_arguments_raw=original_raw, executed_arguments=None, executed=False, raw_output=obs, observation=obs, error=error)
         else:
             args, _ = parse_arguments(call["function"]["arguments"])
@@ -534,7 +547,7 @@ class _Episode:
             original_raw: dict[str, Any] = {}
             for rep in d.repairs:
                 self.emit(EventKind.REPAIR, {"request_index": req_idx, **rep}, t)
-                if rep.get("field") == "function.arguments":
+                if rep.get("field") in ("function.arguments", "tool_call"):
                     original_raw[rep["tool_call_id"]] = rep["original"]
             self.usages.append(d.usage)
             if self.tokens_used is not None:
