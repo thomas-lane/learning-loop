@@ -290,11 +290,14 @@ becomes tokens (Gemma 4's and Qwen3's keep it for every turn after the last user
   run to run (and replay compares observations exactly). Output that does not end with a
   newline is followed by a note saying so, because otherwise that is invisible and some files
   are graded byte for byte.
-- `read_file`: the file's lines exactly as they are, 200 per page by default, after a header
-  `[<path>: lines a-b of N]`; a footer gives the next `start_line` when more lines follow, or
-  says that the file does not end with a newline. A page ends early, at a whole line, to fit
-  `max_output_chars`. It shows no line-number gutter: models mistook a tab after the number
-  for the file's own separator and copied the numbers into files they wrote. Missing files,
+- `read_file`: the file's lines, 200 per page by default, each after its line number and an
+  arrow (`    27→timeout = 30`), below a header `[<path>: lines a-b of N]`; a footer gives the
+  next `start_line` when more lines follow, or says that the file does not end with a newline.
+  Line numbers are shown because tracebacks, `grep -n` and test failures refer to lines by
+  number, and lines end only at `\n`, so the numbers match theirs. The separator is an arrow, not
+  a tab, because models mistook a tab after the number for the file's own separator and copied
+  the numbers into files they wrote; the tool description says the prefix is not part of the
+  file. A page ends early, at a whole line, to fit `max_output_chars`. Missing files,
   directories and other non-regular files get an `[error]` naming the reason.
 - `write_file`: writes exactly the given content (creating parent directories). An existing
   file keeps its mode; a new file gets 0644 and the container user as owner (an upload through

@@ -38,7 +38,8 @@ async def test_virtual_workdir_mapping(session):
     assert te.observation == "Wrote 2 characters to /app/out/x.txt"
     assert (session.real_workdir / "out" / "x.txt").read_text() == "hi"
     te = await session.execute("c3", "read_file", {"path": "/app/out/x.txt"}, None)
-    assert te.observation == "[/app/out/x.txt: lines 1-1 of 1]\nhi\n[the file does not end with a newline]"
+    assert te.observation == "[/app/out/x.txt: lines 1-1 of 1]\n     1\u2192hi\n[the file does not end with a newline]"
+    assert te.stdout == "hi"  # the file's own text, without the line-number prefix
 
 
 async def test_bash_separates_stderr_and_reports_the_commands_own_exit_code(session):
@@ -62,10 +63,10 @@ async def test_read_file_pages_and_explains_what_it_shows(session):
     (w / "big.txt").write_text("".join(f"line {i}\n" for i in range(1, 451)))
     te = await session.execute("c", "read_file", {"path": "big.txt"}, None)
     lines = te.observation.splitlines()
-    assert lines[0] == "[/app/big.txt: lines 1-200 of 450]" and lines[1] == "line 1" and lines[200] == "line 200"
+    assert lines[0] == "[/app/big.txt: lines 1-200 of 450]" and lines[1] == "     1\u2192line 1" and lines[200] == "   200\u2192line 200"
     assert lines[-1] == "[250 more lines; next start_line=201]"
     te = await session.execute("c", "read_file", {"path": "big.txt", "start_line": 401}, None)
-    assert te.observation.splitlines()[0] == "[/app/big.txt: lines 401-450 of 450]" and te.observation.endswith("line 450")
+    assert te.observation.splitlines()[0] == "[/app/big.txt: lines 401-450 of 450]" and te.observation.endswith("   450\u2192line 450")
     te = await session.execute("c", "read_file", {"path": "big.txt", "start_line": 500}, None)
     assert te.observation == "[/app/big.txt: 450 lines; start_line 500 is past the end]"
     (w / "empty.txt").write_text("")
@@ -75,6 +76,10 @@ async def test_read_file_pages_and_explains_what_it_shows(session):
     (w / "wide.txt").write_text("".join("x" * 100 + "\n" for _ in range(200)))  # 20,200 characters > the 8000 limit
     te = await session.execute("c", "read_file", {"path": "wide.txt"}, None)
     assert len(te.observation) <= 8000 and te.observation.splitlines()[-1].startswith("[") and "next start_line=" in te.observation
+    # Lines end at "\n" only, so numbers match grep -n and tracebacks even after a form feed.
+    (w / "ff.py").write_text("a = 1\n\x0c\nb = 2\n")
+    te = await session.execute("c", "read_file", {"path": "ff.py"}, None)
+    assert te.observation.splitlines()[-1] == "     3\u2192b = 2" and "lines 1-3 of 3" in te.observation
 
 
 async def test_write_file_keeps_an_existing_files_mode_and_creates_new_files_644(session):

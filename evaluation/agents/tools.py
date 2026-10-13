@@ -184,10 +184,13 @@ async def bash(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutput:
 
 
 # Runs with the container's python3 (part of every task profile): one page of a regular file,
-# cut at whole lines to fit the output limit, as JSON for the formatter below.
+# cut at whole lines to fit the output limit, as JSON for the formatter below. Lines end at "\n"
+# only, as grep -n, sed and Python's tracebacks count them (str.splitlines would also split at
+# form feeds and other separators and shift every later line number).
 _READ_PAGE = r"""
 import json, os, stat, sys
 path, start, count, cap = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+GUTTER = 8  # characters of the line-number prefix the formatter adds
 def out(**kw):
     print(json.dumps(kw)); sys.exit(0)
 try:
@@ -208,18 +211,22 @@ try:
 except PermissionError:
     out(error="permission denied")
 text = data.decode("utf-8", "replace")
-lines = text.splitlines(keepends=True)
+parts = text.split("\n")
+lines = [p + "\n" for p in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
 total = len(lines)
 if start > total:
     out(total=total, start=start, lines=[], final_newline=text.endswith("\n"), binary=b"\0" in data)
 page, size = [], 0
 for line in lines[start - 1:start - 1 + count]:
-    if page and size + len(line) > cap:
+    if page and size + len(line) + GUTTER > cap:
         break
     page.append(line[:cap] if not page else line)
-    size += len(page[-1])
+    size += len(page[-1]) + GUTTER
 out(total=total, start=start, lines=page, final_newline=text.endswith("\n"), binary=b"\0" in data)
 """
+
+
+LINE_ARROW = "\u2192"  # →
 
 
 async def read_file(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutput:
@@ -251,7 +258,12 @@ async def read_file(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutp
         return ToolOutput(raw_output=f"[{path}: {total} lines; start_line {start} is past the end]", exit_code=0, stdout="")
     end = start + len(lines) - 1
     text = "".join(lines)
-    shown = [f"[{path}: lines {start}-{end} of {total}" + (" (binary data shown as text)" if page["binary"] else "") + "]\n", text if text.endswith("\n") else text + "\n"]
+    # Each line after its number and an arrow, as Claude Code's Read tool shows files: line numbers
+    # are what tracebacks, grep -n and tests refer to. A tab after the number was mistaken for
+    # the file's own separator (and copied into files the model wrote); an arrow is not.
+    numbered = "".join(f"{n:>6}{LINE_ARROW}{line}" for n, line in enumerate(lines, start))
+    shown = [f"[{path}: lines {start}-{end} of {total}" + (" (binary data shown as text)" if page["binary"] else "") + "]\n",
+             numbered if numbered.endswith("\n") else numbered + "\n"]
     if end < total:
         shown.append(f"[{total - end} more lines; next start_line={end + 1}]")
     elif not page["final_newline"]:
@@ -325,9 +337,10 @@ TOOLS: list[Tool] = [
     Tool(
         name="read_file",
         description=(
-            "Read a text file. Shows its lines exactly as they are, after a header with the line range "
-            "and the total number of lines; when more lines follow, a final note gives the next "
-            "start_line. A page also ends early to fit the output limit."
+            "Read a text file. Each line is shown after its line number and a \u2192 arrow, which are "
+            "not part of the file. A header gives the line range and the total number of lines; when "
+            "more lines follow, a final note gives the next start_line. A page also ends early to fit "
+            "the output limit."
         ),
         parameters={
             "type": "object",
