@@ -521,7 +521,7 @@ def _child_source(module):
         + "\nsys.path.insert(0, sys.argv[1])\n"
         + "checks = json.loads(sys.stdin.read())\n"
         + "try:\n    import %s as mod\n    lib = dict(vars(mod))\n" % module
-        + "except BaseException as e:\n    print('import failed: ' + type(e).__name__)\n    lib = None\n"
+        + "except BaseException as e:\n    print('import failed: ' + (type(e).__name__ + ': ' + str(e))[:300].replace('\\n', ' '))\n    lib = None\n"
         + "obs = observe(lib, checks) if lib is not None else {}\n"
         + "sys.stdout.write('\\n' + %r + json.dumps(obs) + '\\n')\nsys.stdout.flush()\n" % MARKER
     )
@@ -562,6 +562,9 @@ def _observe_isolated(key, view, key_dir, log):
         log.append("child exit code %s" % code)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    # Only for the log: why the module did not import (its own output could imitate this line,
+    # which changes nothing but the log).
+    log.extend(ln for ln in stdout.splitlines() if ln.startswith("import failed: "))
     lines = [ln[len(MARKER):] for ln in stdout.splitlines() if ln.startswith(MARKER)]
     if len(lines) != 1:
         log.append("expected exactly one observation line, got %d" % len(lines))

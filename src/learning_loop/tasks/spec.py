@@ -96,8 +96,7 @@ PROFILES: dict[str, Profile] = {
             "bash, python3, perl, coreutils (sort, uniq, cut, tr, wc, head, tail, xargs, comm, join, paste, od, stat, date, "
             "mktemp, sha256sum, timeout, …), grep, sed, find, diff, cmp, tar, gzip and zcat. `awk` is mawk (no gawk "
             "extensions such as `asort` or `strftime`). Not installed: jq, bc, gawk, sqlite3, git, curl, wget, unzip, zip, "
-            "xxd, hexdump, file, ps, less, column, tree, make, patch, vim, nano; use python3 instead (it has json, csv, "
-            "sqlite3, gzip, tarfile, zipfile, tomllib and decimal). There is no network access."
+            "xxd, hexdump, file, ps, less, column, tree, make, patch, vim, nano. There is no network access."
         ),
     ),
 }

@@ -40,9 +40,9 @@ ORDER_COLUMNS = ["order_id", "placed", "customer_id", "quantity"]
 REORDERED = ["customer_id", "quantity", "order_id", "placed"]
 MONTHS = ["2026-07", "2026-08", "2026-09"]
 
-INSTRUCTION = """Customer master data is in `/app/data/customers.csv` (columns `customer_id`, `name`, `country`). Orders are in `/app/data/orders/`, one CSV file per month. Each order file has a header row naming its columns `order_id`, `placed`, `customer_id` and `quantity`; the order of the columns can differ between files.
+INSTRUCTION = """Customer master data is in `/app/data/customers.csv` (columns `customer_id`, `name`, `country`). Orders are in `/app/data/orders/`, one CSV file per month. Each order file has a header row naming its columns `order_id`, `placed`, `customer_id` and `quantity`.
 
-The order system does not store customer IDs as carefully as the master data. An ID in an order can differ from the one in `customers.csv` in letter case, in surrounding whitespace and in the number of leading zeros in the number after the dash: two IDs are the same customer when they are equal after trimming surrounding whitespace, ignoring letter case and ignoring those leading zeros. For example, ` xy-00417`, `Xy-00417 `, `XY-417`, `XY-000417` and `xY-0417 ` are all customer `XY-00417`.
+The order system does not store customer IDs as carefully as the master data. An ID in an order can differ from the one in `customers.csv` in letter case, in surrounding whitespace and in the number of leading zeros in the number after the dash: two IDs are the same customer when they are equal after trimming surrounding whitespace, ignoring letter case and ignoring those leading zeros. For example, `xY-0417 ` is customer `XY-00417`.
 
 For **every** customer in `customers.csv`, compute the total `quantity` they ordered across all order files. Customers without any orders must appear with `0`. Orders whose customer is not in `customers.csv` are left out.
 
@@ -219,7 +219,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="join-orders",
-    version=2,
+    version=3,
     cluster="tabular-data",
     category="data",
     skills=("csv", "join", "normalization", "python"),

@@ -71,7 +71,7 @@ Sort the tickets into queue folders: move every ticket file, keeping its file na
 
 Compare values ignoring letter case (`Priority: URGENT` is urgent). Queue folder names are always lowercase: `urgent`, `unassigned` or a team name in lowercase.
 
-Only the header counts: file names were given when a ticket was opened and do not show later reassignments, and a message body can quote a forwarded message with its own `Team:` or `Priority:` lines.
+Only the header counts.
 
 Create the queue folders as needed. When you are done, `/app/tickets/` must contain only the queue folders, with every ticket in exactly one of them.
 """
@@ -285,7 +285,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="organize-files",
-    version=2,
+    version=3,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "parsing", "mv"),

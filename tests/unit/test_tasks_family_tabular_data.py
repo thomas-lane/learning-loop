@@ -372,7 +372,7 @@ def test_instruction_is_one_template_at_every_difficulty(module):
 def test_instructions_state_the_rules_of_the_hardest_data():
     """The rules that only the harder levels' data exercises are stated at every level."""
     must = {
-        "join_orders": ["leading zeros", "`XY-000417`", "order of the columns can differ"],
+        "join_orders": ["leading zeros", "ignoring letter case", "header row naming its columns"],
         "json_aggregate": ["including subdirectories", "`.gz`", "`location.site`"],
         "sqlite_query": ["`created_at` is when the shopping cart was opened", "every order of a deleted customer", "`addresses.is_primary = 1`"],
         "dedupe_contacts": ["`+tag`", "`gmail.com` addresses only", "country code", "their own column names", "`Ann+News@Example.org`"],

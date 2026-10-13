@@ -88,6 +88,15 @@ def test_checks_in_process_accepts_only_plain_observations():
     assert g.grade(CHECKS, reader({}), trusted=True)[0] == 0.0
 
 
+def test_isolated_checks_log_why_the_module_did_not_import(tmp_path, monkeypatch):
+    # The verifier's child process reports the import error; the log keeps it (reward unchanged).
+    sandbox = g._Sandbox
+    monkeypatch.setattr(g, "_Sandbox", lambda trusted, key_dir: sandbox(True, key_dir))  # as this user, not nobody
+    reward, log = g.grade(CHECKS, reader({"/app/calc.py": b"def add(:\n"}), key_dir=str(tmp_path))
+    assert reward == 0.0
+    assert any(line.startswith("import failed: SyntaxError: ") for line in log), log
+
+
 def test_judge_rejects_observations_of_the_wrong_shape():
     checks = CHECKS["checks"]
     assert g.judge(checks, {"add": {"value": 5}, "add_empty_raises": {"raised": "ValueError", "value_error": True, "classes": ["ValueError", "Exception", "BaseException", "object"]}}) == {"add": True, "add_empty_raises": True}
