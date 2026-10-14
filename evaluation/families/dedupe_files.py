@@ -55,8 +55,6 @@ INSTRUCTION = """`/app/backups/` holds backup snapshots, one folder per snapshot
 
 Free up space by removing duplicate files. Two files are duplicates when their contents are byte-for-byte identical, whatever their names or folders. From each set of duplicates keep exactly one copy: the one in the **oldest** snapshot (by the date in the folder name); if that snapshot holds more than one copy, keep the one whose path sorts first in byte order (as `LC_ALL=C sort` orders them). Delete every other copy. Files whose contents are unique stay.
 
-A name says nothing about the contents: a file can keep its name while its contents change from one snapshot to the next.
-
 Change nothing else: do not move, rename or edit any file.
 """
 
@@ -219,7 +217,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="dedupe-files",
-    version=2,
+    version=3,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "hashing", "dates"),

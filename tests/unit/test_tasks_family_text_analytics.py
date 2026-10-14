@@ -75,16 +75,16 @@ def test_instruction_is_the_same_at_every_difficulty(name, seed):
 @pytest.mark.parametrize(
     "name,phrases",
     [
-        ("count-errors", ["including any subdirectories", "inside a longer word", "counts once"]),
+        ("count-errors", ["including any subdirectories", "`ERROR` (case-sensitive)"]),
         ("log-triage", ["gzip-compressed and archived logs in any subdirectories"]),
         ("latency-p95", ["gzip-compressed and archived logs in any subdirectories"]),
-        ("session-count", ["separated by single spaces", "The files overlap in time", "not necessarily in time order", "never affect each other's sessions"]),
+        ("session-count", ["separated by single spaces", "**all** the files", "strictly more than 1800 seconds"]),
         ("error-burst", ["`2026-01-31T09:05:00+02:00` is 07:05 UTC", "declares, in its first line, the UTC offset", "gzip-compressed"]),
     ],
 )
 def test_instruction_states_every_level_s_rules(name, phrases):
     """Rules that used to appear only at some levels (subdirectories, compressed files, the
-    header offset, the worked offset example, session clarifications) appear at every level."""
+    header offset, the worked offset example, the session gap) appear at every level."""
     fam = FAMILIES[name]
     for d in fam.difficulties:
         text = generate_spec(fam, d, 1).spec.instruction

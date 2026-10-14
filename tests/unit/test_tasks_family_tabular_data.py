@@ -374,8 +374,8 @@ def test_instructions_state_the_rules_of_the_hardest_data():
     must = {
         "join_orders": ["leading zeros", "ignoring letter case", "header row naming its columns"],
         "json_aggregate": ["including subdirectories", "`.gz`", "`location.site`"],
-        "sqlite_query": ["`created_at` is when the shopping cart was opened", "every order of a deleted customer", "`addresses.is_primary = 1`"],
-        "dedupe_contacts": ["`+tag`", "`gmail.com` addresses only", "country code", "their own column names", "`Ann+News@Example.org`"],
+        "sqlite_query": ["the month of its `placed_at`", "every order of a deleted customer", "`addresses.is_primary = 1`"],
+        "dedupe_contacts": ["`+tag`", "`gmail.com` addresses only", "country code", "header row", "`Ann+News@Example.org`"],
     }
     for module, phrases in must.items():
         text = MODS[module].INSTRUCTION

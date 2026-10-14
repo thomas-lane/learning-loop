@@ -47,7 +47,7 @@ SUBPACKAGES = ["api", "core", "workers"]
 INSTRUCTION = """The `{pkg}` package in `/app/{pkg}/` has a circular import that we need to break. Find the import cycle among its modules. Exactly one cycle exists.
 
 - The modules are the `.py` files in the package and in any of its subpackages, named by their dotted names (e.g. `{pkg}.{example}`). The `__init__.py` files are empty and are not modules for this purpose.
-- Module A imports module B when A has an import statement that imports B, in any form: absolute (`import {pkg}.b`, `import {pkg}.b as x`, `import os, {pkg}.b`, `from {pkg}.b import name`, `from {pkg} import b`, and the same with a subpackage, e.g. `from {pkg}.sub import b`) or relative (`from .b import name`, `from . import b`, `from .sub import b`, `from .sub.b import name`, `from ..b import name`, `from .. import b`, `from ..sub import b`, `from ..sub.b import name`). Import statements inside functions count; text in comments and strings does not.
+- Module A imports module B when A has an import statement, absolute or relative, that imports B. Import statements inside functions count.
 
 Write the cycle to `/app/answer.json` as a JSON list of dotted module names. Start with the name that sorts first (plain string comparison), then list the modules in import order, so that each module imports the next one and the last imports the first. Do not repeat the first module at the end.
 """
@@ -361,7 +361,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="import-cycle",
-    version=2,
+    version=3,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "imports", "graphs", "code-reading", "diagnosis"),

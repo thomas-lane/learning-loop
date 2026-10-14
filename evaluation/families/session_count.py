@@ -52,9 +52,9 @@ PAGES = ["/", "/products", "/products/12", "/cart", "/checkout", "/search?q=desk
 SCREENS = ["home", "product", "cart", "checkout", "search", "settings", "orders"]
 API_CALLS = ["/v1/orders", "/v1/cart", "/v1/products", "/v1/profile", "/v1/payments"]
 
-INSTRUCTION = """We want to know how many user sessions our product had. Our services log user activity events to the files under `/app/events/`, including rotated, gzip-compressed and archived files in any subdirectories. Each line is one event, with fields separated by single spaces: the first field is the event's UTC timestamp in ISO 8601 (for example `2026-09-01T14:03:27Z`), the second is `user=<id>`, and the remaining fields describe the event and do not matter here. The files overlap in time, and the lines of a file are not necessarily in time order.
+INSTRUCTION = """We want to know how many user sessions our product had. Our services log user activity events to the files under `/app/events/`, including rotated, gzip-compressed and archived files in any subdirectories. Each line is one event, with fields separated by single spaces: the first field is the event's UTC timestamp in ISO 8601 (for example `2026-09-01T14:03:27Z`), the second is `user=<id>`, and the remaining fields describe the event and do not matter here.
 
-Sessions are defined per user. Take each user's events from **all** the files, ordered by time. The user's first event starts a session. Each later event belongs to the same session if it comes at most 30 minutes after that user's previous event; if the gap since the user's previous event is **more than** 30 minutes (strictly more than 1800 seconds), the event starts a new session. A gap of exactly 30 minutes does not start a new session. Events of different users never affect each other's sessions.
+Sessions are defined per user. Take each user's events from **all** the files, ordered by time. The user's first event starts a session. Each later event belongs to the same session if it comes at most 30 minutes after that user's previous event; if the gap since the user's previous event is **more than** 30 minutes (strictly more than 1800 seconds), the event starts a new session.
 
 Count the sessions of all users together and write just that number (nothing else) to `/app/answer.txt`.
 """
@@ -283,7 +283,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="session-count",
-    version=2,  # v2: one instruction for every level
+    version=3,  # v2: one instruction for every level
     cluster="text-analytics",
     category="data",
     skills=("logs", "sessionization", "timestamps", "sorting", "python"),

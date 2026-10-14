@@ -57,7 +57,7 @@ INSTRUCTION = """The deployment tree `/app/srv/` uses symlinks to point at share
 
 Find every broken symlink under `/app/srv/`, at any depth, and the existing file it should point to now: take the path the link points to (a relative target is relative to the link's own directory) and follow the renames in the log to the file that path became.
 
-Write a JSON object to `/app/answer.json` that maps each broken symlink's path to that file's path, both relative to `/app/srv` (for example `{"site/a.png": "media/b.png"}`). Leave out symlinks that work.
+Write a JSON object to `/app/answer.json` that maps each broken symlink's path to that file's path, both relative to `/app/srv` (for example `{"site/a.png": "media/b.png"}`).
 """
 
 SOLVER = r'''
@@ -299,7 +299,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="broken-symlinks",
-    version=2,
+    version=3,
     cluster="diagnosis",
     category="shell",
     skills=("shell", "symlinks", "filesystem", "diagnosis"),

@@ -429,31 +429,6 @@ def test_import_cycle_traps(tmp_path, difficulty, seed):
         assert _cycles(_import_graph(mods, top_level_only=True)) == set()
 
 
-@pytest.mark.parametrize("difficulty", list(FAMILIES["import-cycle"].difficulties))
-def test_import_cycle_instruction_lists_every_form_the_data_uses(difficulty):
-    """Each import statement, with the package written as in the instruction, its module and
-    symbol names replaced by the instruction's `b`/`name`/`x` and an absolute subpackage path
-    shortened to the package (the instruction says those forms take a subpackage too), is one
-    of the instruction's examples."""
-    for seed in SEEDS:
-        spec = generate_spec(FAMILIES["import-cycle"], difficulty, seed).spec
-        pkg = spec.params["package"]
-        mods = LOADED["import-cycle"]._sources(file_bytes(spec))
-        leaves = "|".join(sorted({m.rsplit(".", 1)[1] for m in mods}))
-        subs = "|".join(sorted({m.split(".")[1] for m in mods if m.count(".") == 2}) or ["-"])
-        for src in mods.values():
-            for node in ast.walk(ast.parse(src)):
-                if not isinstance(node, (ast.Import, ast.ImportFrom)) or getattr(node, "module", None) == "__future__":
-                    continue
-                form = ast.unparse(node)
-                form = re.sub(r"\bload_\w+", "name", form)
-                form = re.sub(r" as \w+", " as x", form)
-                form = re.sub(rf"\b(?:{subs})\b", "sub", form)
-                form = re.sub(rf"\b(?:{leaves})\b", "b", form)
-                form = re.sub(rf"\b{pkg}\.sub\b", pkg, form)
-                assert f"`{form}`" in spec.instruction, (difficulty, ast.unparse(node), form)
-
-
 # --------------------------------------------------------------------------- #
 # config-drift
 # --------------------------------------------------------------------------- #

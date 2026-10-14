@@ -64,7 +64,7 @@ Write a converter `/app/convert.py` such that `python3 /app/convert.py LOGFILE` 
 
 Input format:
 - One record per line: `key=value` pairs separated by one or more spaces. Keys consist of lowercase letters, digits and underscores.
-- A value is either bare or quoted. A bare value runs up to the next space and may contain any character except a space and a double quote (for example `'`, `\\` or `=`). A quoted value starts with `"` and ends at the next unescaped `"`; it may contain spaces and commas, and inside it `\\"` stands for `"` and `\\\\` for `\\`. The enclosing quotes are not part of the value. A value may be empty (`key=` or `key=""`).
+- A value is either bare or quoted. A bare value runs up to the next space and may contain any character except a space and a double quote. A quoted value starts with `"` and ends at the next unescaped `"`; inside it `\\"` stands for `"` and `\\\\` for `\\`. The enclosing quotes are not part of the value. A value may be empty (`key=` or `key=""`).
 - Blank lines (empty or containing only spaces) and lines starting with `#` are not records; skip them.
 
 Output format:
@@ -534,7 +534,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="format-converter",
-    version=2,
+    version=3,
     cluster="write-code",
     category="coding",
     skills=("python", "parsing", "escaping", "file-formats"),

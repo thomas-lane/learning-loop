@@ -53,7 +53,7 @@ def _load_module(module: str):
 
 FAMILY_MODULES = {name: _load_module(module) for name, module in MODULES.items()}
 FAMILIES = {name: mod.FAMILY for name, mod in FAMILY_MODULES.items()}
-VERSIONS = {"implement-function": 2, "format-converter": 2, "write-validator": 2, "refactor-preserve": 2, "cli-flags": 2}
+VERSIONS = {"implement-function": 3, "format-converter": 3, "write-validator": 3, "refactor-preserve": 3, "cli-flags": 3}
 
 
 def _build(family: str, difficulty: str, seed: int):

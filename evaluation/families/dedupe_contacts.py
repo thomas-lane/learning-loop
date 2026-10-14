@@ -51,11 +51,11 @@ CRM_COLUMNS = ["Contact ID", "Full Name", "Company", "E-mail", "Phone Number"]
 
 INSTRUCTION = """The CSV files in `/app/data/` list contacts merged from several address books, so the same person often appears more than once. Count the distinct people across **all** the files.
 
-Each file names its columns in a header row. `contacts.csv` has the columns `name`, `email` and `phone`; other files are exports from other systems that use their own column names for the same three fields.
+Each file names its columns in a header row.
 
-Two rows belong to the same person when their normalized emails are equal **or** their normalized phone numbers are equal. This is transitive: if row A matches row B and row B matches row C, all three are one person. An empty email or phone matches nothing. Names are not reliable (different people can share a name), so do not use them.
+Two rows belong to the same person when their normalized emails are equal **or** their normalized phone numbers are equal. This is transitive: if row A matches row B and row B matches row C, all three are one person. An empty email or phone matches nothing.
 
-Normalize an email by trimming surrounding whitespace and lowercasing it, then removing a `+tag` from the part before the `@` (`Ann+News@Example.org` becomes `ann@example.org`). For `gmail.com` addresses only, also remove every dot before the `@` (`a.nn@gmail.com` becomes `ann@gmail.com`); for every other domain, dots are significant (`a.nn@example.org` and `ann@example.org` are different addresses).
+Normalize an email by trimming surrounding whitespace and lowercasing it, then removing a `+tag` from the part before the `@` (`Ann+News@Example.org` becomes `ann@example.org`). For `gmail.com` addresses only, also remove every dot before the `@` (`a.nn@gmail.com` becomes `ann@gmail.com`).
 
 Normalize a phone number by keeping only its digits (`(555) 201-3344` becomes `5552013344`); if that leaves 11 digits starting with `1`, drop the leading `1` (the US country code), so `+1 (555) 201-3344` and `555.201.3344` are the same number.
 
@@ -355,7 +355,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="dedupe-contacts",
-    version=2,
+    version=3,
     cluster="tabular-data",
     category="data",
     skills=("csv", "normalization", "deduplication", "union-find", "python"),

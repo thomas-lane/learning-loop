@@ -68,7 +68,7 @@ NOISE_MODULES = {
 
 INSTRUCTION = """Last night's {job} job crashed. Its log, with the Python traceback, is in `/app/incident/traceback.txt`. The job is the `{pkg}` package in `/app/{pkg}/`, started with `cd /app && python3 -m {pkg}.main`.
 
-The line that raised the exception is correct: it was handed a bad setting value. Find the line of source code that set the value this run actually used, i.e. the dictionary entry you would have to change to fix the crash. The same setting can appear in several places (for example in several settings profiles, or in overrides applied on top of a profile); the answer is the one entry whose value this run used.
+The line that raised the exception is correct: it was handed a bad setting value. Find the line of source code that set the value this run actually used, i.e. the dictionary entry you would have to change to fix the crash.
 
 Write a JSON object to `/app/answer.json` with two keys: `"file"`, the absolute path of that source file as it would appear in a traceback, and `"line"`, its line number as an integer. For example: `{{"file": "/app/{pkg}/example.py", "line": 12}}`.
 """
@@ -436,7 +436,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="traceback-locate",
-    version=2,
+    version=3,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "tracebacks", "code-reading", "diagnosis"),

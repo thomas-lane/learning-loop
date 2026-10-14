@@ -40,7 +40,7 @@ UNMATCHED_MODES = [0o600, 0o640, 0o660, 0o664, 0o666, 0o750, 0o775]  # never 064
 
 INSTRUCTION = """The deployment in `/app/site/` has messy file permissions. `/app/perms.policy` lists the modes its files must have, one rule per line: `<pattern> <mode>`, where the pattern is matched against a file's path relative to `/app/site/` (such as `bin/deploy.sh`) and the mode is octal. Lines starting with `#` and empty lines are comments.
 
-- In a pattern, `*` matches any sequence of characters, including none, `/` and a leading `.`; every other character matches itself. A pattern must match the whole path. So `*.sh` matches `run.sh` and `tools/x/run.sh`, and `*.env` matches `.env`.
+- In a pattern, `*` matches any sequence of characters, including none, `/` and a leading `.`; every other character matches itself. A pattern must match the whole path.
 - When several rules match a file, the **last** matching rule wins.
 - A file that no rule matches keeps its current mode.
 
@@ -250,7 +250,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="permissions-fix",
-    version=2,
+    version=3,
     cluster="filesystem",
     category="shell",
     skills=("shell", "permissions", "chmod", "globs"),

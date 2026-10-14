@@ -472,7 +472,7 @@ def build_fix(ctx, instruction, extra_imports=()):
     )
 
 
-INSTRUCTION = """The pagination helpers in `/app/paging.py` ({functions}) are used by our list endpoints, and users report off-by-one and boundary mistakes in their results. Some of the tests in `/app/test_paging.py` fail, and those tests may not cover every bug.
+INSTRUCTION = """The pagination helpers in `/app/paging.py` ({functions}) are used by our list endpoints, and users report that some of their results are wrong. Some of the tests in `/app/test_paging.py` fail, and those tests may not cover every bug.
 
 Fix `paging.py` so that every function behaves exactly as its docstring describes. Keep the function names and signatures, and use only the Python standard library. You may add tests to `/app/test_paging.py` (run it with `python3 test_paging.py`), but do not change what the existing tests assert.
 """
@@ -484,7 +484,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-pagination",
-    version=2,
+    version=3,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "off-by-one", "reading-docs"),

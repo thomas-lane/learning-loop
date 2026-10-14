@@ -70,9 +70,9 @@ EXTRA_SECTIONS = {
 }
 REGIONS = ["eu", "us", "ap"]
 
-INSTRUCTION = """We keep the intended configuration of our web hosts in `/app/configs/baseline.json`. Every `.json` file under `/app/configs/hosts/`, at any depth, is a JSON dump of one host's live configuration; a dump's file name without `.json` is the host name. The dumps come from different tools, so key order, indentation and other whitespace vary, and those differences do not matter.
+INSTRUCTION = """We keep the intended configuration of our web hosts in `/app/configs/baseline.json`. Every `.json` file under `/app/configs/hosts/`, at any depth, is a JSON dump of one host's live configuration; a dump's file name without `.json` is the host name.
 
-Find every setting on which a host differs from the baseline. Settings are the leaf values (anything that is not a JSON object), named by their dotted path, e.g. `db.pool.max`. A host differs on a setting when its value differs (including its JSON type: `8080` and `"8080"` differ), when the host lacks a setting the baseline has, or when the host has a setting the baseline lacks. When an object (a section such as `db`, or a subsection such as `db.pool`) exists on only one side, every setting inside it is a separate difference: report those settings, not the object.
+Find every setting on which a host differs from the baseline. Settings are the leaf values (anything that is not a JSON object), named by their dotted path, e.g. `db.pool.max`. A host differs on a setting when its value differs (including its JSON type: `1` and `"1"` differ), when the host lacks a setting the baseline has, or when the host has a setting the baseline lacks. When an object (a section such as `db`, or a subsection such as `db.pool`) exists on only one side, every setting inside it is a separate difference: report those settings, not the object.
 
 Write a JSON object to `/app/answer.json` that maps each host that differs to an object mapping each of its differing settings to `{"baseline": <baseline value>, "host": <host value>}`, with `null` on the side where the setting is missing (no setting is ever `null`). Leave out hosts that match the baseline. For example: `{"web-99": {"db.pool.max": {"baseline": 20, "host": 40}}}`.
 """
@@ -343,7 +343,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="config-drift",
-    version=2,
+    version=3,
     cluster="diagnosis",
     category="data",
     skills=("json", "diffing", "python", "diagnosis"),

@@ -55,7 +55,7 @@ INSTRUCTION = """The shop's database is the SQLite file `/app/data/shop.db`. The
 What was the total **net revenue**, in dollars, of the orders placed in {month} 2026 by customers in the `{region}` region?
 
 - An order's net revenue is `amount_cents` minus `refunded_cents`. `refunded_cents` is NULL when nothing was refunded.
-- The month of an order is the month of its `placed_at` (`created_at` is when the shopping cart was opened; carts that were never checked out have no `placed_at`).
+- The month of an order is the month of its `placed_at`.
 - Rows whose `deleted_at` is set were deleted: leave out deleted orders and every order of a deleted customer.
 - A customer's region is the region of their primary address (`addresses.is_primary = 1`).
 
@@ -284,7 +284,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="sqlite-query",
-    version=2,
+    version=3,
     cluster="tabular-data",
     category="data",
     skills=("sql", "sqlite", "nulls", "joins", "python"),

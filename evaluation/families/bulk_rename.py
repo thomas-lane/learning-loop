@@ -70,7 +70,7 @@ INSTRUCTION = """The files in `/app/docs/` and its subfolders have inconsistent 
 
 For example, `Project_Brief  v2.TXT` becomes `project-brief-v2.txt`. Each file stays in its folder, and folder names stay as they are. Hidden files (names starting with `.`) keep their names.
 
-Collisions: when several files in the same folder would get the same new name, order them by their current names in byte order (as `LC_ALL=C sort` orders them, so capital letters come before lowercase ones). The first gets the new name, and the others get `-2`, `-3`, ... inserted before the extension, in that order: `Draft A.txt` and `draft_a.txt` become `draft-a.txt` and `draft-a-2.txt`. A file that already has the standard name takes part in this ordering like any other. File contents must not change, and no file may be lost.
+Collisions: when several files in the same folder would get the same new name, order them by their current names in byte order (as `LC_ALL=C sort` orders them). The first gets the new name, and the others get `-2`, `-3`, ... inserted before the extension, in that order: `Draft A.txt` and `draft_a.txt` become `draft-a.txt` and `draft-a-2.txt`. File contents must not change, and no file may be lost.
 """
 
 SOLVER = '''
@@ -300,7 +300,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="bulk-rename",
-    version=2,
+    version=3,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "rename", "collisions"),

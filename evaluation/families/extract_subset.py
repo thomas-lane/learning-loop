@@ -52,7 +52,7 @@ Extract every file whose name ends in `.conf` into `/app/out/`, from the bundle 
 - an archive at path `A.tar.gz` or `A.tgz` in the bundle is not extracted as a file; a file at path `P` inside it goes to `/app/out/A/P` (`etc/x.conf` inside `pkg/y.tar.gz` goes to `/app/out/pkg/y/etc/x.conf`);
 - the same rule applies inside inner archives, at every level: an archive at `B.tgz` inside `pkg/y.tar.gz` puts its file `P` at `/app/out/pkg/y/B/P`.
 
-Do not flatten the paths. `/app/out/` must contain only those `.conf` files, with their contents unchanged: no other files and no archives.
+`/app/out/` must contain only those `.conf` files, with their contents unchanged: no other files and no archives.
 """
 
 SOLVER = '''
@@ -192,7 +192,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="extract-subset",
-    version=2,
+    version=3,
     cluster="filesystem",
     category="shell",
     skills=("shell", "tar", "gzip", "archives"),

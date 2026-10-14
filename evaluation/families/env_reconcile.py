@@ -70,7 +70,7 @@ TEMPLATE_HEADER = "every supported setting, with its default"
 
 INSTRUCTION = """Bring `/app/.env` in line with the template `/app/.env.example` and the deployment overrides, which are the `.env` files in `/app/deploy/`. Each override file's name starts with a number, and a file with a higher number takes precedence over one with a lower number. Rewrite `/app/.env` in place so that:
 
-- it sets exactly the keys listed in `/app/.env.example`, each once; a key that is not in the template is dropped, even when another file sets it;
+- it sets exactly the keys listed in `/app/.env.example`, each once;
 - each key's value comes from the first of these that sets it: the override files, from the highest number down, then the current `/app/.env`, then the default in `/app/.env.example`;
 - an empty value (`KEY=`) counts as not set, in every file;
 - template keys with an empty value have no default (they are required); each of them is set in one of the other files;
@@ -315,7 +315,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="env-reconcile",
-    version=2,
+    version=3,
     cluster="config-repair",
     category="config",
     skills=("dotenv", "precedence", "config-repair", "shell"),

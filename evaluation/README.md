@@ -65,6 +65,12 @@ and larger inputs and more traps. Why not tell easy instances less? Then each le
 different task, and a policy could learn the wording instead of the skill; each family's unit
 tests check that its instruction is one template at every level.
 
+An instruction defines what a correct result is, including any convention the grader depends
+on (for example that a relative symlink target is resolved from the link's directory). It does
+not repeat a rule it already states, warn about traps the files reveal, say where bugs are, or
+suggest a tool. Why not warn the agent about the traps? A warning names the skill being tested,
+so success would measure following directions rather than noticing the problem in the data.
+
 | cluster | family | the agent must | grader |
 |---|---|---|---|
 | text-analytics | `log-triage` | name the client IP with the most HTTP 5xx responses across rotated, gzipped and archived logs | `ExactAnswer` |

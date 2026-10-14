@@ -60,7 +60,7 @@ INLINE = {
 }
 MOTDS = ["Don't forget to rotate the keys", "Maintenance window: Sunday's 02:00 slot", "We're migrating the database this week"]
 
-INSTRUCTION = """Someone hand-edited our service config `/app/config.json` and now it no longer loads. It may contain any of: `//` line comments, `/* */` block comments, commented-out settings, trailing commas, single-quoted strings, and keys that appear more than once in the same object.
+INSTRUCTION = """Someone hand-edited our service config `/app/config.json` and now it no longer loads.
 
 Repair the file in place so that `python3 /app/validate.py` prints `OK`, following these rules:
 
@@ -398,7 +398,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-json-config",
-    version=2,
+    version=3,
     cluster="config-repair",
     category="config",
     skills=("json", "parsing", "config-repair", "python"),

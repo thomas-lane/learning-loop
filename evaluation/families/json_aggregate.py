@@ -41,7 +41,7 @@ SITES = ["north-hall", "south-hall", "lab-a", "lab-b", "cold-store", "roof", "ba
 
 INSTRUCTION = """Temperature sensors upload their data as JSON Lines files (one JSON object per line) to `/app/data/readings/`. Use every file under that directory, including subdirectories; files ending in `.gz` are gzip-compressed.
 
-Each line is a record from one sensor at one site. A record is either a **single reading**, with `temp_c` at the top level, or a **batch**, whose `readings` list holds several readings, each with its own `temp_c`. The site is in the record's `site` field; records from newer firmware have no `site` field and put it in `location.site` instead. A reading whose `temp_c` is `null` or missing failed: skip it entirely (it is not a reading of 0).
+Each line is a record from one sensor at one site. A record is either a **single reading**, with `temp_c` at the top level, or a **batch**, whose `readings` list holds several readings, each with its own `temp_c`. The site is in the record's `site` field; records from newer firmware have no `site` field and put it in `location.site` instead. A reading whose `temp_c` is `null` or missing failed: skip it entirely.
 
 For each site, count the valid readings across all the files and compute their mean `temp_c`, rounded to 2 decimal places. Write the result to `/app/answer.json` as a JSON object keyed by site name, for example:
 
@@ -246,7 +246,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="json-aggregate",
-    version=2,
+    version=3,
     cluster="tabular-data",
     category="data",
     skills=("json", "nested-data", "missing-values", "aggregation", "python"),

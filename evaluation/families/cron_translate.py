@@ -54,7 +54,7 @@ INSTRUCTION = """The scheduled jobs for our app server are described in `/app/jo
 minute hour day-of-month month day-of-week command
 ```
 
-The file is checked by when each job runs, so any equivalent standard cron syntax is fine (lists, ranges, steps, names such as `MON`, `@daily`-style shortcuts). Day-of-week counts from 0 = Sunday (7 also means Sunday), and hours are 0-23. A job that runs at a time of day sets both its minute and hour; "every N hours, on the hour" means minute 0. The order of the lines does not matter.
+The file is checked by when each job runs, so any equivalent standard cron syntax is fine (lists, ranges, steps, names such as `MON`, `@daily`-style shortcuts). Day-of-week counts from 0 = Sunday (7 also means Sunday), and hours are 0-23. The order of the lines does not matter.
 """
 
 
@@ -224,7 +224,7 @@ def _retime(job, hour):
 
 FAMILY = Family(
     name="cron-translate",
-    version=2,
+    version=3,
     cluster="config-repair",
     category="config",
     skills=("cron", "translation", "canonical-form"),

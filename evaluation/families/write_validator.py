@@ -165,13 +165,13 @@ DOMAINS = {
     },
 }
 
-INSTRUCTION = """Write a function `validate(record)` in `/app/validator.py` that checks a {noun} record (a JSON object, given to you as a Python dict) against the schema below. It returns the list of error codes for the record: each code at most once, sorted alphabetically, and `[]` for a valid record. A field can produce several codes, and every field is checked (do not stop at the first error).
+INSTRUCTION = """Write a function `validate(record)` in `/app/validator.py` that checks a {noun} record (a JSON object, given to you as a Python dict) against the schema below. It returns the list of error codes for the record: each code at most once, sorted alphabetically, and `[]` for a valid record. A field can produce several codes, and every field is checked.
 
 Schema:
 {fields}
 Rules:
 - A key that is present is never missing, even when its value is null; a null value is simply of the wrong type.
-- An integer is a Python `int` that is not a `bool`: `True` and `False` are not integers here, although Python's `bool` is a subclass of `int`. Floats such as `7.0` and numeric strings such as `"7"` are not integers either.
+- An integer is a Python `int` that is not a `bool`: `True` and `False` are not integers here. Floats such as `7.0` and numeric strings such as `"7"` are not integers either.
 - Ranges and length limits include both ends.
 - Any key that is not in the schema adds the code `unknown_field` (once, however many such keys there are).
 - If the record is not a JSON object (a dict), the result is `["not_an_object"]` and nothing else.
@@ -461,7 +461,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="write-validator",
-    version=2,
+    version=3,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases", "validation"),

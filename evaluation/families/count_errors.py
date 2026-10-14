@@ -43,7 +43,7 @@ IN_WORD = [
     "WARN monitor: ERROR_BUDGET burning fast during {msg}",
 ]
 
-INSTRUCTION = """Count the lines that contain the exact (uppercase) string `ERROR` in every `.log` file under `/app/data/`, including any subdirectories. `ERROR` counts wherever it appears in a line, also inside a longer word such as `ERRORS`, and a line counts once however many times it contains `ERROR`.
+INSTRUCTION = """Count the lines that contain the string `ERROR` (case-sensitive) in every `.log` file under `/app/data/`, including any subdirectories.
 
 Write just the number (nothing else) to `/app/answer.txt`.
 """
@@ -126,7 +126,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="count-errors",
-    version=4,  # v4: one instruction for every level; medium/hard in-word and twice-ERROR lines
+    version=5,  # v4: one instruction for every level; medium/hard in-word and twice-ERROR lines
     cluster="text-analytics",
     category="shell",
     skills=("shell", "grep", "counting"),

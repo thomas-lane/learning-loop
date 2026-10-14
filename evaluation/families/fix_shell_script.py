@@ -398,7 +398,7 @@ def _test_file(visible):
 
 INSTRUCTION = """`/app/logsum.sh` summarizes a directory of log files; its header comment describes exactly what it must do (usage: `bash logsum.sh LOG_DIR OUT_FILE [PATTERN]`). It runs under `set -euo pipefail` but has bugs: it breaks on some inputs and gives wrong results on others. Some of the cases in `/app/test_logsum.py` fail, and those cases may not cover every bug.
 
-Fix the script, and any file it sources, so it behaves exactly as its header comment describes for any input, including file and directory names with spaces. Keep the line `set -euo pipefail` at the top of `logsum.sh` and keep the script a bash script (it is run as `bash logsum.sh ...`, not necessarily from `/app`). Use only bash and standard command-line tools. You may add cases to `/app/test_logsum.py` (run it with `python3 test_logsum.py`), but do not change the existing ones.
+Fix the script, and any file it sources, so it behaves exactly as its header comment describes for any input. Keep the line `set -euo pipefail` at the top of `logsum.sh` and keep the script a bash script (it is run as `bash logsum.sh ...`, not necessarily from `/app`). Use only bash and standard command-line tools. You may add cases to `/app/test_logsum.py` (run it with `python3 test_logsum.py`), but do not change the existing ones.
 """
 
 
@@ -476,7 +476,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-shell-script",
-    version=2,
+    version=3,
     cluster="fix-code",
     category="debugging",
     skills=("shell", "bash", "debugging", "quoting"),

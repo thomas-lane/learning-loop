@@ -267,7 +267,7 @@ INSTRUCTION = """`/app/report.py` summarizes an event log: `python3 report.py LO
   - `json`: the whole report on one line: a JSON array of objects `{{"category": <name>, "count": <count>}}` in report order, written exactly as Python's `json.dumps` writes it with its default settings. An empty report is `[]`.
   - `csv`: a header line `category,count`, then one line per category in report order. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled; every other field is written as it is, without quotes. An empty report is just the header line.
 
-Options can be combined: the filters (`--min-count`, `--only`, `--exclude`) choose the categories first, and `--limit` then keeps the first N of what remains. A usage error, such as an invalid value, an unknown format or conflicting options, must print a message to standard error, nothing to standard output, and exit with status 2 (which is what argparse does for the errors it detects). If LOGFILE cannot be read, print an error message to standard error, nothing to standard output, and exit with status 1.
+Options can be combined: the filters (`--min-count`, `--only`, `--exclude`) choose the categories first, and `--limit` then keeps the first N of what remains. A usage error, such as an invalid value, an unknown format or conflicting options, must print a message to standard error, nothing to standard output, and exit with status 2. If LOGFILE cannot be read, print an error message to standard error, nothing to standard output, and exit with status 1.
 
 `/app/sample.log` is a small example log. For instance, `python3 report.py sample.log --limit 2 --format json` prints:
 
@@ -303,7 +303,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="cli-flags",
-    version=2,
+    version=3,
     cluster="write-code",
     category="coding",
     skills=("python", "argparse", "cli", "output-formats"),

@@ -37,7 +37,7 @@ from learning_loop.tasks.spec import Checks, Family, Reject, Solution, TaskSpec
 MODULE = "toolkit.py"
 INSTRUCTION = """Implement the functions `{a}` and `{b}` in `/app/toolkit.py` so that each does what its docstring says.
 
-The docstrings specify the behavior precisely and show examples; you can run the examples with `python3 -m doctest -v toolkit.py` in `/app`. The functions will also be called with other inputs, including the edge cases the docstrings describe.
+The docstrings specify the behavior precisely and show examples; you can run the examples with `python3 -m doctest -v toolkit.py` in `/app`. The functions will also be called with other inputs.
 
 Keep the function names and signatures, use only the Python standard library, and do not print anything. Put all of your code in `/app/toolkit.py`: it is tested by importing that file on its own, from a directory that holds no other file.
 """
@@ -902,7 +902,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="implement-function",
-    version=2,
+    version=3,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases"),

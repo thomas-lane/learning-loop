@@ -65,7 +65,7 @@ if __name__ == "__main__":
 INSTRUCTION = """`/app/{module}` has three functions ({names}) that each contain their own copy of the code that parses a {noun} string. Refactor the module:
 
 1. Add a function `{helper}(text)` to `/app/{module}` that parses one {noun} string exactly the way the existing functions do (the module and function docstrings describe the format) and returns the number of {unit}. It raises `ValueError` for a string that is not a {noun}.
-2. Make every one of the existing functions call `{helper}` instead of using its own copy of the parsing code. Keep their behavior otherwise unchanged: the same results, the same tie-breaking, and the same handling of entries that are not {noun}s.
+2. Make every one of the existing functions call `{helper}` instead of using its own copy of the parsing code. Keep their behavior otherwise unchanged.
 3. Then extend `{helper}` so that it also accepts both of these new forms:
    - {ext_a};
    - {ext_b}.
@@ -447,7 +447,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="refactor-preserve",
-    version=2,
+    version=3,
     cluster="write-code",
     category="coding",
     skills=("python", "refactoring", "regression-safety"),

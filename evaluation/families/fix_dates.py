@@ -599,7 +599,7 @@ def build_fix(ctx, instruction, extra_imports=()):
     )
 
 
-INSTRUCTION = """The date helpers in `/app/dates.py` ({functions}) are used for billing and scheduling, and some of their results are wrong in calendar edge cases such as month ends, leap years and year boundaries. Some of the tests in `/app/test_dates.py` fail, and those tests may not cover every bug.
+INSTRUCTION = """The date helpers in `/app/dates.py` ({functions}) are used for billing and scheduling, and some of their results are wrong. Some of the tests in `/app/test_dates.py` fail, and those tests may not cover every bug.
 
 Fix `dates.py` so that every function behaves exactly as its docstring describes. Keep the function names and signatures, and use only the Python standard library; the functions must keep taking every date as an argument (never the current date). You may add tests to `/app/test_dates.py` (run it with `python3 test_dates.py`), but do not change what the existing tests assert.
 """
@@ -611,7 +611,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-dates",
-    version=2,
+    version=3,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "dates", "reading-docs"),
