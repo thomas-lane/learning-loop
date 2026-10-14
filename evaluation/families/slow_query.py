@@ -5,9 +5,12 @@ The instruction is the same at every difficulty: it names the query logs in `/ap
 including rotated, gzip-compressed ones, and asks for the total over all of them. The data
 per difficulty:
 
-- easy: one log, `query_log.csv`; no index traps;
-- medium: one log; the index traps below;
-- hard: the index traps, and `query_log.csv` plus the older, rotated `query_log.1.csv.gz`.
+- easy: two logs, `query_log.csv` and the older, rotated `query_log.1.csv.gz`, over which
+  the executions are spread; no index traps;
+- medium: the two logs, with decoys that win inside one log, and the index traps below;
+- hard: medium with more tables and more background queries.
+
+`FAMILY.difficulties` holds the exact counts.
 
 Construction: `/app/db/queries.sql` lists single-table queries `SELECT ... FROM <table>
 WHERE <column> = ? ...`, `/app/db/table_stats.json` gives each table's row count, columns
@@ -26,9 +29,11 @@ big table. Planted decoys, each beating T under one wrong method:
 - medium/hard: T's column is indexed on another table and is the second column of a
   composite index on T's table, so treating "the column has an index somewhere"
   (`any-table`) or "the column is in an index" (`any-position`) as usable excludes T;
-- hard: full-scan decoys D_a and D_b whose time is all in one of the two log files, each
-  beating T within that file, so reading only the plain log (`plain-only`) or only the
-  gzip-compressed one (`gzip-only`) fails.
+- medium/hard: full-scan decoys D_a and D_b whose time is all in one of the two log files,
+  each beating T within that file, so reading only the plain log (`plain-only`) or only the
+  gzip-compressed one (`gzip-only`) fails. On easy T's executions are split about evenly
+  between the logs too, but without these decoys reading one log alone may still find T,
+  so neither is a declared shortcut there.
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv-revenue.
 """
@@ -255,7 +260,7 @@ def build(ctx):
     s = plan.add_query(s_table, pick(s_table, False, avoid=(t_col,)))
     plan.runs[rng.randrange(n_files)].append((s, int(t_total_est * rng.uniform(0.45, 0.6)), rows[s_table]))
     plan.runs[rng.randrange(n_files)].append((s, rng.randint(1500, 4000), rows[s_table]))
-    if n_files > 1:
+    if p["split_decoys"]:
         # D_a, D_b: full scans whose executions are all in one file, each beating T there.
         for f in range(n_files):
             d_table = rng.choice(big)
@@ -321,7 +326,7 @@ def build(ctx):
     if p["index_traps"]:
         shortcuts["any-table"] = _solution("any-table")
         shortcuts["any-position"] = _solution("any-position")
-    if n_files > 1:
+    if p["split_decoys"]:
         shortcuts["plain-only"] = _solution("plain-only")
         shortcuts["gzip-only"] = _solution("gzip-only")
     return TaskSpec(
@@ -336,14 +341,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="slow-query",
-    version=2,
+    version=3,
     cluster="diagnosis",
     category="data",
     skills=("sql", "indexes", "logs", "aggregation", "diagnosis"),
     difficulties={
-        "easy": {"tables": 5, "files": 1, "index_traps": False, "background": 3},
-        "medium": {"tables": 6, "files": 1, "index_traps": True, "background": 5},
-        "hard": {"tables": 8, "files": 2, "index_traps": True, "background": 7},
+        "easy": {"tables": 5, "files": 2, "split_decoys": False, "index_traps": False, "background": 3},
+        "medium": {"tables": 6, "files": 2, "split_decoys": True, "index_traps": True, "background": 5},
+        "hard": {"tables": 8, "files": 2, "split_decoys": True, "index_traps": True, "background": 7},
     },
     build=build,
 )

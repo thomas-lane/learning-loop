@@ -3,10 +3,11 @@
 The instruction is the same at every difficulty: every log under /app/logs counts, including
 rotated, gzip-compressed and archived ones in subdirectories. The data per difficulty:
 
-- easy: `access.log` and `access.log.1.gz`;
+- easy: `access.log` and `access.log.1.gz`, and a size decoy with 4-digit sizes (below);
 - medium: `access.log`, `access.log.1` and `access.log.2.gz`, and a size decoy with 4-digit
-  sizes (below);
-- hard: medium's files plus `archive/access.log.3.gz`, and a size decoy with 3-digit sizes.
+  sizes;
+- hard: medium's files plus `archive/access.log.3.gz`, and a size decoy with 3-digit sizes in
+  half of the instances (`short_size_rate`, drawn per instance) and 4-digit sizes in the rest.
 
 Construction: target T has c_f 5xx in each file f; for every file g a decoy D_g appears in
 all files except g with c_f + delta 5xx each, so any subset missing g is won by D_g, while
@@ -19,10 +20,13 @@ Traps that do not depend on the files read, each a declared shortcut:
 
 - a 404-heavy decoy wins if every status >= 400 counts (`all-4xx`, every level);
 - the size decoy: an IP with more 200 responses than the target has 5xx, whose response
-  *sizes* start with 5. On medium they are 5000-5999, so only a grep for ` 5[0-9]{2}` that
-  is not anchored at the end of the field picks it (`unanchored-5xx-grep`); on hard they are
-  500-599, so a grep for ` 5[0-9]{2} ` with spaces on both sides picks it too
-  (`any-5xx-field`, and `unanchored-5xx-grep`). No other response size starts with 5.
+  *sizes* start with 5. With sizes 5000-5999 only a grep for ` 5[0-9]{2}` that is not
+  anchored at the end of the field picks it (`unanchored-5xx-grep`); with sizes 500-599 a
+  grep for ` 5[0-9]{2} ` with spaces on both sides picks it too (`any-5xx-field`, and
+  `unanchored-5xx-grep`). No other response size starts with 5. Only reading the status
+  field itself (the 9th) avoids both. The 3-digit decoy defeats every grep for a 5xx
+  pattern, so hard draws it for half of its instances only: with it in every instance,
+  the level would measure little besides whether the status field is parsed.
 
 The declared shortcuts are those wrong methods as runnable shell pipelines.
 """
@@ -131,8 +135,7 @@ def _build_logs(rng, names, decoy_sizes):
                 recs += [(d, rng.choice([500, 502, 503, 504]), None) for _ in range(c[name] + delta)]
         share = total_t // n + 6
         recs += [(decoy404, 404, None) for _ in range(share)] + [(decoy404, 500, None)]
-        if decoy_sizes:
-            recs += [(decoy_size, 200, rng.randint(*decoy_sizes)) for _ in range(share)]
+        recs += [(decoy_size, 200, rng.randint(*decoy_sizes)) for _ in range(share)]
         for _ in range(rng.randint(450, 650)):
             recs.append((f"192.168.{rng.randint(0, 3)}.{rng.randint(1, 254)}", rng.choices([200, 301, 404, 500], weights=[85, 5, 8, 2])[0], None))
         rng.shuffle(recs)
@@ -148,7 +151,8 @@ def _build_logs(rng, names, decoy_sizes):
 def build(ctx):
     p = ctx.params
     names = p["files"]
-    decoy_sizes = [500, 599] if p["size_trap"] else [5000, 5999] if p["long_size_trap"] else None
+    short = ctx.rng.random() < p["short_size_rate"]
+    decoy_sizes = [500, 599] if short else [5000, 5999]
     texts, target = _build_logs(ctx.rng, names, decoy_sizes)
     if _unique_top([ln for t in texts.values() for ln in t.splitlines()], _is_5xx) != target:
         raise Reject("the target is not the unique top IP")
@@ -163,9 +167,8 @@ def build(ctx):
     }
     if any("/" in n for n in names):
         shortcuts["top-level-only"] = _solution(TOP_LEVEL_ONLY, lambda n: "/" not in n, _is_5xx)
-    if decoy_sizes:
-        shortcuts["unanchored-5xx-grep"] = _solution(UNANCHORED_5XX, lambda n: True, lambda ln: re.search(r" 5[0-9]{2}", ln) is not None)
-    if p["size_trap"]:
+    shortcuts["unanchored-5xx-grep"] = _solution(UNANCHORED_5XX, lambda n: True, lambda ln: re.search(r" 5[0-9]{2}", ln) is not None)
+    if short:
         shortcuts["any-5xx-field"] = _solution(ANY_5XX_FIELD, lambda n: True, lambda ln: re.search(r" 5[0-9]{2} ", ln) is not None)
     return TaskSpec(
         instruction=INSTRUCTION,
@@ -173,21 +176,22 @@ def build(ctx):
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution(ORACLE, lambda n: True, _is_5xx),
         shortcuts=shortcuts,
-        params={"files": list(names), "size_trap": p["size_trap"], "long_size_trap": p["long_size_trap"]},
+        params={"files": list(names), "size_decoy_sizes": decoy_sizes},
     )
 
 
 FAMILY = Family(
     name="log-triage",
-    version=5,  # v5: one instruction for every level; medium's size decoy has 4-digit sizes
+    version=6,  # v6: easy has the 4-digit size decoy; on hard half the instances have 4-digit sizes
     cluster="text-analytics",
     category="shell",
     skills=("shell", "logs", "gzip", "aggregation"),
     difficulties={
-        # size_trap: the size decoy's sizes are 500-599; long_size_trap: they are 5000-5999
-        "easy": {"files": ["access.log", "access.log.1.gz"], "size_trap": False, "long_size_trap": False},
-        "medium": {"files": ["access.log", "access.log.1", "access.log.2.gz"], "size_trap": False, "long_size_trap": True},
-        "hard": {"files": ["access.log", "access.log.1", "access.log.2.gz", "archive/access.log.3.gz"], "size_trap": True, "long_size_trap": False},
+        # the size decoy's sizes are 5000-5999, except in a short_size_rate fraction of instances,
+        # where they are 500-599
+        "easy": {"files": ["access.log", "access.log.1.gz"], "short_size_rate": 0.0},
+        "medium": {"files": ["access.log", "access.log.1", "access.log.2.gz"], "short_size_rate": 0.0},
+        "hard": {"files": ["access.log", "access.log.1", "access.log.2.gz", "archive/access.log.3.gz"], "short_size_rate": 0.5},
     },
     build=build,
 )

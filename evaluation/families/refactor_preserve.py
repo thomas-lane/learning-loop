@@ -32,13 +32,13 @@ entry instead of skipping it).
 Difficulty is in the data, the same for both domains: what the visible tests show and how
 subtle the hidden invalid strings are. Easy's visible tests show two new-form examples of each
 extension, the tie rule, the skipping of invalid entries and a legacy test with an upper-case,
-a space-padded and a bare-minutes (or "b"-suffixed) string; the helper's hidden invalid
-strings are the three obvious ones (empty, a lone unit, an unknown unit). Medium shows one
-example of each extension, the tie and the skipping, and adds two of the five subtle invalid
-strings (`invalid`: whitespace only, a decimal, a sign, units out of order or doubled, a unit
-before its number). Hard shows one example of one extension and the skipping, and checks all
-five subtle strings. The third function's invalid `limit` is a word (`bad_limit`), so it does
-not repeat a helper case.
+a space-padded and a bare-minutes (or "b"-suffixed) string. Medium shows one example of each
+extension, the tie and the skipping. Hard shows one example of one extension and the skipping.
+The helper's hidden invalid strings are the three obvious ones (`invalid`: empty, a lone unit,
+an unknown unit) plus the subtle kinds (`subtle`) of the difficulty: easy checks `split` (a
+space inside a part, where the spaces extension allows none: "45 m", or "4k b" for a size),
+medium adds `blank` (whitespace only), hard adds `decimal` ("1.5h") and `sign` ("-5m"). The
+third function's invalid `limit` is a word (`bad_limit`), so it does not repeat a helper case.
 """
 
 import re
@@ -136,8 +136,14 @@ class Durations:
 
     @staticmethod
     def invalid(rng):
-        """Obvious invalid strings first (empty, a lone unit, an unknown unit), then subtle ones."""
-        return ["", "h", f"{rng.randint(2, 9)}x", "   ", "1.5h", f"{rng.randint(5, 50)}m{rng.randint(1, 5)}h", "-5m", "1hh"]
+        """Obvious invalid strings: empty, a lone unit, an unknown unit."""
+        return ["", "h", f"{rng.randint(2, 9)}x"]
+
+    @staticmethod
+    def subtle(rng):
+        """Subtle invalid strings by kind: a space inside a part (between a number and its unit,
+        where the spaces extension allows none), whitespace only, a decimal, a sign."""
+        return {"split": f"{rng.randint(5, 50)} {rng.choice('hm')}", "blank": "   ", "decimal": "1.5h", "sign": "-5m"}
 
     bad_limit = "soon"
 
@@ -206,8 +212,15 @@ class Sizes:
 
     @staticmethod
     def invalid(rng):
-        """Obvious invalid strings first (empty, a lone unit, an unknown unit), then subtle ones."""
-        return ["", "k", f"{rng.randint(2, 9)}x", "  ", "1.5k", "4kbb", "-1k", "kb4"]
+        """Obvious invalid strings: empty, a lone unit, an unknown unit."""
+        return ["", "k", f"{rng.randint(2, 9)}x"]
+
+    @staticmethod
+    def subtle(rng):
+        """Subtle invalid strings by kind: a space inside the unit (between the unit and its "b",
+        where the spaces extension allows none), whitespace only, a decimal, a sign."""
+        split = f"{rng.randint(2, 900)}{rng.choice('kmg')} b"
+        return {"split": rng.choice([split, split.upper()]), "blank": "  ", "decimal": "1.5k", "sign": "-1k"}
 
     bad_limit = "huge"
 
@@ -215,7 +228,6 @@ class Sizes:
 
 
 DOMAINS = {"durations": Durations, "sizes": Sizes}
-N_OBVIOUS_INVALID = 3
 
 # --------------------------------------------------------------------------- #
 # Module sources
@@ -331,9 +343,8 @@ def _cases(rng, dom, exts, ref, p):
     for e in exts:
         for i in range(3):
             out.append((f"helper_new_{e}_{i}", h, [dom.new_form(rng, e)]))
-    invalid = dom.invalid(rng)
-    subtle = rng.sample(invalid[N_OBVIOUS_INVALID:], p["subtle_invalid"])
-    for i, bad in enumerate(invalid[:N_OBVIOUS_INVALID] + subtle):
+    subtle = dom.subtle(rng)
+    for i, bad in enumerate(dom.invalid(rng) + [subtle[kind] for kind in p["subtle_invalid"]]):
         out.append((f"helper_invalid_{i}", h, [bad]))
     old = [dom.old_form(rng) for _ in range(5)]
     new = [dom.new_form(rng, e) for e in exts]
@@ -447,14 +458,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="refactor-preserve",
-    version=3,
+    version=4,
     cluster="write-code",
     category="coding",
     skills=("python", "refactoring", "regression-safety"),
     difficulties={
-        "easy": {"tie_test": True, "legacy_test": True, "shown_extensions": 2, "examples_per_extension": 2, "subtle_invalid": 0},
-        "medium": {"tie_test": True, "legacy_test": False, "shown_extensions": 2, "examples_per_extension": 1, "subtle_invalid": 2},
-        "hard": {"tie_test": False, "legacy_test": False, "shown_extensions": 1, "examples_per_extension": 1, "subtle_invalid": 5},
+        "easy": {"tie_test": True, "legacy_test": True, "shown_extensions": 2, "examples_per_extension": 2, "subtle_invalid": ["split"]},
+        "medium": {"tie_test": True, "legacy_test": False, "shown_extensions": 2, "examples_per_extension": 1, "subtle_invalid": ["split", "blank"]},
+        "hard": {"tie_test": False, "legacy_test": False, "shown_extensions": 1, "examples_per_extension": 1, "subtle_invalid": ["split", "blank", "decimal", "sign"]},
     },
     build=build,
 )

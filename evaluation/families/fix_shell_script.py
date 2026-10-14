@@ -4,7 +4,7 @@
 `/app/logsum.sh LOG_DIR OUT_FILE [PATTERN]` counts the lines containing PATTERN (a fixed
 string, default ERROR) in each `*.log` file directly inside LOG_DIR, writes `<name>: <count>`
 lines to OUT_FILE and prints `total: <sum>`; a missing LOG_DIR is an error (exit 2). The
-script is built from five sites, and 2 / 3 / 4 of them carry a bug drawn uniformly from that
+script is built from five sites, and 1 / 2 / 2 of them carry a bug drawn uniformly from that
 site's catalog of classic strict-mode mistakes:
 
 - `pattern`: `pattern=$3` dies with "unbound variable" when PATTERN is omitted;
@@ -31,11 +31,14 @@ repository's regression tests would, so an agent that rewrites the loop sees wha
 one for every kind no hidden bug breaks (`EXPOSED_BY`, even when another bug masks it),
 except that as many kinds no bug touches as the hidden bugs break (at least two, at every
 level) get no case either. A behavior without a visible case is therefore at least as likely
-to work as to hide a bug; `build` redraws when too few untouched kinds are left. All / half / a quarter of the bugs (at least one) are
-*visible*: some case fails because of each of them, both with that bug alone and with every
-bug in place (`build` redraws when another bug masks one: `for f in $(ls ...)` never enters
-the loop without a .log file, which hides a missing guard). Every other visible case passes
-on the script as given, and every visible case passes once only the hidden bugs are left.
+to work as to hide a bug; `build` redraws when too few untouched kinds are left. All / half /
+half of the bugs (one at every level) are *visible*: some case fails because of each of
+them, both with that bug alone and with every bug in place (`build` redraws when another bug
+masks one: `for f in $(ls ...)` never enters the loop without a .log file, which hides a
+missing guard). Every other visible case passes on the script as given, and every visible
+case passes once only the hidden bugs are left. Medium and hard have one hidden bug, which
+is what mostly sets their difficulty (a bug no failing case shows is much harder to find);
+hard also splits the script in two files.
 Hidden checks never reuse a visible case's arguments. In the regex-looking PATTERN check,
 each log's decoy lines (which match PATTERN only as a regular expression) differ in number
 from its matching lines, so the regex count always differs from the fixed-string count.
@@ -135,8 +138,7 @@ CORRECT = {
 }
 
 # site -> bug -> (buggy text, plausible wrong fix or None). Every bug but `regex_pattern` has a
-# wrong fix, so every instance (at least two bugs) has a `wrong-fix-*` shortcut and each
-# site's bug is drawn uniformly from its catalog entries.
+# wrong fix, so each site's bug is drawn uniformly from its catalog entries.
 BUGS = {
     "pattern": {
         "unset_default": ("pattern=$3\n", "pattern=${3:-}\n"),
@@ -476,14 +478,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-shell-script",
-    version=3,
+    version=4,
     cluster="fix-code",
     category="debugging",
     skills=("shell", "bash", "debugging", "quoting"),
     difficulties={
-        "easy": {"n_bugs": 2, "visible_bug_tests": 1.0, "split_lib": False},
-        "medium": {"n_bugs": 3, "visible_bug_tests": 0.5, "split_lib": False},
-        "hard": {"n_bugs": 4, "visible_bug_tests": 0.25, "split_lib": True},
+        "easy": {"n_bugs": 1, "visible_bug_tests": 1.0, "split_lib": False},
+        "medium": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": False},
+        "hard": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": True},
     },
     build=build,
 )

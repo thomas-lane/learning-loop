@@ -5,8 +5,12 @@ percentile; medium adds sample variance, hard the mode), and 1 / 2 / 4 of them c
 drawn uniformly from that function's catalog (floor division, a skipped element, the upper
 middle or a sort in place for the median, population instead of sample variance, a missing
 square root, percentile ranks off by one, uninterpolated or unsorted, the wrong tie-break for
-the mode). The instruction is the same at every difficulty apart from the function list:
-some visible tests fail, and they may not cover every bug.
+the mode). Hard always has a bug in `percentile`, drawn from the two entries most often
+missed or fixed wrongly (ranks off by one, which takes knowing the exact interpolation rule,
+and a missing sort): the other catalogued bugs are found almost every time, even when
+hidden, so hard would otherwise be no harder than medium. The instruction is the same at
+every difficulty apart from the function list: some visible tests fail, and they may not
+cover every bug.
 
 `/app/test_stats.py` holds two visible tests per function, of different kinds and at least
 one of them not an error check, so neither the tested functions nor their number of tests
@@ -296,8 +300,11 @@ def _write(source, then=""):
 def build(ctx):
     rng, p = ctx.rng, ctx.params
     funcs = p["functions"]
-    bugged = sorted(rng.sample(funcs, p["n_bugs"]))
-    bugs = {f: rng.choice(sorted(BUGGY[f])) for f in bugged}
+    # `always_bugged` {function: catalog entries}: functions that carry a bug at this level,
+    # drawn from those entries; the other bugs go to functions drawn as usual
+    forced = p.get("always_bugged", {})
+    bugged = sorted(list(forced) + rng.sample([f for f in funcs if f not in forced], p["n_bugs"] - len(forced)))
+    bugs = {f: rng.choice(sorted(forced.get(f) or BUGGY[f])) for f in bugged}
     visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
     hidden_only = {f: b for f, b in bugs.items() if f not in visible_bugs}
     ref, buggy, partial = _exec(_module(funcs, {})), _exec(_module(funcs, bugs)), _exec(_module(funcs, hidden_only))
@@ -362,14 +369,19 @@ Fix `stats.py` so that all functions behave as their docstrings describe. You ma
 
 FAMILY = Family(
     name="fix-stats",
-    version=4,
+    version=5,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "reading-docs"),
     difficulties={
         "easy": {"functions": ["mean", "median", "stdev", "percentile"], "n_bugs": 1, "visible_bug_tests": 1.0},
         "medium": {"functions": ["mean", "median", "variance", "stdev", "percentile"], "n_bugs": 2, "visible_bug_tests": 0.5},
-        "hard": {"functions": ["mean", "median", "variance", "stdev", "percentile", "mode"], "n_bugs": 4, "visible_bug_tests": 0.25},
+        "hard": {
+            "functions": ["mean", "median", "variance", "stdev", "percentile", "mode"],
+            "n_bugs": 4,
+            "visible_bug_tests": 0.25,
+            "always_bugged": {"percentile": ["rank_off_by_one", "unsorted"]},
+        },
     },
     build=build,
 )

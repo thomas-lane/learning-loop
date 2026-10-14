@@ -3,12 +3,19 @@ orders, across all CSV files in /app/data?
 
 Construction: target T gets a_f large completed orders in file f; for each file g a decoy
 D_g gets a_f + 1 in every other file (it wins any subset missing g and loses overall since
-a_g > n - 1). A refund decoy wins if the status filter is ignored; a volume decoy wins on
-quantity or row count but not on revenue. Medium/hard quote product names that contain
-commas, so splitting lines on "," misreads them; hard reorders one file's columns, so
-reusing the first file's column positions misreads it. Most of the target's product names
-contain a comma, so a naive split loses most of the target's revenue. `build` redraws until the answer is
-unique and every proper subset of the files gives a different one.
+a_g > n - 1); with one file, a split decoy instead gets a_f - 1. A refund decoy wins if the
+status filter is ignored; a volume decoy wins on quantity or row count but not on revenue.
+`build` redraws until the answer is unique and every proper subset of the files gives a
+different one. Easy has one file, medium two, hard three.
+
+Every level quotes product names that contain commas; whether those commas decide the answer
+is drawn per instance. With probability `deciding_commas` (easy 0.35, medium 0.6, hard 0.75),
+most of the target's product names contain a comma (other regions: 35%), so splitting lines
+on "," misreads most of the target's rows and loses its revenue (`naive-split`). Otherwise
+only small background orders have commas, too few to change the winner, and splitting on ","
+gives the right region (`build` checks this and redraws otherwise). Splitting on "," (awk -F,)
+is the usual shell approach and either always or never fails on one instance, so the share of
+instances with deciding commas sets the level's difficulty.
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode: the shell
 form runs it on /app/data, the model runs the same source on the generated files, so the
@@ -25,8 +32,9 @@ REGIONS = ["north", "south", "east", "west", "central", "coastal", "highland", "
 PRODUCTS = ["widget", "gadget", "sprocket", "gizmo", "doohickey", "flange", "bracket"]
 COLUMNS = ["order_id", "region", "product", "quantity", "unit_price", "status"]
 STATUSES = ["completed", "refunded", "cancelled", "pending"]
-# With quoted commas, most of the target's product names contain one, so splitting lines on
-# "," misreads most of the target's rows and loses its revenue (other regions: 35%).
+# When commas decide, most of the target's product names contain one, so splitting lines on
+# "," misreads most of the target's rows and loses its revenue (other regions: 35%). When they
+# do not, only small background orders get them, at the same 35%.
 COMMA_RATE = 0.35
 TARGET_COMMA_RATE = 0.8
 
@@ -44,10 +52,9 @@ from collections import defaultdict
 
 
 def _rows(texts, mode):
-    if mode in ("naive-split", "fixed-columns"):
-        first = next(csv.reader(io.StringIO(texts[0][1])))
+    if mode == "naive-split":
         for _, text in texts:
-            cols = first if mode == "fixed-columns" else next(csv.reader(io.StringIO(text)))
+            cols = next(csv.reader(io.StringIO(text)))
             for ln in text.splitlines()[1:]:
                 parts = ln.split(",")
                 yield {c: parts[i] if i < len(parts) else "" for i, c in enumerate(cols)}
@@ -138,10 +145,10 @@ def _order(rng, oid, region, qty, price, status, comma_rate):
     return {"order_id": str(oid), "region": region, "product": prod, "quantity": str(qty), "unit_price": f"{price:.2f}", "status": status}
 
 
-def _build_files(rng, p):
+def _build_files(rng, p, decide):
     n = p["n_files"]
-    regions = rng.sample(REGIONS, n + 3)
-    target, decoys, refund_decoy, volume_decoy = regions[0], regions[1 : n + 1] if n > 1 else [], regions[n + 1], regions[n + 2]
+    regions = rng.sample(REGIONS, n + 4)
+    target, decoys, refund_decoy, volume_decoy, split_decoy = regions[0], regions[1 : n + 1] if n > 1 else [], regions[n + 1], regions[n + 2], regions[n + 3]
     names = [f"orders_{i + 1}.csv" for i in range(n)]
     a = {f: rng.randint(n + 4, n + 7) for f in names}
 
@@ -155,24 +162,30 @@ def _build_files(rng, p):
         for g, d in zip(names, decoys):
             if g != name:
                 plan += [(d, *big(), "completed") for _ in range(a[name] + 1)]
+        if n == 1:  # with no D_g, this region wins once the target's comma rows are lost
+            plan += [(split_decoy, *big(), "completed") for _ in range(a[name] - 1)]
         plan += [(refund_decoy, *big(), rng.choice(["refunded", "cancelled"])) for _ in range(sum(a.values()) // n + 4)]
         plan += [(volume_decoy, 12, rng.randint(10, 50) / 100, "completed") for _ in range(25)]
+        plan = [(*o, False) for o in plan]
         for _ in range(rng.randint(25, 40)):  # small background orders, any status
-            plan.append((rng.choice(regions), rng.randint(1, 4), rng.randint(100, 999) / 100, rng.choices(STATUSES, weights=[70, 12, 10, 8])[0]))
+            plan.append((rng.choice(regions), rng.randint(1, 4), rng.randint(100, 999) / 100, rng.choices(STATUSES, weights=[70, 12, 10, 8])[0], True))
         rng.shuffle(plan)
         rows = []
-        for region, qty, price, status in plan:
+        for region, qty, price, status, background in plan:
             oid += 1
-            rate = 0.0 if not p["quoted_commas"] else TARGET_COMMA_RATE if region == target else COMMA_RATE
+            if not (decide or background):
+                rate = 0.0
+            else:
+                rate = TARGET_COMMA_RATE if decide and region == target else COMMA_RATE
             rows.append(_order(rng, oid, region, qty, price, status, rate))
-        cols = ["order_id", "status", "unit_price", "quantity", "product", "region"] if p["reorder"] and i == n - 1 else list(COLUMNS)
-        files[name] = _render(rows, cols)
+        files[name] = _render(rows, list(COLUMNS))
     return files, target
 
 
 def build(ctx):
     p = ctx.params
-    files, target = _build_files(ctx.rng, p)
+    decide = ctx.rng.random() < p["deciding_commas"]
+    files, target = _build_files(ctx.rng, p, decide)
     texts = sorted(files.items())
     if _unique_top(_totals(texts)) != target:
         raise Reject("the target is not the unique top region")
@@ -182,30 +195,30 @@ def build(ctx):
             if _unique_top(_totals(texts, set(subset))) == target:
                 raise Reject(f"reading only {subset} gives the right answer")
     shortcuts = {m: _solution(m) for m in ("no-status-filter", "quantity-sum", "row-count")}
-    if p["quoted_commas"]:
+    if decide:
         shortcuts["naive-split"] = _solution("naive-split")
-    if p["reorder"]:
-        shortcuts["fixed-columns"] = _solution("fixed-columns")
+    elif _NS["answer"](texts, "naive-split") != target:
+        raise Reject("background commas change the answer of a line split")
     return TaskSpec(
         instruction=INSTRUCTION,
         files={f"data/{n}": t for n, t in files.items()},
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution("oracle"),
         shortcuts=shortcuts,
-        params={"n_files": p["n_files"], "quoted_commas": p["quoted_commas"], "reorder": p["reorder"]},
+        params={"n_files": p["n_files"], "commas_decide": decide},
     )
 
 
 FAMILY = Family(
     name="csv-revenue",
-    version=3,
+    version=4,
     cluster="tabular-data",
     category="data",
     skills=("csv", "quoting", "aggregation", "python"),
     difficulties={
-        "easy": {"n_files": 1, "quoted_commas": False, "reorder": False},
-        "medium": {"n_files": 2, "quoted_commas": True, "reorder": False},
-        "hard": {"n_files": 3, "quoted_commas": True, "reorder": True},
+        "easy": {"n_files": 1, "deciding_commas": 0.35},
+        "medium": {"n_files": 2, "deciding_commas": 0.6},
+        "hard": {"n_files": 3, "deciding_commas": 0.75},
     },
     build=build,
 )

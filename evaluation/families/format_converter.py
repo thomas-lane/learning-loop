@@ -25,23 +25,25 @@ decides which cases of the grammar the data contains; every hidden input and the
 contain every planted case of their difficulty, so each wrong method fails every non-empty
 check:
 
-- kv-csv: quoted values with spaces and commas, and an empty value, at every difficulty;
-  medium adds `\\"` and `\\\\` escapes (planted, and in random messages) and comment and blank
-  lines (one of them spaces-only); hard adds bare values with `'`, `\\` or `=` (user names,
-  and paths with a `?id=` query).
-- fixed-jsonl: names with a double quote at every difficulty; medium adds spaces-only
-  integer fields (every export has an optional integer field for them), a name with a
-  backslash, comment lines, a spaces-only blank line and zero-padded integers; hard adds
+- kv-csv: quoted values with spaces and commas, an empty value, and comment and blank lines
+  (one of them spaces-only) at every difficulty. `\\"` and `\\\\` escapes (planted, and in
+  random messages) are drawn per instance with the difficulty's `escape_share`: half of the
+  easy instances have them, every medium and hard instance does. Hard adds bare values with
+  `'`, `\\` or `=` (user names, and paths with a `?id=` query).
+- fixed-jsonl: names with a double quote, spaces-only integer fields (every export has an
+  optional integer field for them), comment lines and a spaces-only blank line at every
+  difficulty; medium adds a name with a backslash and zero-padded integers; hard adds
   non-ASCII names and cities, an empty text field (a record whose optional text fields are
   all empty) and lines whose trailing spaces are cut off.
 
 Traps (declared shortcuts; each is a full script an agent might write):
 kv-csv: `hardcode-examples` (prints the example's CSV), `naive-split` (splits on spaces, so
-quoted values with spaces break), `no-csv-quoting` (joins fields with commas); medium adds
-`keeps-backslashes` (a regex that finds the quoted value but does not unescape it) and
-`no-skip-comments`; hard adds `shlex-split` (`shlex.split` misreads `'` and `\\` in bare values).
+quoted values with spaces break), `no-csv-quoting` (joins fields with commas) and
+`no-skip-comments`; an instance with escapes adds `keeps-backslashes` (a regex that finds the
+quoted value but does not unescape it); hard adds `shlex-split` (`shlex.split` misreads `'`
+and `\\` in bare values).
 fixed-jsonl: `hardcode-examples`, `off-by-one-columns` (slices [start-1:end-1]),
-`hand-built-json` (no escaping of the planted `"`); medium adds `empty-int-as-zero` and
+`hand-built-json` (no escaping of the planted `"`), `empty-int-as-zero` and
 `no-skip-comments`; hard adds `ensure-ascii-false` (`json.dumps(..., ensure_ascii=False)`).
 """
 
@@ -173,7 +175,7 @@ MSG_WORDS = ["disk", "full", "retrying", "upload", "of", "file", "failed", "afte
 PATHS = ["/api/items", "/api/users", "/login", "/static/app.js", "/export"]
 
 
-def _kv_value(rng, key, level):
+def _kv_value(rng, key, p):
     """(raw text as written in the log, the value) for `key`."""
     if key == "time":
         return None
@@ -198,7 +200,7 @@ def _kv_value(rng, key, level):
         return v, v
     if key == "path":
         v = rng.choice(PATHS)
-        if level == "hard" and rng.random() < 0.4:
+        if p["level"] == "hard" and rng.random() < 0.4:
             v += f"?id={rng.randint(1, 99)}"
         return v, v
     if key == "msg":
@@ -206,23 +208,23 @@ def _kv_value(rng, key, level):
         if rng.random() < 0.4:
             words[rng.randrange(len(words))] += ","
         v = " ".join(words)
-        if level != "easy" and rng.random() < 0.25:
+        if p["escapes"] and rng.random() < 0.25:
             q = rng.choice(MSG_WORDS)
             v += f' "{q}"'
-        if level != "easy" and rng.random() < 0.15:
+        if p["escapes"] and rng.random() < 0.15:
             v += " C:\\tmp"
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"', v
     raise KeyError(key)
 
 
-def _kv_line(rng, columns, extras, ts, level, plant=None):
+def _kv_line(rng, columns, extras, ts, p, plant=None):
     """One log line and its expected record. `plant` forces one trap into the line."""
     pairs, record = [("time", ts)], {"time": ts}
     keys = [k for k in columns if k != "time"] + extras
     for k in keys:
         if k in columns and k != "msg" and rng.random() < 0.12:
             continue  # a missing key
-        raw, v = _kv_value(rng, k, level)
+        raw, v = _kv_value(rng, k, p)
         pairs.append((k, raw))
         record[k] = v
     if plant == "comma":
@@ -262,7 +264,7 @@ def _kv_file(rng, p, columns, extras, start, plants):
     rng.shuffle(plants)
     for plant in plants:
         ts += timedelta(seconds=rng.randint(1, 300))
-        line, rec = _kv_line(rng, columns, extras, ts.strftime("%Y-%m-%dT%H:%M:%SZ"), p["level"], plant)
+        line, rec = _kv_line(rng, columns, extras, ts.strftime("%Y-%m-%dT%H:%M:%SZ"), p, plant)
         lines.append(line)
         records.append(rec)
     if p["comments"]:
@@ -288,8 +290,9 @@ def _kv_scripts(p, columns, sample_csv):
         "no-csv-quoting": "import sys\n\n" + head + KV_PARSE + KV_MAIN_JOIN,
         "hardcode-examples": f"import sys\n\nSAMPLE = {sample_csv!r}\n\nsys.stdout.write(SAMPLE)\n",
     }
-    if p["level"] != "easy":
+    if p["escapes"]:
         scripts["keeps-backslashes"] = "import csv\nimport re\nimport sys\n\n" + head + KV_PARSE_REGEX + KV_MAIN
+    if p["comments"]:
         scripts["no-skip-comments"] = "import csv\nimport sys\n\n" + head + KV_PARSE + KV_MAIN_NO_SKIP
     if p["level"] == "hard":
         scripts["shlex-split"] = "import csv\nimport shlex\nimport sys\n\n" + head + KV_PARSE_SHLEX + KV_MAIN
@@ -297,12 +300,13 @@ def _kv_scripts(p, columns, sample_csv):
 
 
 def _build_kv(rng, p):
+    p = dict(p, escapes=rng.random() < p["escape_share"])
     optional = ["level", "status", "action", "path"]
     chosen = rng.sample(optional, p["n_columns"] - 3)
     columns = ["time"] + rng.sample(["user", "msg"] + chosen, p["n_columns"] - 1)
     extras = [k for k in optional if k not in chosen] + ["pid"]
     start = datetime(2026, 9, 1) + timedelta(days=rng.randint(0, 25), seconds=rng.randint(0, 80000))
-    plants = ["comma", "comma", "empty"] + (["escape", "escape", "backslash"] if p["level"] != "easy" else []) + (["odd_bare", "odd_bare"] if p["level"] == "hard" else [])
+    plants = ["comma", "comma", "empty"] + (["escape", "escape", "backslash"] if p["escapes"] else []) + (["odd_bare", "odd_bare"] if p["level"] == "hard" else [])
     sample_log, sample_recs = _kv_file(rng, p, columns, extras, start, plants)
     inputs = [_kv_file(rng, p, columns, extras, start + timedelta(days=i + 1), plants) for i in range(N_HIDDEN)]
     sample_csv = _csv(columns, sample_recs)
@@ -311,7 +315,7 @@ def _build_kv(rng, p):
         "examples": {"examples/sample.log": sample_log, "examples/sample.csv": sample_csv},
         "cases": [(f"input_{i + 1}.log", text, _csv(columns, recs)) for i, (text, recs) in enumerate(inputs)] + [("empty.log", "", _csv(columns, []))],
         "scripts": _kv_scripts(p, columns, sample_csv),
-        "params": {"conversion": "kv-csv", "columns": columns},
+        "params": {"conversion": "kv-csv", "columns": columns, "escapes": p["escapes"]},
     }
 
 
@@ -475,8 +479,8 @@ def _fx_scripts(p, fields, sample_jsonl):
         "hand-built-json": "import sys\n\n" + head + FX_PARSE + FX_DUMP_BY_HAND + FX_MAIN.replace("json.dumps(parse(line))", "dump(parse(line))"),
         "hardcode-examples": f"import sys\n\nSAMPLE = {sample_jsonl!r}\n\nsys.stdout.write(SAMPLE)\n",
     }
-    if p["level"] != "easy":
-        scripts["empty-int-as-zero"] = oracle.replace("int(raw) if raw else None", "int(raw or 0)")
+    scripts["empty-int-as-zero"] = oracle.replace("int(raw) if raw else None", "int(raw or 0)")
+    if p["comments"]:
         scripts["no-skip-comments"] = oracle.replace('            if not line.strip() or line.startswith("#"):\n                continue\n', "")
     if p["level"] == "hard":
         scripts["ensure-ascii-false"] = oracle.replace("json.dumps(parse(line))", "json.dumps(parse(line), ensure_ascii=False)")
@@ -485,9 +489,9 @@ def _fx_scripts(p, fields, sample_jsonl):
 
 def _build_fixed(rng, p):
     fields = _fx_fields(rng, p)
-    plants = ["quote", "quote"]
+    plants = ["quote", "quote", "empty_int", "empty_int"]
     if p["level"] != "easy":
-        plants += ["empty_int", "empty_int", "backslash"]
+        plants += ["backslash"]
     if p["level"] == "hard":
         plants += ["unicode", "unicode", "empty_text"]
     sample, sample_recs = _fx_file(rng, p, fields, plants)
@@ -534,14 +538,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="format-converter",
-    version=3,
+    version=4,
     cluster="write-code",
     category="coding",
     skills=("python", "parsing", "escaping", "file-formats"),
     difficulties={
-        "easy": {"n_columns": 4, "n_fields": 4, "comments": False, "leading_zeros": False, "short_lines": False},
-        "medium": {"n_columns": 5, "n_fields": 5, "comments": True, "leading_zeros": True, "short_lines": False},
-        "hard": {"n_columns": 6, "n_fields": 6, "comments": True, "leading_zeros": True, "short_lines": True},
+        "easy": {"n_columns": 4, "n_fields": 4, "comments": True, "leading_zeros": False, "short_lines": False, "escape_share": 0.5},
+        "medium": {"n_columns": 5, "n_fields": 5, "comments": True, "leading_zeros": True, "short_lines": False, "escape_share": 1.0},
+        "hard": {"n_columns": 6, "n_fields": 6, "comments": True, "leading_zeros": True, "short_lines": True, "escape_share": 1.0},
     },
     build=build,
 )

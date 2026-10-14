@@ -10,16 +10,21 @@ the first occurrence of a repeated key (the one the service used). The visible
 settings with the right types. The grader parses the file as JSON and compares it with the
 intended config: every setting, with first occurrences.
 
-Difficulty comes from the data: a repeated key in one nested object on easy, in two on medium
-and in three on hard, which also repeats the whole top-level `logging` object; more trailing
-commas and inline comments as the level rises; medium/hard add single-quoted strings and a
-commented-out setting; hard adds a `/* */` block comment.
+Difficulty comes from the data. The file has the core settings (`server`, `database`,
+`logging`, `features`, `allowed_origins`) plus extra sections drawn from a pool (`cache`,
+`queue`, `auth`, ...): four on easy, six on medium and eight on hard, so the file grows from
+about 55 to about 100 lines and repairing it by retyping gets error-prone. A repeated key
+appears in two objects on easy, four on medium and six on hard, which also repeats the whole
+top-level `logging` object; full-line comments, inline comments and trailing commas grow with
+the level; medium/hard add single-quoted strings, among them digit-only text such as
+`'0640'` (one on medium, two on hard), and a commented-out setting; hard adds a `/* */` block
+comment.
 
 Construction: the config is a list of entries rendered by hand, so every defect is planted.
 Every instance has URL strings containing `//`, a value followed by an inline `// ...`
-comment on the same line, and at least one duplicated key whose later value differs.
-Medium/hard also put an apostrophe inside a double-quoted string; hard adds `/*` inside a
-string (a log glob) and a single-quoted string that contains double quotes.
+comment on the same line, and duplicated keys whose later value differs. Medium/hard also
+put an apostrophe inside a double-quoted string; hard adds `/*` inside a string (a log glob)
+and a single-quoted string that contains double quotes.
 
 Traps (declared shortcuts, all failing by construction):
 - `last-wins`: a proper repair parsed with plain `json.loads`, which keeps the *last* duplicate;
@@ -28,7 +33,8 @@ Traps (declared shortcuts, all failing by construction):
   result does not parse and the file is left as it was;
 - `grep-v-comments`: drops every line containing `//` before repairing, losing the values
   next to inline comments and the URL settings;
-- medium/hard `quote-swap`: replaces every `'` with `"`, which breaks the apostrophe string.
+- medium/hard `quote-swap`: replaces every `'` with `"`, which breaks the apostrophe string;
+- medium/hard `unquote-numbers`: a proper repair that writes digit-only strings as numbers.
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode, as in
 csv-revenue: the shell form runs it on `/app/config.json`, the model on the generated text.
@@ -59,6 +65,23 @@ INLINE = {
     "cache_ttl_s": ["seconds", "tune with care"],
 }
 MOTDS = ["Don't forget to rotate the keys", "Maintenance window: Sunday's 02:00 slot", "We're migrating the database this week"]
+INLINE_OTHER = ["see the runbook", "tuned last quarter", "per instance", "default"]
+# Extra top-level sections that make the file longer: name -> settings (key, value drawn from rng
+# and the service name). Strings are URLs with `//` or plain text; numbers are integers.
+SECTIONS = {
+    "cache": lambda rng, n: [("url", f"redis://{n}-cache.internal:6379/{rng.randint(0, 15)}"), ("ttl_s", rng.choice([60, 300, 900])), ("max_entries", rng.choice([1000, 5000, 20000])), ("enabled", rng.choice([True, False]))],
+    "queue": lambda rng, n: [("url", f"amqp://{n}-mq.internal:5672/jobs"), ("prefetch", rng.randint(1, 50)), ("retry_limit", rng.randint(2, 9)), ("dead_letter", rng.choice([True, False]))],
+    "metrics": lambda rng, n: [("endpoint", f"https://metrics.example.com/{n}"), ("interval_s", rng.choice([10, 15, 30, 60])), ("prefix", f"{n}_svc"), ("enabled", rng.choice([True, False]))],
+    "auth": lambda rng, n: [("issuer", f"https://auth.example.com/{n}"), ("token_ttl_s", rng.choice([900, 1800, 3600])), ("refresh_ttl_s", rng.choice([86400, 604800])), ("require_mfa", rng.choice([True, False]))],
+    "email": lambda rng, n: [("smtp_host", f"smtp-{rng.randint(1, 4)}.internal"), ("smtp_port", rng.choice([25, 465, 587])), ("sender", f"noreply@{n}.example.com"), ("use_tls", rng.choice([True, False]))],
+    "storage": lambda rng, n: [("endpoint", f"https://s3.{rng.choice(['eu', 'us'])}.example.com"), ("bucket", f"{n}-uploads"), ("max_upload_mb", rng.choice([10, 25, 100])), ("public", rng.choice([True, False]))],
+    "scheduler": lambda rng, n: [("tick_s", rng.choice([1, 5, 10])), ("max_jobs", rng.randint(4, 64)), ("timezone", rng.choice(["UTC", "Europe/Berlin", "America/Chicago"])), ("catch_up", rng.choice([True, False]))],
+    "tracing": lambda rng, n: [("collector", f"http://otel-{rng.randint(1, 3)}.internal:4318/v1/traces"), ("sample_pct", rng.choice([1, 5, 10, 25])), ("service_name", n), ("enabled", rng.choice([True, False]))],
+    "search": lambda rng, n: [("url", f"http://{n}-search.internal:9200"), ("shards", rng.randint(1, 12)), ("replicas", rng.randint(1, 3)), ("timeout_ms", rng.choice([200, 500, 1000]))],
+    "payments": lambda rng, n: [("gateway", f"https://pay.example.com/v{rng.randint(1, 3)}"), ("retries", rng.randint(1, 5)), ("sandbox", rng.choice([True, False])), ("currency", rng.choice(["EUR", "USD", "GBP"]))],
+}
+# Digit-only text that a section keeps as a string (written single-quoted): (key, values).
+QUOTED_NUMBERS = [("file_mode", ["0640", "0600", "0644"]), ("umask", ["0022", "0027", "0077"]), ("build", ["20240117", "20231205", "20240302"]), ("zone", ["01", "02", "07"])]
 
 INSTRUCTION = """Someone hand-edited our service config `/app/config.json` and now it no longer loads.
 
@@ -182,6 +205,14 @@ def strict(text):
     return "".join(out)
 
 
+def _unquote_numbers(v):
+    if isinstance(v, dict):
+        return {k: _unquote_numbers(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_unquote_numbers(x) for x in v]
+    return int(v) if isinstance(v, str) and v.isdigit() else v
+
+
 def fix(text, mode):
     """The repaired file text, or None when this method cannot produce one (the file is left as it is)."""
     try:
@@ -197,6 +228,8 @@ def fix(text, mode):
                 text = text.replace("'", '"')
             hook = {"last-wins": None, "drop-duplicates": _drop_duplicates}.get(mode, _first)
             obj = json.loads(strict(text), object_pairs_hook=hook)
+            if mode == "unquote-numbers":
+                obj = _unquote_numbers(obj)
     except (ValueError, IndexError):
         return None
     return json.dumps(obj, indent=2) + "\n"
@@ -337,6 +370,13 @@ def _config(rng, p):
         _e("features", features),
         _e("allowed_origins", origins),
     ]
+    extras = {}
+    for sec in rng.sample(sorted(SECTIONS), p["sections"]):
+        extras[sec] = _obj([_e(k, v) for k, v in SECTIONS[sec](rng, name)])
+        top.insert(rng.randint(2, len(top)), _e(sec, extras[sec]))
+    for sec, (key, values) in zip(rng.sample(sorted(extras), p["quoted_numbers"]), rng.sample(QUOTED_NUMBERS, p["quoted_numbers"])):
+        ents = extras[sec]["obj"]
+        ents.insert(rng.randint(0, len(ents)), _e(key, rng.choice(values), sq=True))
     if p["single_quotes"]:
         database["obj"].append(_e("replica_url", f"postgres://{name}-replica.internal:5432/{name}", sq=True))
         top.insert(2, _e("owner", f"team-{rng.choice(TEAMS)}", sq=True, sqkey=rng.random() < 0.5))
@@ -346,7 +386,7 @@ def _config(rng, p):
         logging["obj"].append(_e("glob", f"/var/log/{name}/*.log"))
         top.insert(1, _e("banner", f'Welcome to "{name.title()}"', sq=True))
         features["obj"][1]["block"] = ["Rate limiting was tuned after the March incident.", f"Do not raise above {rng.choice([800, 1000])} without asking ops."]
-    return top, {"server": server, "database": database, "logging": logging, "features": features, "origins": origins}
+    return top, {"server": server, "database": database, "logging": logging, "features": features, "origins": origins, **extras}
 
 
 def _plant(rng, top, objs, p):
@@ -355,15 +395,17 @@ def _plant(rng, top, objs, p):
     for key in rng.sample(["server", "database", "logging", "features"], p["trailing_objects"]):
         objs[key]["trailing"] = True
     # full-line comments before a few entries
-    scalars = [(o, e) for o in ("server", "database", "logging", "features") for e in objs[o]["obj"] if "commented" not in e]
-    for _, e in rng.sample(scalars, 2):
+    objects = [o for o in objs if o != "origins"]
+    scalars = [(o, e) for o in objects for e in objs[o]["obj"] if "commented" not in e]
+    for _, e in rng.sample(scalars, p["line_comments"]):
         e.setdefault("before", []).append(rng.choice(COMMENTS))
     # inline comments after values (always at least one on a line that is not otherwise special)
     plain = [e for _, e in scalars if not isinstance(e["v"], str) and not e.get("inline")]
     for e in rng.sample(plain, p["inline_comments"]):
-        e["inline"] = rng.choice(INLINE[e["k"]])
-    # duplicated keys: a later entry in the same object with a different value
-    dup_objs = rng.sample(["server", "database", "features"], p["duplicates"])
+        e["inline"] = rng.choice(INLINE.get(e["k"], INLINE_OTHER))
+    # duplicated keys: a later entry in the same object with a different value, in
+    # `duplicates` objects (never `logging`, which hard repeats as a whole)
+    dup_objs = rng.sample([o for o in objects if o != "logging"], p["duplicates"])
     for key in dup_objs:
         ents = objs[key]["obj"]
         cands = [i for i, e in enumerate(ents) if "commented" not in e and not _is_obj(e["v"]) and not _is_arr(e["v"]) and not e.get("sq")]
@@ -386,6 +428,8 @@ def build(ctx):
     shortcuts = {m: _solution(m) for m in ("last-wins", "drop-duplicates", "regex-strip", "grep-v-comments")}
     if p["single_quotes"]:
         shortcuts["quote-swap"] = _solution("quote-swap")
+    if p["quoted_numbers"]:
+        shortcuts["unquote-numbers"] = _solution("unquote-numbers")
     return TaskSpec(
         instruction=INSTRUCTION,
         files={"config.json": text, "validate.py": VALIDATOR},
@@ -398,14 +442,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-json-config",
-    version=3,
+    version=4,
     cluster="config-repair",
     category="config",
     skills=("json", "parsing", "config-repair", "python"),
     difficulties={
-        "easy": {"single_quotes": False, "block_comments": False, "trailing_objects": 1, "inline_comments": 1, "duplicates": 1, "top_duplicate": False},
-        "medium": {"single_quotes": True, "block_comments": False, "trailing_objects": 2, "inline_comments": 2, "duplicates": 2, "top_duplicate": False},
-        "hard": {"single_quotes": True, "block_comments": True, "trailing_objects": 3, "inline_comments": 3, "duplicates": 3, "top_duplicate": True},
+        "easy": {"sections": 4, "single_quotes": False, "quoted_numbers": 0, "block_comments": False, "trailing_objects": 1, "line_comments": 3, "inline_comments": 2, "duplicates": 2, "top_duplicate": False},
+        "medium": {"sections": 6, "single_quotes": True, "quoted_numbers": 1, "block_comments": False, "trailing_objects": 2, "line_comments": 4, "inline_comments": 4, "duplicates": 4, "top_duplicate": False},
+        "hard": {"sections": 8, "single_quotes": True, "quoted_numbers": 2, "block_comments": True, "trailing_objects": 3, "line_comments": 6, "inline_comments": 6, "duplicates": 6, "top_duplicate": True},
     },
     build=build,
 )

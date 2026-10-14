@@ -8,8 +8,8 @@ The grader is a FileTree over /app/backups: exactly the surviving files, unchang
 instruction is the same at every difficulty.
 
 Data per difficulty: easy has 3 snapshots of 4 documents directly in each snapshot folder;
-medium 4 snapshots of 7 documents in subfolders (`home/`, `work/`, `etc/`); hard 5 snapshots
-of 9 documents up to two folders deep, and the oldest snapshot also holds a second copy of
+medium 3 snapshots of 6 documents in subfolders (`home/`, `work/`, `etc/`); hard 4 snapshots
+of 8 documents up to two folders deep, and the oldest snapshot also holds a second copy of
 one document under another name, so the tie rule decides which copy stays.
 
 Traps and the shortcut that checks each:
@@ -217,14 +217,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="dedupe-files",
-    version=3,
+    version=4,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "hashing", "dates"),
     difficulties={
         "easy": {"snapshots": 3, "docs": 4, "layout": "flat", "inner_copy": False},
-        "medium": {"snapshots": 4, "docs": 7, "layout": "nested", "inner_copy": False},
-        "hard": {"snapshots": 5, "docs": 9, "layout": "deep", "inner_copy": True},
+        "medium": {"snapshots": 3, "docs": 6, "layout": "nested", "inner_copy": False},
+        "hard": {"snapshots": 4, "docs": 8, "layout": "deep", "inner_copy": True},
     },
     build=build,
 )

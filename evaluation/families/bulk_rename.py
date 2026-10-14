@@ -10,32 +10,37 @@ The instruction is the same at every difficulty.
 
 Data per difficulty:
 
-- easy: one folder of 8 files (and a hidden one) with two collision groups of two, every
-  file in a group spelled differently from the standard name, so no file of a group already
-  has it;
-- medium: a top folder with groups of two and three, the first of which holds a file
-  already at the standard name, plus the subfolder `Old Drafts`; any other group may hold
-  such a file too;
-- hard: as medium, plus `Clients/` and `Clients/Acme_Corp`.
+- easy: one folder of 8 files (and a hidden one) with two collision groups of two, and every
+  extension in lowercase;
+- medium: a top folder with two groups of two plus the subfolder `Old Drafts` with one group,
+  extensions still in lowercase;
+- hard: a top folder with groups of two and three plus `Old Drafts`, and extensions in mixed
+  case (at least one in uppercase, so the extension needs lowercasing somewhere).
+
+On every level no file of a collision group already has the standard name (`existing` off), so
+renaming the files of a group one by one never overwrites a file that has yet to be renamed.
+With `existing` on, the first top-level group holds a file at the standard name plus a
+spelling with a capital first letter, which sorts before it, and any other group may hold such
+a file too.
 
 Traps and the shortcut that checks each:
 
-- every folder except `Clients/` has collision groups, so renaming in a loop that overwrites (`overwrite`,
+- every folder has collision groups, so renaming in a loop that overwrites (`overwrite`,
   `mv -f`) loses files and one that refuses to overwrite (`no-clobber`, `mv -n`) leaves
   names unchanged;
-- medium/hard: one top-level group holds a file that already has the standard name and a
-  spelling with a capital first letter, which sorts before it, so "add a suffix if the name
-  is taken" (`suffix-if-taken`) numbers the wrong file. On easy no group holds such a file,
-  so that loop is correct there and the shortcut is not declared;
+- with `existing`: a group holds a file that already has the standard name and a spelling
+  that sorts before it, so "add a suffix if the name is taken" (`suffix-if-taken`) numbers the
+  wrong file. Without it that loop is correct, so the shortcut is declared only with
+  `existing`;
 - a hidden file whose name would change (`.DS_Store`) sits in every folder, so renaming
   hidden files (`include-hidden`) fails;
-- medium/hard: folders whose names would change hold files that need renaming, so renaming
-  folders too (`rename-folders`) or only the top level (`top-level-only`) fails.
+- medium/hard: a folder whose name would change (`Old Drafts`) holds files that need
+  renaming, so renaming folders too (`rename-folders`) or only the top level
+  (`top-level-only`) fails.
 
 Names in a folder differ ignoring case, so rendering on a case-insensitive file system
 loses nothing. `build` redraws when a suffixed name would clash with another file's new name,
-two files have the same contents, or no file has an uppercase extension (so the extension
-always needs lowercasing somewhere).
+two files have the same contents, or (with `upper_ext`) no file has an uppercase extension.
 """
 
 from learning_loop.tasks.spec import Family, FileTree, Reject, Solution, TaskSpec, tree_entry
@@ -219,21 +224,21 @@ def _suffix_if_taken(state, folder, new):
     return t
 
 
-def _variant(rng, slug, ext):
+def _variant(rng, slug, ext, upper_ext):
     words = []
     for w in slug.split():
         words.append(rng.choice([w, w.capitalize(), w.upper()]))
     out = words[0]
     for w in words[1:]:
         out += rng.choice(SEPARATORS) + w
-    return out + "." + rng.choice([ext, ext, ext.upper()])
+    return out + "." + (rng.choice([ext, ext, ext.upper()]) if upper_ext else ext)
 
 
 def _text(rng):
     return "\n".join(f"{rng.choice(WORDS)} {rng.choice(WORDS)} {rng.randint(10, 99999)}" for _ in range(rng.randint(2, 6))) + "\n"
 
 
-def _folder_names(rng, folder, slugs, groups, singles, trap, existing):
+def _folder_names(rng, folder, slugs, groups, singles, trap, existing, upper_ext):
     """The file names of one folder. `existing`: a group may hold a file that already has the
     standard name (with `trap`, the first group always does); otherwise every file of a group
     is a spelling that differs from it."""
@@ -248,12 +253,12 @@ def _folder_names(rng, folder, slugs, groups, singles, trap, existing):
             first = slug.capitalize().replace(" ", rng.choice(SEPARATORS)) + "." + ext
             group = {std: std, first.lower(): first}
         while len(group) < size:
-            name = rng.choice([std, _variant(rng, slug, ext)]) if existing else _variant(rng, slug, ext)
+            name = rng.choice([std, _variant(rng, slug, ext, upper_ext)]) if existing else _variant(rng, slug, ext, upper_ext)
             group.setdefault(name.lower(), name)
         names += sorted(group.values())
     for _ in range(singles):
         slug, ext = slugs.pop(), rng.choice(EXTS)
-        names.append(_NS["standard"](slug + "." + ext) if rng.random() < 0.25 else _variant(rng, slug, ext))
+        names.append(_NS["standard"](slug + "." + ext) if rng.random() < 0.25 else _variant(rng, slug, ext, upper_ext))
     if folder and all(_NS["standard"](n) == n for n in names):
         raise Reject(f"no file in {folder!r} needs renaming")
     return names
@@ -264,10 +269,10 @@ def build(ctx):
     slugs = rng.sample(SLUGS, sum(len(f["groups"]) + f["singles"] for f in p["folders"].values()))
     folders = {}
     for folder, spec in p["folders"].items():
-        folders[folder] = _folder_names(rng, folder, slugs, spec["groups"], spec["singles"], trap=p["existing"] and folder == "", existing=p["existing"])
+        folders[folder] = _folder_names(rng, folder, slugs, spec["groups"], spec["singles"], trap=p["existing"] and folder == "", existing=p["existing"], upper_ext=p["upper_ext"])
         folders[folder].append(rng.choice(HIDDEN))
     docs = {_join(folder, name): _text(rng) for folder, names in folders.items() for name in names}
-    if not any(name.rpartition(".")[2].isupper() for names in folders.values() for name in names if not name.startswith(".")):
+    if p["upper_ext"] and not any(name.rpartition(".")[2].isupper() for names in folders.values() for name in names if not name.startswith(".")):
         raise Reject("no file has an uppercase extension")
     if len({rel.lower() for rel in docs}) != len(docs):
         raise Reject("two paths differ only in letter case")
@@ -300,22 +305,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="bulk-rename",
-    version=3,
+    version=4,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "rename", "collisions"),
     difficulties={
-        "easy": {"existing": False, "folders": {"": {"groups": [2, 2], "singles": 4}}},
-        "medium": {"existing": True, "folders": {"": {"groups": [2, 3], "singles": 3}, "Old Drafts": {"groups": [2], "singles": 2}}},
-        "hard": {
-            "existing": True,
-            "folders": {
-                "": {"groups": [2, 3], "singles": 3},
-                "Old Drafts": {"groups": [2], "singles": 2},
-                "Clients": {"groups": [], "singles": 2},
-                "Clients/Acme_Corp": {"groups": [3, 2], "singles": 1},
-            }
-        },
+        "easy": {"existing": False, "upper_ext": False, "folders": {"": {"groups": [2, 2], "singles": 4}}},
+        "medium": {"existing": False, "upper_ext": False, "folders": {"": {"groups": [2, 2], "singles": 3}, "Old Drafts": {"groups": [2], "singles": 2}}},
+        "hard": {"existing": False, "upper_ext": True, "folders": {"": {"groups": [2, 3], "singles": 3}, "Old Drafts": {"groups": [2], "singles": 2}}},
     },
     build=build,
 )

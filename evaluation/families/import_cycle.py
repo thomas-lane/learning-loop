@@ -6,28 +6,32 @@ and says that the package may have subpackages and that imports inside functions
 data per difficulty:
 
 - easy: no subpackages, a 3-module cycle, the forms `import a.b`, `from a.b import name` and
-  `from a import b`, and fake imports in comments;
+  `from a import b`, and fake imports in a comment and in a docstring;
 - medium: more modules, the forms `import a.b as x`, `import os, a.b`, `from .b import name`
-  and `from . import b` too, and fake imports in string constants too;
+  and `from . import b` too, an import of the cycle inside a function, and a fake import in
+  a string constant too;
 - hard: more modules, in subpackages too (so imports also take forms such as
   `from a.sub import b`, `from .sub.b import name`, `from .. import b` and
-  `from ..sub import b`), a 4-module cycle with an import inside a function, and fake
-  imports in docstrings too.
+  `from ..sub import b`), and a 4-module cycle.
 
 Construction: a package `/app/<pkg>/` (with subpackages on hard). The import graph is a
 random DAG over "units" (the modules outside the cycle, and the cycle as one unit) plus one
 simple cycle of 3 (easy/medium) or 4 (hard) modules, so exactly one cycle exists. The module
 whose name sorts first is never in the cycle and imports into it. Each import is written in
-one of the forms above; hard puts one import of the cycle inside a function. Fake
+one of the forms above; medium/hard put one import of the cycle inside a function. Fake
 imports in comments, docstrings and string constants point "upward" in the DAG, so a
-reader that counts them sees extra cycles.
+reader that counts them sees extra cycles: the comment always closes one through the first
+module, and the others close one when the module they name already imports, directly or
+not, the module they sit in. A docstring fake is an indented `from ... import ...` line, as
+a usage example would be, so it reads like code.
 
 Traps, by construction or checked: the cycle has a `from <package> import <module>` (or
 relative) edge, so taking only `import x` lines or only `node.module` of a `from` statement
-misses it; counting text in comments and strings finds a fake cycle first (checked);
-printing the whole DFS stack reports a non-cycle path that starts at the first module; the
-cycle has 3+ modules, so listing it in reverse (importer after imported) fails. Medium/hard:
-a cycle edge is relative (skipping relative imports fails). Hard: a cycle edge is an import
+misses it; counting text in comments, docstrings and strings finds a fake cycle first
+(checked); printing the whole DFS stack reports a non-cycle path that starts at the first
+module; the cycle has 3+ modules, so listing it in reverse (importer after imported) fails.
+Medium/hard:
+a cycle edge is relative (skipping relative imports fails), and a cycle edge is an import
 inside a function (looking only at top-level statements fails).
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv-revenue.
@@ -361,19 +365,19 @@ def build(ctx):
 
 FAMILY = Family(
     name="import-cycle",
-    version=3,
+    version=4,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "imports", "graphs", "code-reading", "diagnosis"),
     difficulties={
-        "easy": {"modules": 6, "cycle": 3, "subpackages": False, "forms": ["import", "from-name", "from-pkg"], "required": ["from-pkg", "from-name"], "fakes": ["comment"]},
+        "easy": {"modules": 6, "cycle": 3, "subpackages": False, "forms": ["import", "from-name", "from-pkg"], "required": ["from-pkg", "from-name"], "fakes": ["comment", "docstring"]},
         "medium": {
             "modules": 9,
             "cycle": 3,
             "subpackages": False,
-            "forms": ["import", "from-name", "from-pkg", "alias", "multi", "relative-name", "relative-mod"],
-            "required": ["from-pkg", "relative-name"],
-            "fakes": ["comment", "string"],
+            "forms": ["import", "from-name", "from-pkg", "alias", "multi", "relative-name", "relative-mod", "function"],
+            "required": ["from-pkg", "relative-name", "function"],
+            "fakes": ["comment", "string", "docstring"],
         },
         "hard": {
             "modules": 12,

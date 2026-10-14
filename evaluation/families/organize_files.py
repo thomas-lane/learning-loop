@@ -9,13 +9,13 @@ copying (originals remain) and partial sorts score below 1. The instruction stat
 and note at every difficulty, including the exact folder names (all lowercase), so an agent
 never needs two folders that differ only in letter case.
 
-Data per difficulty: easy has 8 tickets for 3 teams, with Team and Priority lines written
-`Team: billing` (one space, lowercase value); medium has 12 tickets for 4 teams, adding tickets
-without a Team line and bodies that quote forwarded messages; hard has 16 tickets for 5 teams
-and adds messy values: zero to two spaces before and after a Team or Priority value
-(`Team:accounts`), and letter case varying (Priority per ticket; Team per team, one spelling
-each, at least one not lowercase, so folders named by the raw value never differ only in
-case).
+Data per difficulty: easy has 10 tickets for 3 teams, with Team and Priority lines written
+`Team: billing` (one space, lowercase value), including tickets without a Team line and bodies
+that quote forwarded messages; medium has 12 tickets for 4 teams and adds messy values: zero
+to two spaces before and after a Team or Priority value (`Team:accounts`), and letter case
+varying (Priority per ticket; Team per team, one spelling each, at least one not lowercase,
+so folders named by the raw value never differ only in case); hard has the same kinds of
+tickets as medium, 20 of them for 6 teams.
 
 Traps and the shortcut that checks each:
 
@@ -23,13 +23,13 @@ Traps and the shortcut that checks each:
   since, so sorting by name (`by-name`) fails;
 - some tickets are urgent and have a Team, so routing by Team alone (`ignore-urgent`) fails;
 - copying instead of moving (`copy-not-move`) leaves the originals;
-- medium/hard: some tickets lack a Team line, so leaving them in place (`skip-missing-team`)
-  fails; some bodies quote a forwarded message whose own `Team:`/`Priority:` lines start a
-  line: one ticket without a header Team forwards a Team line and one without a header
-  Priority forwards `Priority: urgent`, so a `grep -m1 '^Team:'` over the whole file
+- some tickets lack a Team line, so leaving them in place (`skip-missing-team`) fails; some
+  bodies quote a forwarded message whose own `Team:`/`Priority:` lines start a line: one
+  ticket without a header Team forwards a Team line and one without a header Priority
+  forwards `Priority: urgent`, so a `grep -m1 '^Team:'` over the whole file
   (`grep-whole-file`) routes them wrongly;
-- hard: a non-urgent ticket of a team spelled not in lowercase, so using the raw value as the
-  folder name (`case-sensitive`) fails.
+- medium/hard: a non-urgent ticket of a team spelled not in lowercase, so using the raw value
+  as the folder name (`case-sensitive`) fails.
 
 Each shortcut is declared only on the levels whose data contains its trap. Every trap holds by
 construction, so the first draw is always used.
@@ -222,7 +222,7 @@ def build(ctx):
     rng, p = ctx.rng, ctx.params
     teams = rng.sample(TEAMS, p["teams"])
     n = p["tickets"]
-    # On hard each team has one spelling, at least one of them not lowercase. Folders named by
+    # With messy values each team has one spelling, at least one of them not lowercase. Folders named by
     # the raw value then never differ only in letter case, which a case-insensitive host file
     # system would merge when the artifacts are copied out.
     styles = {t: rng.choice(["lower", "capitalize", "upper"]) if p["messy"] else "lower" for t in teams}
@@ -285,14 +285,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="organize-files",
-    version=3,
+    version=4,
     cluster="filesystem",
     category="shell",
     skills=("shell", "files", "parsing", "mv"),
     difficulties={
-        "easy": {"tickets": 8, "teams": 3, "unassigned": False, "forwarded": False, "messy": False},
-        "medium": {"tickets": 12, "teams": 4, "unassigned": True, "forwarded": True, "messy": False},
-        "hard": {"tickets": 16, "teams": 5, "unassigned": True, "forwarded": True, "messy": True},
+        "easy": {"tickets": 10, "teams": 3, "unassigned": True, "forwarded": True, "messy": False},
+        "medium": {"tickets": 12, "teams": 4, "unassigned": True, "forwarded": True, "messy": True},
+        "hard": {"tickets": 20, "teams": 6, "unassigned": True, "forwarded": True, "messy": True},
     },
     build=build,
 )

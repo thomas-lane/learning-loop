@@ -105,13 +105,20 @@ def test_fix_json_config_traps(tmp_path, difficulty, seed):
     validate = tmp_path / "t" / "environment" / "files" / "validate.py"
     assert subprocess.run([sys.executable, str(validate), str(tmp_path / "ok.json")], capture_output=True, text=True).stdout.strip() == "OK"
     assert subprocess.run([sys.executable, str(validate), str(tmp_path / "t" / "environment" / "files" / "config.json")], capture_output=True).returncode == 1
-    # repeated keys: one nested object on easy, two on medium, three on hard, which also repeats
+    # repeated keys: two nested objects on easy, four on medium, six on hard, which also repeats
     # the top-level `logging` object
     seen: list[list[str]] = []  # every object's keys; json calls the hook innermost first
     _relaxed(text, lambda pairs: seen.append([k for k, _ in pairs]) or dict(pairs))
     *nested, top = seen
-    assert sum(len(keys) != len(set(keys)) for keys in nested) == {"easy": 1, "medium": 2, "hard": 3}[difficulty]
+    assert sum(len(keys) != len(set(keys)) for keys in nested) == {"easy": 2, "medium": 4, "hard": 6}[difficulty]
     assert (top.count("logging") == 2) == (difficulty == "hard")
+    # the five core settings plus four, six or eight extra sections
+    assert len(set(top)) - len({"service", "version", "owner", "motd", "banner"} & set(top)) == {"easy": 9, "medium": 11, "hard": 13}[difficulty]
+    # digit-only single-quoted strings stay strings (writing them as numbers fails)
+    digits = [s for s in strings if s.startswith("'") and s[1:-1].isdigit()]
+    assert len(digits) == {"easy": 0, "medium": 1, "hard": 2}[difficulty]
+    flat = json.dumps(expected)
+    assert all(json.dumps(s[1:-1]) in flat for s in digits)
     if difficulty != "easy":
         assert any(s.startswith("'") for s in strings)
         assert any(s.startswith('"') and "'" in s for s in strings)  # replacing every ' with " breaks this string
@@ -219,9 +226,8 @@ def test_env_reconcile_traps(tmp_path, difficulty, seed):
     assert any(cur.get(k) == "" and tmpl[k] and k not in over for k in tmpl)  # treating KEY= as set fails
     assert any(expected[k] == cur.get(k) != tmpl[k] and k not in over for k in tmpl)  # ignoring the current file fails
     assert "=" in expected["DATABASE_URL"]  # awk -F= ... $2 cuts it
-    if difficulty != "easy":
-        assert any(v == "" and cur.get(k) for lay in layers for k, v in lay.items() if k in tmpl)  # an empty override must not clear
-        assert any(k not in tmpl for lay in layers for k in lay)
+    assert any(v == "" and cur.get(k) for lay in layers for k, v in lay.items() if k in tmpl)  # an empty override must not clear
+    assert any(k not in tmpl for lay in layers for k in lay) == (difficulty != "easy")
     exported = [ln.split()[1].split("=")[0] for ln in files[".env"].splitlines() if ln.startswith("export ")]
     assert bool(exported) == (difficulty == "hard")
     if difficulty == "hard":
@@ -269,8 +275,8 @@ def _cron(s):
         return f"{_hm(*m.groups()[1:])} {m[1]} * *"
     if m := re.fullmatch(r"on the (\d+)\w\w and the (\d+)\w\w of every month at " + _T, s):
         return f"{_hm(*m.groups()[2:])} {m[1]},{m[2]} * *"
-    if m := re.fullmatch(r"at " + _T + r" on the 1st of (.+)", s):
-        return f"{_hm(*m.groups()[:3])} 1 {','.join(map(str, _names(m[4], _MONTH)))} *"
+    if m := re.fullmatch(r"at " + _T + r" on the (\d+)\w\w of ([A-Z].+)", s):
+        return f"{_hm(*m.groups()[:3])} {m[4]} {','.join(map(str, _names(m[5], _MONTH)))} *"
     if m := re.fullmatch(r"on (.+) at " + _T, s):
         return f"{_hm(*m.groups()[1:])} * * {','.join(map(str, _names(m[1], _DAY)))}"
     raise AssertionError(f"unrecognized schedule {s!r}")
@@ -325,6 +331,10 @@ def test_cron_translate_traps(tmp_path, difficulty, seed):
     assert (len(active) < len(jobs)) == (difficulty == "hard")
     if difficulty == "hard":
         assert any(re.search(r"\b12:\d\d AM", j["schedule"]) for j in active)
+    # month-list jobs set both the day of the month and the month: one on easy, two on medium,
+    # four on hard (writing the months in the day-of-week field fails)
+    assert len(active) == {"easy": 5, "medium": 8, "hard": 10}[difficulty]
+    assert sum(f[2] != "*" and f[3] != "*" for f in fields) == {"easy": 1, "medium": 2, "hard": 4}[difficulty]
 
 
 # --------------------------------------------------------------------------- #
@@ -392,10 +402,11 @@ def test_toml_migrate_traps(tmp_path, difficulty, seed):
         assert _migrate(tomllib.loads(files["config.toml"]), schema2 + planned) != expected
 
 
-@pytest.mark.parametrize("difficulty,renames,conversions,moves,removals", [("easy", 1, 1, 1, 1), ("medium", 2, 2, 2, 2), ("hard", 3, 3, 3, 3)])
+@pytest.mark.parametrize("difficulty,renames,conversions,moves,removals", [("easy", 2, 2, 2, 1), ("medium", 2, 2, 2, 2), ("hard", 2, 3, 2, 3)])
 def test_toml_migrate_change_counts(difficulty, renames, conversions, moves, removals):
     """Medium has two changes of each kind; the always-converted fractional `connect_timeout`
-    is one of the two conversions, not a third (hard: the same two plus `[[workers]] interval`)."""
+    is one of the two conversions, not a third (hard: medium's changes plus `[[workers]]
+    interval` and `[server] debug`)."""
     for seed in range(12):
         changelog = generate_spec(FAMS["toml_migrate"], difficulty, seed).spec.files["CHANGELOG.md"]
         schema2 = _section(changelog, "Config schema 2")

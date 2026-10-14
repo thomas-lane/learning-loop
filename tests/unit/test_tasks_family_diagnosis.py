@@ -213,6 +213,26 @@ def test_traceback_locate_hard_override_decoys_follow_no_fixed_rule():
     assert len(positions) > 1
 
 
+def test_traceback_locate_settings_decoys_by_level():
+    """The run's bad value sits in unused profiles of settings.py: one or two of them on
+    easy/medium (the active profile holds it too), and none or one on hard, where it reaches
+    the run through the overrides, so some hard instances have no settings.py decoy."""
+    fam = FAMILIES["traceback-locate"]
+    for d in fam.difficulties:
+        counts = set()
+        for seed in range(16):
+            spec = generate_spec(fam, d, seed).spec
+            pkg, key, active = spec.params["package"], spec.params["key"], spec.params["active_profile"]
+            tree = ast.parse(spec.files[f"{pkg}/settings.py"])
+            entries = next(n.value for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "PROFILES")
+            values = {p.value: {k.value: ast.literal_eval(v) for k, v in zip(e.keys, e.values)} for p, e in zip(entries.keys, entries.values)}
+            # The answer line, `"<key>": <bad value>,`, in overrides.py (hard) or settings.py.
+            answer = spec.files[spec.params["file"].removeprefix("/app/")].splitlines()[spec.params["line"] - 1]
+            bad = ast.literal_eval(answer.split(":", 1)[1].strip().rstrip(","))
+            counts.add(sum(1 for p, kv in values.items() if p != active and kv[key] == bad))
+        assert counts == ({0, 1} if d == "hard" else {1, 2}), d
+
+
 # --------------------------------------------------------------------------- #
 # slow-query
 # --------------------------------------------------------------------------- #
@@ -268,17 +288,25 @@ def test_slow_query_traps(tmp_path, difficulty, seed):
     if difficulty != "easy":
         table, col = queries[expected]
         assert not scan(table, col, "anywhere") and not scan(table, col, "any-table")
-    if len(logs) > 1:
+    assert sorted(logs) == ["query_log.1.csv.gz", "query_log.csv"]
+    if FAMILIES["slow-query"].difficulties[difficulty]["split_decoys"]:
         for name in logs:
             assert _top(total([name], lambda q: q in full)) != expected, name
 
 
-def test_slow_query_hard_declares_reading_either_log_alone():
-    """Reading only the plain log and reading only the rotated gzip log are both checked
-    shortcuts on hard, where the time is split between the two."""
+@pytest.mark.parametrize("difficulty", list(FAMILIES["slow-query"].difficulties))
+def test_slow_query_declares_reading_either_log_alone_where_decoys_split(difficulty):
+    """Every level has a rotated gzip log. On medium and hard a full-scan decoy beats the
+    answer inside each log, so reading only the plain log and reading only the rotated one
+    are both checked shortcuts; easy has no such decoys and declares neither."""
+    split = difficulty != "easy"
+    assert FAMILIES["slow-query"].difficulties[difficulty]["split_decoys"] == split
     for seed in SEEDS:
-        rewards = generate_spec(FAMILIES["slow-query"], "hard", seed).shortcut_rewards
-        assert rewards["plain-only"] < 1 and rewards["gzip-only"] < 1
+        rewards = generate_spec(FAMILIES["slow-query"], difficulty, seed).shortcut_rewards
+        if split:
+            assert rewards["plain-only"] < 1 and rewards["gzip-only"] < 1
+        else:
+            assert "plain-only" not in rewards and "gzip-only" not in rewards
 
 
 # --------------------------------------------------------------------------- #
@@ -337,6 +365,18 @@ def test_broken_symlinks_traps(tmp_path, difficulty, seed):
         assert not any(kind == "dir" for kind, *_ in renames)
     longest = max(len([1 for kind, old, _, _ in renames if kind == "file" and old in _chain(renames, v)]) for v in expected.values())
     assert longest <= FAMILIES["broken-symlinks"].difficulties[difficulty]["max_chain"]
+
+
+def test_broken_symlinks_levels_differ_in_traps_not_link_counts():
+    """Every level plants the same number of broken and working links, and no file is renamed
+    more than twice: the levels differ in which traps they switch on (rename chains, absolute
+    and `../../` targets, a directory rename), not in how many links one slip can spoil."""
+    levels = FAMILIES["broken-symlinks"].difficulties
+    assert len({(p["broken"], p["working"]) for p in levels.values()}) == 1
+    for d, p in levels.items():
+        assert p["max_chain"] == (1 if d == "easy" else 2)
+        for seed in SEEDS:
+            assert generate_spec(FAMILIES["broken-symlinks"], d, seed).spec.params["broken"] == p["broken"]
 
 
 def _chain(renames, final: str) -> set[str]:
@@ -425,8 +465,26 @@ def test_import_cycle_traps(tmp_path, difficulty, seed):
         assert any(level for *_, level in pkg_forms) or any(
             isinstance(n, ast.ImportFrom) and n.level for a, _ in edges for n in ast.walk(ast.parse(mods[a]))
         )
-    if difficulty == "hard":
+    if difficulty != "easy":
         assert _cycles(_import_graph(mods, top_level_only=True)) == set()
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["import-cycle"].difficulties))
+def test_import_cycle_docstring_fakes_at_every_level(difficulty):
+    """Every level has a fake import in a module docstring, written as an indented usage
+    example that reads like code; on many instances it closes a fake cycle (the module it
+    names already imports, directly or not, the module it sits in)."""
+    closes = 0
+    for seed in range(12):
+        spec = generate_spec(FAMILIES["import-cycle"], difficulty, seed).spec
+        mods = LOADED["import-cycle"]._sources(file_bytes(spec))
+        g = _import_graph(mods)
+        fakes = [(name, m.group(1)) for name, src in mods.items() for m in re.finditer(r"Example::\n\n    from ([\w.]+) import ", src)]
+        assert len(fakes) == 1
+        name, target = fakes[0]
+        assert target not in g[name] and ast.get_docstring(ast.parse(mods[name])).count("from " + target) == 1
+        closes += any(name in c and target in c for c in _cycles({**g, name: g[name] | {target}}))
+    assert closes >= 3
 
 
 # --------------------------------------------------------------------------- #
@@ -483,19 +541,26 @@ def _one_sided_objects(base, host, prefix=""):
 
 @pytest.mark.parametrize("difficulty", list(FAMILIES["config-drift"].difficulties))
 def test_config_drift_one_sided_objects_by_level(difficulty):
-    """An object on only one side is a per-level property, not chance: never on easy/medium,
-    and on hard both an object the host lacks and a section only the host has, which makes
-    reporting the object as one entry (a declared shortcut) fail."""
-    for seed in range(8):
+    """An object on only one side is set per level: on hard always both an object the host
+    lacks and a section only the host has; on easy/medium one such object on a share of the
+    instances (`object_rate`) and none on the rest. Reporting the object as one entry (a
+    declared shortcut exactly where an object is one-sided) then fails."""
+    drawn = []
+    for seed in range(16):
         gen = generate_spec(FAMILIES["config-drift"], difficulty, seed)
         files = {k: json.loads(v) for k, v in gen.spec.files.items()}
         base = files.pop("configs/baseline.json")
-        sides = {side for host in files.values() for _, side in _one_sided_objects(base, host)}
+        objects = [o for host in files.values() for o in _one_sided_objects(base, host)]
         if difficulty == "hard":
-            assert sides == {"baseline", "host"}
-            assert gen.shortcut_rewards["whole-object"] < 1
+            assert {side for _, side in objects} == {"baseline", "host"}
         else:
-            assert sides == set() and "whole-object" not in gen.shortcut_rewards
+            assert len(objects) <= 1
+        assert ("whole-object" in gen.shortcut_rewards) == bool(objects)
+        if objects:
+            assert gen.shortcut_rewards["whole-object"] < 1
+        drawn.append(bool(objects))
+    if difficulty != "hard":
+        assert any(drawn) and not all(drawn)
 
 
 def test_config_drift_compares_numbers_by_value():

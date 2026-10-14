@@ -6,12 +6,14 @@ says that renaming a directory moves everything inside it. The data per difficul
 
 - easy: each broken link's file was renamed once; links are relative and sit in `/app/srv`
   and `www/`;
-- medium: one more broken link, files renamed up to twice, links absolute at random, and
-  links also in `www/static/` (relative targets with `../../`);
-- hard: more directories, files and links, files renamed up to three times, a directory
-  rename, and links also in `current/` and `etc/app/`.
+- medium: files renamed up to twice, links absolute at random, and links also in
+  `www/static/` (relative targets with `../../`);
+- hard: medium plus a directory rename, one more directory of files, and links also in
+  `current/`.
 
-`FAMILY.difficulties` holds the exact counts.
+Every level has the same number of broken and working links: an answer is right only when
+every broken link is, so more links would make a level harder through the chance of one
+slip rather than through its traps. `FAMILY.difficulties` holds the exact counts.
 
 Construction: a deployment tree of files in `/app/srv/` and symlinks (`TaskSpec.symlinks`)
 to some of them, relative or absolute. A history of renames, oldest first, is written to
@@ -299,14 +301,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="broken-symlinks",
-    version=3,
+    version=4,
     cluster="diagnosis",
     category="shell",
     skills=("shell", "symlinks", "filesystem", "diagnosis"),
     difficulties={
         "easy": {"dirs": 3, "broken": 2, "working": 2, "max_chain": 1, "noise": 1, "dir_rename": False, "absolute_rate": 0.0, "link_dirs": ["", "www"]},
-        "medium": {"dirs": 3, "broken": 3, "working": 2, "max_chain": 2, "noise": 2, "dir_rename": False, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static"]},
-        "hard": {"dirs": 5, "broken": 4, "working": 4, "max_chain": 3, "noise": 3, "dir_rename": True, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static", "current", "etc/app"]},
+        "medium": {"dirs": 3, "broken": 2, "working": 2, "max_chain": 2, "noise": 2, "dir_rename": False, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static"]},
+        "hard": {"dirs": 4, "broken": 2, "working": 2, "max_chain": 2, "noise": 2, "dir_rename": True, "absolute_rate": 0.3, "link_dirs": ["", "www", "www/static", "current"]},
     },
     build=build,
 )

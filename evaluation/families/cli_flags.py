@@ -13,12 +13,13 @@ Grading: `Commands` runs the agent's script with hidden argv lists on a hidden l
 compares stdout and the exit status. Difficulty decides which options the hidden checks
 exercise and what the log holds:
 
-- easy: five categories, one with a double quote (JSON escaping); checks `--limit` and
-  `--format text|json`, and the usage errors for them;
+- easy: five categories, one with a double quote (JSON escaping); checks `--limit`,
+  `--format text|json` and `--only` given twice, and the usage errors for `--limit` and
+  `--format`;
 - medium: six categories, one with a double quote and one with a comma (CSV quoting); adds
   `--format csv` and `--min-count`, with one check's `--min-count` equal to a count;
-- hard: seven categories; adds `--only`/`--exclude` (repeated, combined with `--min-count`
-  and `--limit`, and together as a usage error) and an unreadable LOGFILE (exit 1).
+- hard: seven categories; adds `--only`/`--exclude` combined with `--min-count` and
+  `--limit`, both together as a usage error, and an unreadable LOGFILE (exit 1).
 
 Some counts tie at every difficulty; the top count is unique by construction (the planted
 tie copies a count below the largest).
@@ -26,9 +27,9 @@ tie copies a count below the largest).
 Traps (declared shortcuts, each the oracle script with one plausible mistake, each caught by a
 planted check of its difficulty): `hardcode-examples` (prints the instruction's example
 output), `limit-unchecked` (`type=int`, so `--limit 0` and `--limit -1` are accepted),
-`json-hand-built` (string formatting, no escaping); medium adds `csv-no-quoting` and
-`min-count-exclusive` (`>` instead of `>=`); hard adds `no-mutex`, `limit-before-filter`,
-`only-not-repeatable` (`--only` without `action="append"` keeps the last value, a string) and
+`json-hand-built` (string formatting, no escaping), `only-not-repeatable` (`--only` without
+`action="append"` keeps the last value, a string); medium adds `csv-no-quoting` and
+`min-count-exclusive` (`>` instead of `>=`); hard adds `no-mutex`, `limit-before-filter` and
 `argparse-filetype` (`argparse.FileType` makes an unreadable log exit 2 instead of 1).
 """
 
@@ -144,6 +145,10 @@ def _shortcuts(level, oracle, example_output):
                 '        items = [\'{"category": "%s", "count": %d}\' % (name, count) for name, count in rows]\n        print("[" + ", ".join(items) + "]")\n',
             ),
         ),
+        "only-not-repeatable": _swap(
+            oracle,
+            ('group.add_argument("--only", action="append", ', 'group.add_argument("--only", '),
+        ),
     }
     if level != "easy":
         out["csv-no-quoting"] = _swap(
@@ -164,10 +169,6 @@ def _shortcuts(level, oracle, example_output):
             ("    rows = [\n        (name, count)\n        for name, count in counts.items()\n",
              "    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))\n    if args.limit is not None:\n        ranked = ranked[: args.limit]\n    rows = [\n        (name, count)\n        for name, count in ranked\n"),
             ("    if args.limit is not None:\n        rows = rows[: args.limit]\n", ""),
-        )
-        out["only-not-repeatable"] = _swap(
-            oracle,
-            ('group.add_argument("--only", action="append", ', 'group.add_argument("--only", '),
         )
         out["argparse-filetype"] = _swap(
             oracle,
@@ -240,6 +241,9 @@ def _checks(rng, level, counts):
     usage("limit_negative", ["--limit", "-1"])
     usage("limit_not_integer", ["--limit", "two"])
     usage("unknown_format", ["--format", "xml"])
+    a = rng.choice([n for n, _ in ranked])
+    b = rng.choice([n for n, c in ranked if c != counts[a]])  # distinct counts, so the larger one passes --min-count
+    ok("only_repeated", ["--only", a, "--only", b], only=[a, b])
     if level != "easy":
         ok("csv", ["--format", "csv"], fmt="csv")
         ok("csv_limit", ["--format", "csv", "--limit", str(k)], fmt="csv", limit=k)
@@ -248,9 +252,6 @@ def _checks(rng, level, counts):
         ok("min_count_json", ["--min-count", str(boundary), "--format", "json"], min_count=boundary, fmt="json")
         usage("min_count_zero", ["--min-count", "0"])
     if level == "hard":
-        a = rng.choice([n for n, _ in ranked])
-        b = rng.choice([n for n, c in ranked if c != counts[a]])  # distinct counts, so the larger one passes --min-count
-        ok("only_repeated", ["--only", a, "--only", b], only=[a, b])
         ok("exclude_top_then_limit", ["--exclude", ranked[0][0], "--limit", "2"], exclude=[ranked[0][0]], limit=2)
         ok("only_min_count", ["--only", a, "--only", b, "--min-count", str(min(counts[a], counts[b]) + 1), "--format", "csv"], only=[a, b], min_count=min(counts[a], counts[b]) + 1, fmt="csv")
         usage("only_and_exclude", ["--only", a, "--exclude", b])
@@ -303,7 +304,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="cli-flags",
-    version=3,
+    version=4,
     cluster="write-code",
     category="coding",
     skills=("python", "argparse", "cli", "output-formats"),

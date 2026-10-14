@@ -8,17 +8,21 @@ logs may be gzip-compressed. The data per difficulty:
 
 - easy: `payments-eu.log` (+02:00) and `orders-us.log` (-04:00), offsets in every timestamp;
 - medium: easy's files plus `search-in.log` (+05:30), and look-alike lines (below);
-- hard: `payments-eu.log`, `orders-us-legacy.log` (offset-less local times, first line
-  `# timezone: UTC-04:00 ...`), `search-in.log` and `gateway.log.1.gz` (`Z`), with
-  look-alike lines.
+- hard: medium with `orders-us.log` replaced by `orders-us-legacy.log` (offset-less local
+  times, first line `# timezone: UTC-04:00 ...`).
+
+Every log is plain text at every level (the generic reader still decompresses `.gz`
+files). The header file is hard's only trap beyond medium: it already defeats most
+solvers on its own, so a compressed log on top of it would leave the level almost
+unsolvable.
 
 Construction (minutes are UTC; o_f is file f's offset):
 
 - target minute M_T with c_f ERROR lines in every file f, c_f > (n-1)*delta;
 - per-file decoys: for every file g a minute M_g with c_f + delta ERROR lines in every file
   except g. Over all files M_g has T - c_g + (n-1)*delta < T lines, but over any proper subset
-  of the files missing g it beats the target, so skipping any file (a compressed one, or the
-  one whose timestamps do not parse) fails. On medium/hard the half-hour offset (+05:30) does
+  of the files missing g it beats the target, so skipping any file (for example the one
+  whose timestamps do not parse) fails. On medium/hard the half-hour offset (+05:30) does
   the same for `hours-only-offset`: reading only the hours of the offset moves that file's
   target lines 30 minutes away, and the decoy for that file wins; on hard, reading the
   header file's local times as UTC moves its lines 4 hours away (`naive-as-utc`);
@@ -31,8 +35,7 @@ Construction (minutes are UTC; o_f is file f's offset):
   target has ERROR lines, so counting every line that contains `ERROR` fails (`grep-error`).
 
 Declared shortcuts (`SOLVER` modes): `ignore-offsets` and `offset-sign-flipped` at every
-level; `grep-error` and `hours-only-offset` on medium/hard; `naive-as-utc` and `plain-only`
-on hard. Background ERROR lines never share a planted minute. `build` checks the unique answer and
+level; `grep-error` and `hours-only-offset` on medium/hard; `naive-as-utc` on hard. Background ERROR lines never share a planted minute. `build` checks the unique answer and
 every proper subset of the files; generation checks every declared shortcut. Every
 solution, right or wrong, is one Python source (`SOLVER`) run with a mode, so the shell
 and model forms cannot drift apart.
@@ -43,14 +46,13 @@ import itertools
 from collections import Counter
 from datetime import datetime, timedelta
 
-from learning_loop.tasks.spec import ExactAnswer, Family, gzip_bytes, Reject, Solution, TaskSpec
+from learning_loop.tasks.spec import ExactAnswer, Family, Reject, Solution, TaskSpec
 
 SERVICES = {
     "payments-eu.log": ("payments", 120, "line"),
     "orders-us.log": ("orders", -240, "line"),
     "search-in.log": ("search", 330, "line"),
     "orders-us-legacy.log": ("orders", -240, "header"),
-    "gateway.log.1.gz": ("gateway", 0, "line"),
 }
 ERRORS = ["upstream timed out", "card authorization failed", "connection reset by peer", "database deadlock detected", "invalid response from cache", "quota exceeded"]
 OTHERS = [("INFO", "request served"), ("INFO", "cache refreshed"), ("DEBUG", "pool stats ok"), ("WARN", "slow query"), ("INFO", "retried after transient error"), ("INFO", "job finished")]
@@ -71,12 +73,6 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 
-def wanted(name, mode):
-    if mode == "plain-only":
-        return not name.endswith(".gz")
-    return True
-
-
 def offset_minutes(text, mode):
     """'+05:30' -> 330, '-04:00' -> -240, 'Z' -> 0."""
     if text == "Z":
@@ -88,8 +84,6 @@ def offset_minutes(text, mode):
 
 def error_minutes(texts, mode):
     for name, text in texts:
-        if not wanted(name, mode):
-            continue
         header = None
         for line in text.splitlines():
             if line.startswith("#"):
@@ -239,7 +233,7 @@ def _render(rng, planted, used, names, day):
                 level, msg = rng.choice(OTHERS)
                 lines.append(f"{stamp} {level} {service}: {msg}")
         text = "\n".join(lines) + "\n"
-        files[f"logs/{f}"] = gzip_bytes(text.encode()) if f.endswith(".gz") else text
+        files[f"logs/{f}"] = text
     return files
 
 
@@ -263,8 +257,6 @@ def build(ctx):
         modes.append("hours-only-offset")
     if any(SERVICES[f][2] == "header" for f in names):
         modes.append("naive-as-utc")
-    if any(f.endswith(".gz") for f in names):
-        modes.append("plain-only")
     return TaskSpec(
         instruction=INSTRUCTION,
         files=_render(rng, planted, used, names, day),
@@ -277,14 +269,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="error-burst",
-    version=2,  # v2: one instruction for every level
+    version=3,  # v3: hard drops the compressed gateway log; its one extra trap is the header offset
     cluster="text-analytics",
     category="data",
     skills=("logs", "timezones", "timestamps", "aggregation", "python"),
     difficulties={
         "easy": {"files": ["payments-eu.log", "orders-us.log"], "lookalikes": False},
         "medium": {"files": ["payments-eu.log", "orders-us.log", "search-in.log"], "lookalikes": True},
-        "hard": {"files": ["payments-eu.log", "orders-us-legacy.log", "search-in.log", "gateway.log.1.gz"], "lookalikes": True},
+        "hard": {"files": ["payments-eu.log", "orders-us-legacy.log", "search-in.log"], "lookalikes": True},
     },
     build=build,
 )

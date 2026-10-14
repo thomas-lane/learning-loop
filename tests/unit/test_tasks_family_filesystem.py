@@ -5,6 +5,7 @@ The modules are loaded by path, so these tests do not depend on the family regis
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import gzip
 import hashlib
@@ -98,14 +99,18 @@ def test_organize_files_answer_and_traps(tmp_path, difficulty, seed):
     # by name: some ticket's name prefix is not its queue; ignoring urgency: an urgent ticket has a team
     assert any(n.split("-")[0] != q for n, q in queues.items())
     assert any(q == "urgent" and "Team" in _ticket_header(tickets[n]) for n, q in queues.items())
+    # every level: tickets without a Team line, and forwarded messages in bodies
+    assert "unassigned" in queues.values()
+    body_lines = {n: t.split("\n\n", 1)[1].splitlines() for n, t in tickets.items()}
+    # grep over the whole file: a Team line in the body of a ticket without one in its header,
+    # and `Priority: urgent` in the body of a ticket whose header has no Priority
+    assert any("Team" not in _ticket_header(t) and any(ln.startswith("Team:") for ln in body_lines[n]) for n, t in tickets.items())
+    assert any("Priority" not in _ticket_header(t) and "Priority: urgent" in body_lines[n] for n, t in tickets.items())
+    heads = [t.split("\n\n", 1)[0] for t in tickets.values()]
+    messy = any(re.search(r"^(Team|Priority):(?! \S)|^(Team|Priority):.*([A-Z]|\s$)", h, re.M) for h in heads)
+    assert messy == (difficulty != "easy")  # spacing and letter case vary from medium on
+    assert len(tickets) == {"easy": 10, "medium": 12, "hard": 20}[difficulty]
     if difficulty != "easy":
-        assert "unassigned" in queues.values()
-        body_lines = {n: t.split("\n\n", 1)[1].splitlines() for n, t in tickets.items()}
-        # grep over the whole file: a Team line in the body of a ticket without one in its header,
-        # and `Priority: urgent` in the body of a ticket whose header has no Priority
-        assert any("Team" not in _ticket_header(t) and any(ln.startswith("Team:") for ln in body_lines[n]) for n, t in tickets.items())
-        assert any("Priority" not in _ticket_header(t) and "Priority: urgent" in body_lines[n] for n, t in tickets.items())
-    if difficulty == "hard":
         raw_team = {n: re.search(r"^Team:(.*)$", t.split("\n\n", 1)[0], re.M) for n, t in tickets.items()}
         assert any(m and m.group(1).strip() != m.group(1).strip().lower() and queues[n] != "urgent" for n, m in raw_team.items())
         spellings = defaultdict(set)  # one spelling per team: raw-value folders never differ only in case
@@ -171,6 +176,7 @@ def test_dedupe_files_answer_and_traps(tmp_path, difficulty, seed):
     assert len({r.rsplit("/", 1)[-1] for r in kept}) < len(kept)  # by name: two kept files share a name
     assert len({len(tree[r]) for r in kept}) < len(kept)  # by size: two kept files share a size
     names = sorted({r.split("/")[0] for r in tree})
+    assert len(names) == {"easy": 3, "medium": 3, "hard": 4}[difficulty]  # snapshots; size drives difficulty
     chronological = sorted(names, key=_snapshot_key)
     assert names[0] != chronological[0] and names[-1] != chronological[0]
     # the tie rule decides inside the oldest snapshot on hard only
@@ -230,12 +236,16 @@ def test_bulk_rename_answer_and_traps(tmp_path, difficulty, seed):
                 expected[os.path.join(folder, target)] = tree[os.path.join(folder, old)]
     assert len(expected) == len(tree)
     assert key["expected"] == {rel: {"sha256": _sha(data)} for rel, data in expected.items()}
-    # medium/hard: "add a suffix when the name is taken" numbers the wrong file; easy has no
-    # collision group holding a file already at the standard name, so that loop is correct
-    assert standard_not_first == (difficulty != "easy")
+    # no level has a collision group holding a file already at the standard name, so renaming
+    # a group's files one by one never overwrites a file that is still to be renamed
+    assert not standard_not_first
     existing = any(len(olds) > 1 and new in olds for names in folders.values() for new, olds in _groups(names).items())
-    assert existing == (difficulty != "easy")
-    assert any(n.rpartition(".")[2].isupper() for names in folders.values() for n in names if not n.startswith("."))
+    assert not existing
+    # extensions need lowercasing on hard only
+    upper_ext = any(n.rpartition(".")[2] != n.rpartition(".")[2].lower() for names in folders.values() for n in names if not n.startswith("."))
+    assert upper_ext == (difficulty == "hard")
+    if difficulty == "hard":
+        assert any(n.rpartition(".")[2].isupper() for names in folders.values() for n in names if not n.startswith("."))
     assert any(len({_std(n) for n in names if not n.startswith(".")}) < len([n for n in names if not n.startswith(".")]) for names in folders.values())
     if difficulty != "easy":
         sub = [f for f in folders if f]
@@ -247,12 +257,17 @@ def test_bulk_rename_answer_and_traps(tmp_path, difficulty, seed):
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_bulk_rename_suffix_if_taken_is_declared_with_its_trap(seed):
-    """The `suffix-if-taken` loop is correct when no file already has its standard name (easy),
-    so it is declared exactly on the levels that plant that collision."""
+    """The `suffix-if-taken` loop is correct when no file already has its standard name, so it
+    is declared exactly when `existing` plants that collision: on no level, and on a level that
+    turns `existing` on, where generation checks that the loop fails."""
     fam = FAMILIES["bulk_rename"]
     for difficulty in fam.difficulties:
-        shortcuts = generate_spec(fam, difficulty, seed).spec.shortcuts
-        assert ("suffix-if-taken" in shortcuts) == (difficulty != "easy")
+        assert "suffix-if-taken" not in generate_spec(fam, difficulty, seed).spec.shortcuts
+    knob = dataclasses.replace(fam, difficulties={"existing": {**fam.difficulties["hard"], "existing": True}})
+    gen = generate_spec(knob, "existing", seed)
+    assert "suffix-if-taken" in gen.spec.shortcuts and gen.shortcut_rewards["suffix-if-taken"] < 1
+    names = [rel.rpartition("/")[2] for rel in gen.spec.files if rel.count("/") == 1]
+    assert any(len(olds) > 1 and new in olds[1:] for new, olds in _groups(names).items())
 
 
 # --------------------------------------------------------------------------- extract-subset
@@ -293,11 +308,14 @@ def test_extract_subset_answer_and_traps(tmp_path, difficulty, seed):
     if difficulty != "easy":
         assert len(set(basenames)) < len(basenames)
     top = [name for depth, name in levels if depth == 1]
-    assert len(top) == {"easy": 1, "medium": 3, "hard": 4}[difficulty]  # easy: a single inner archive
+    assert len(top) == {"easy": 1, "medium": 2, "hard": 3}[difficulty]  # easy: a single inner archive
     assert any("/" in name for name in top) == (difficulty == "hard")  # `services/` only on hard
+    # treating only `.tar.gz` as archives misses a `.tgz` on every level; easy and medium use
+    # `.tgz` alone, hard both suffixes
+    assert any(name.endswith(".tgz") for name in top)
+    assert all(name.endswith(".tgz") for name in top) == (difficulty != "hard")
+    assert any(depth == 2 for depth, _ in levels) == (difficulty == "hard")
     if difficulty == "hard":
-        assert any(name.endswith(".tgz") for _, name in levels)
-        assert any(depth == 2 for depth, _ in levels)
         assert any(depth == 2 for depth, _ in out.values())  # a .conf two archives deep
 
 
@@ -315,9 +333,20 @@ def test_permissions_fix_answer_and_traps(tmp_path, difficulty, seed):
         if line.strip() and not line.startswith("#"):
             pattern, mode = line.split()
             rules.append((pattern, int(mode, 8)))
-    assert not any(c in p for p, _ in rules for c in "?[")  # fnmatch semantics equal the stated ones
-    hits = {path: [m for p, m in rules if fnmatch.fnmatchcase(path, p)] for path in initial}
+
+    def stated(pattern: str, path: str, whole: bool = True) -> bool:  # `*` is the only wildcard
+        regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+        return bool((re.fullmatch if whole else re.match)(regex, path, re.S))
+
+    hits = {path: [m for p, m in rules if stated(p, path)] for path in initial}
     target = {path: h[-1] if h else initial[path] for path, h in hits.items()}
+    # a glob matcher (`fnmatch`, `find -path`) reads `[...]` as a character class: on medium/hard
+    # it gives some file another mode; on easy no pattern has a glob character but `*`
+    globbed = {path: ([m for p, m in rules if fnmatch.fnmatchcase(path, p)] or [initial[path]])[-1] for path in initial}
+    assert any(c in p for p, _ in rules for c in "?[") == (difficulty != "easy")
+    assert (globbed != target) == (difficulty != "easy")
+    # every level: a file no rule matches as a whole, but one does from the start, with another mode
+    assert any(not hits[p] and any(stated(pat, p, whole=False) and m != initial[p] for pat, m in rules) for p in initial)
     assert key["expected"] == {path: {"sha256": _sha((site / path).read_bytes()), "mode": f"{m:04o}"} for path, m in target.items()}
     assert all(initial[p] != target[p] for p in initial if hits[p])  # doing nothing leaves every matched file wrong
     assert any(h and h[0] != h[-1] for h in hits.values())  # first match

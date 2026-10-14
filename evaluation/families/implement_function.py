@@ -14,10 +14,11 @@ case its catalog entry lists (`equal` for results, `raises` for the stated Value
 a `no_mutation` check where the docstring promises it.
 
 Difficulty is in the examples: easy's docstrings show three typical examples and one example
-of every edge case the hidden checks test (drawn separately, so the values usually differ);
-medium's show two typical examples and half of the edge cases; hard's show two typical
-examples and no edge case. An edge case that raises is shown as a doctest of the exception
-(`+IGNORE_EXCEPTION_DETAIL`, so any message passes).
+of half of the edge cases the hidden checks test (drawn separately, so the values usually
+differ); medium's show two typical examples and a quarter of the edge cases (one, since every
+catalog entry lists four to seven); hard's show two typical examples and no edge case. The
+fraction is `shown_edges`, rounded down. An edge case that raises is shown as a doctest of
+the exception (`+IGNORE_EXCEPTION_DETAIL`, so any message passes).
 
 Traps, each a declared shortcut that fails by construction because a hidden check targets it:
 `hardcode-examples` (returns the visible examples' outputs and nothing else), and per catalog
@@ -845,7 +846,7 @@ def _examples(rng, entry, p, ref, cfg):
     their own), in a shuffled order. Returns the examples and the labels of the shown edges."""
     edges = entry.edges(rng, p)
     labels = [label for label, _ in edges]
-    n_shown = {"all": len(labels), "half": len(labels) // 2, "none": 0}[cfg["shown_edges"]]
+    n_shown = int(len(labels) * cfg["shown_edges"])
     shown = sorted(rng.sample(labels, n_shown), key=labels.index)
     examples, seen = [], []
     while len(examples) < cfg["typical_examples"]:
@@ -902,14 +903,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="implement-function",
-    version=3,
+    version=4,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases"),
     difficulties={
-        "easy": {"typical_examples": 3, "shown_edges": "all"},
-        "medium": {"typical_examples": 2, "shown_edges": "half"},
-        "hard": {"typical_examples": 2, "shown_edges": "none"},
+        "easy": {"typical_examples": 3, "shown_edges": 0.5},
+        "medium": {"typical_examples": 2, "shown_edges": 0.25},
+        "hard": {"typical_examples": 2, "shown_edges": 0.0},
     },
     build=build,
 )

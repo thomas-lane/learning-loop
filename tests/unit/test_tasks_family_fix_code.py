@@ -601,8 +601,8 @@ def _catalog(name):
 
 @pytest.mark.parametrize("name", ["fix-parser", "fix-pagination", "fix-dates"])
 def test_every_python_bug_has_a_wrong_fix(name):
-    # an easy instance has one bug; a draw without a catalogued wrong fix used to be redrawn,
-    # which skewed easy towards the bugs that had one
+    # a draw without a catalogued wrong fix used to be redrawn, which skewed the draws towards
+    # the bugs that had one
     assert all(entry["naive"] for bugs in _catalog(name).values() for entry in bugs.values())
 
 
@@ -610,7 +610,7 @@ def test_every_shell_bug_pair_has_a_wrong_fix():
     bugs = _catalog("fix-shell-script")
     with_fix = {(s, b) for s, kinds in bugs.items() for b, (_, fix) in kinds.items() if fix is not None}
     assert {b for _, b in set((s, b) for s, kinds in bugs.items() for b in kinds) - with_fix} == {"regex_pattern"}
-    # so every instance (two or more bugs at distinct sites) has a wrong-fix shortcut without a redraw
+    # so no draw is redrawn for lack of a wrong-fix shortcut
 
 
 @pytest.mark.parametrize("name", PYTHON_FAMILIES)
@@ -618,10 +618,31 @@ def test_easy_draws_every_catalogued_bug(name):
     catalog, funcs = _catalog(name), FAMILIES[name].difficulties["easy"]["functions"]
     drawn = set()
     for seed in range(1, 121):
-        generated = generate_spec(FAMILIES[name], "easy", seed)
-        assert generated.draws == 1
-        drawn |= set(generated.spec.params["bugs"].items())
+        drawn |= set(generate_spec(FAMILIES[name], "easy", seed).spec.params["bugs"].items())
     assert drawn == {(f, b) for f in funcs for b in catalog[f]}
+
+
+# (bugs, hidden bugs) per level: the hidden bugs set the difficulty
+BUG_MIX = {
+    "fix-stats": {"easy": (1, 0), "medium": (2, 1), "hard": (4, 3)},
+    "fix-parser": {"easy": (3, 2), "medium": (4, 3), "hard": (5, 4)},
+    "fix-pagination": {"easy": (3, 0), "medium": (2, 1), "hard": (3, 2)},
+    "fix-dates": {"easy": (2, 0), "medium": (2, 1), "hard": (3, 2)},
+    "fix-shell-script": {"easy": (1, 0), "medium": (2, 1), "hard": (2, 1)},
+}
+
+
+@pytest.mark.parametrize(("name", "difficulty"), [(n, d) for n in MODULES for d in ("easy", "medium", "hard")])
+def test_bugs_and_hidden_bugs_per_level(name, difficulty):
+    for seed in [1] if name == "fix-shell-script" else [1, 2, 3]:  # shell generation runs bash
+        params = generate_spec(FAMILIES[name], difficulty, seed).spec.params
+        assert (len(params["bugs"]), len(params["bugs"]) - len(params["visible_bug_tests"])) == BUG_MIX[name][difficulty], seed
+
+
+def test_fix_stats_hard_always_has_a_percentile_bug_that_is_often_missed():
+    # the other catalogued bugs are found almost every time, so without it hard is no harder than medium
+    drawn = {generate_spec(FAMILIES["fix-stats"], "hard", seed).spec.params["bugs"]["percentile"] for seed in range(1, 21)}
+    assert drawn == {"rank_off_by_one", "unsorted"}
 
 
 @pytest.mark.parametrize(("difficulty", "seed"), [("easy", 500123), ("easy", 500208), ("medium", 500118)])

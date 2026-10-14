@@ -14,8 +14,8 @@ range ends, the length limits, a leap day), records that break one rule of one f
 with several errors, and the trap records of the difficulty. No hidden record equals an
 example.
 
-Traps (each a full validator with one mistake, declared as a shortcut, and each caught by the
-hidden records planted for it, `TRAPS`): `hardcode-examples` (answers the example records
+Traps (each a full validator with one mistake, declared as a shortcut where the difficulty
+plants it, and each caught by the hidden records planted for it, `TRAPS`): `hardcode-examples` (answers the example records
 only), `bool-is-int` (`isinstance(v, int)` accepts true; the integer range includes 1),
 `coerces-strings` (`int(v)` accepts "7"), `range-off-by-one` (exclusive bounds; records at
 both range ends), `re-match-prefix` (`re.match` without an end anchor accepts "ab-cd"),
@@ -27,9 +27,10 @@ records with several errors use only plain bad values (`PLAIN_BAD`), never anoth
 each checks what it is planted for.
 
 Difficulty is in the data, not the instruction: easy's hidden records leave out the two
-date-library traps and its examples show one record for every trap it plants; medium plants
-every trap and its examples show half of them; hard plants every trap and its examples show
-none. Each step also has fewer plain examples (valid records and plain errors).
+date-library traps and its examples show one record for every trap it plants; medium also
+plants `fromisoformat-date` and its examples show half of its traps; hard plants the same
+traps as medium and its examples show none. `strptime-date` is planted at no difficulty
+(`unplanted`). Each step also has fewer plain examples (valid records and plain errors).
 """
 
 import json
@@ -461,14 +462,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="write-validator",
-    version=3,
+    version=4,
     cluster="write-code",
     category="coding",
     skills=("python", "reading-specs", "edge-cases", "validation"),
     difficulties={
         "easy": {"unplanted": ["strptime-date", "fromisoformat-date"], "show_traps": "all", "plain_examples": 6},
-        "medium": {"unplanted": [], "show_traps": "half", "plain_examples": 5},
-        "hard": {"unplanted": [], "show_traps": "none", "plain_examples": 4},
+        "medium": {"unplanted": ["strptime-date"], "show_traps": "half", "plain_examples": 5},
+        "hard": {"unplanted": ["strptime-date"], "show_traps": "none", "plain_examples": 4},
     },
     build=build,
 )

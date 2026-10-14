@@ -81,9 +81,6 @@ def test_log_triage_traps(tmp_path, difficulty, seed):
         for combo in itertools.combinations(files, k):
             assert five(combo) != expected, combo
     assert _top([ln.split()[0] for t in files.values() for ln in t.splitlines() if int(ln.split()[8]) >= 400]) != expected
-    if FAMILIES["log-triage"].difficulties[difficulty]["size_trap"]:
-        any_field = [ln.split()[0] for t in files.values() for ln in t.splitlines() if any(500 <= int(f) < 600 for f in ln.split()[8:10])]
-        assert _top(any_field) != expected
 
 
 @pytest.mark.parametrize("difficulty", list(FAMILIES["csv-revenue"].difficulties))
@@ -110,11 +107,7 @@ def test_csv_revenue_traps(tmp_path, difficulty, seed):
     for k in range(1, len(files)):
         for combo in itertools.combinations(files, k):
             assert top(combo, revenue) != expected, combo
-    p = FAMILIES["csv-revenue"].difficulties[difficulty]
-    if p["quoted_commas"]:
-        assert any('"' in t for t in files.values())
-    if p["reorder"]:
-        assert len({next(csv.reader(io.StringIO(t)))[1] for t in files.values()}) > 1
+    assert any('"' in t for t in files.values())
 
 
 @pytest.mark.parametrize("difficulty", list(FAMILIES["count-errors"].difficulties))

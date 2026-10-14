@@ -3,18 +3,20 @@
 
 `/app/paging.py` holds 4 / 5 / 6 small functions (page count, slice bounds, the page of an
 item, an "Items 11-20 of 45" label; medium adds a window of page links, hard a page dict),
-and 1 / 2 / 4 of them carry a bug from a catalog of classic pagination mistakes. Each
+and 3 / 2 / 3 of them carry a bug from a catalog of classic pagination mistakes. Each
 function's bug is drawn uniformly from its catalog entries. The instruction is the same at
 every difficulty apart from the function list: some visible tests fail, and they may not
 cover every bug.
 
 `/app/test_paging.py` holds two visible tests per function, of different kinds and at least
 one of them not an error check, so neither the tested functions nor their number of tests
-say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
+say where the bugs are. All / half / a third of the bugs (3 / 1 / 1) are *visible*: one
 test of that function fails because of its bug, both with that bug alone and with every bug
 in place. Every other function's tests pass on the module as given; for a function with a
 *hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
-only the hidden bugs are left. Hidden checks use fresh seed-specific inputs (never a visible
+only the hidden bugs are left. Difficulty comes mostly from the hidden bugs (easy none,
+medium one, hard two): a bug only a docstring describes is much harder to find than one a
+failing test shows. Hidden checks use fresh seed-specific inputs (never a visible
 test's) and always include the boundaries: an exactly full and a partly filled last page,
 zero items, the first page, an item index on a page boundary and link windows at either end.
 
@@ -484,14 +486,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-pagination",
-    version=3,
+    version=4,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "off-by-one", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["page_count", "page_bounds", "page_of", "page_label"], "n_bugs": 1, "visible_bug_tests": 1.0},
+        "easy": {"functions": ["page_count", "page_bounds", "page_of", "page_label"], "n_bugs": 3, "visible_bug_tests": 1.0},
         "medium": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window"], "n_bugs": 2, "visible_bug_tests": 0.5},
-        "hard": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window", "paginate"], "n_bugs": 4, "visible_bug_tests": 0.25},
+        "hard": {"functions": ["page_count", "page_bounds", "page_of", "page_label", "page_window", "paginate"], "n_bugs": 3, "visible_bug_tests": 0.33},
     },
     build=build,
 )

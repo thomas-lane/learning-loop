@@ -2,7 +2,7 @@
 
 `/app/iniconf.py` holds 4 / 5 / 6 functions (value unquoting, the parser, boolean and list
 getters; medium adds merging two configs, hard adds writing INI text). The module docstring
-specifies the format; 1 / 2 / 4 functions carry a bug from a catalog of classic parser
+specifies the format; 3 / 4 / 5 functions carry a bug from a catalog of classic parser
 mistakes (inline-comment stripping, sloppy unquoting, case folding, duplicate detection,
 `;` comments, case-sensitive booleans, invalid booleans read as False, unstripped or empty
 list items, shallow merges, merges where the base wins, missing quotes or blank lines
@@ -14,11 +14,13 @@ from the function list: some visible tests fail, and they may not cover every bu
 
 `/app/test_iniconf.py` holds two visible tests per function, of different kinds and at least
 one of them not an error check, so neither the tested functions nor their number of tests
-say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
-test of that function fails because of its bug, both with that bug alone and with every bug
-in place. Every other function's tests pass on the module as given; for a function with a
-*hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
-only the hidden bugs are left. Hidden checks use fresh seed-specific configs (never a
+say where the bugs are. One bug at every level is *visible*: one test of that function fails
+because of its bug, both with that bug alone and with every bug in place. Every other
+function's tests pass on the module as given; for a function with a *hidden* bug they
+exercise behavior the bug does not touch. Every visible test passes once only the hidden
+bugs are left. Difficulty comes mostly from the hidden bugs (easy two, medium three, hard
+four): a bug only a docstring describes is much harder to find than one a failing test
+shows. Hidden checks use fresh seed-specific configs (never a
 visible test's, except `dumps({})`, whose input is always the same) that always contain each
 feature the format defines (both comment characters, indented comments, mixed-case keys,
 section names and values, `=`, `#` and `;` inside values, quoted values with inner spaces, a
@@ -644,14 +646,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-parser",
-    version=2,
+    version=3,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "parsing", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["parse_value", "parse", "get_bool", "get_list"], "n_bugs": 1, "visible_bug_tests": 1.0},
-        "medium": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge"], "n_bugs": 2, "visible_bug_tests": 0.5},
-        "hard": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge", "dumps"], "n_bugs": 4, "visible_bug_tests": 0.25},
+        "easy": {"functions": ["parse_value", "parse", "get_bool", "get_list"], "n_bugs": 3, "visible_bug_tests": 0.33},
+        "medium": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge"], "n_bugs": 4, "visible_bug_tests": 0.25},
+        "hard": {"functions": ["parse_value", "parse", "get_bool", "get_list", "merge", "dumps"], "n_bugs": 5, "visible_bug_tests": 0.2},
     },
     build=build,
 )

@@ -1,9 +1,8 @@
 """traceback-locate: a nightly job crashed; from its traceback and source, name the line that
 set the bad setting value the run used (not the line that raised).
 
-The instruction is the same at every difficulty: it says that a setting can appear in several
-places (several profiles, or overrides applied on top of a profile) and that the answer is
-the entry whose value the run used. The data per difficulty:
+The instruction is the same at every difficulty: it asks for the dictionary entry that set
+the value the run used, the one to change to fix the crash. The data per difficulty:
 
 - easy: profiles dev, staging and prod; the active profile (staging or prod) is a literal in
   `main.py`; the error is a ValueError;
@@ -11,7 +10,8 @@ the entry whose value the run used. The data per difficulty:
   imported from `deploy.py`, which also mentions an older profile in a comment; a pipeline
   module adds a frame; the error can also be a ZeroDivisionError;
 - hard: medium's set-up plus `overrides.py`, whose entries `load_settings` applies on top of
-  the profile, and a worker that re-raises the error as a RuntimeError.
+  the profile, and a worker that re-raises the error as a RuntimeError; the bad value is in
+  at most one unused profile of `settings.py`, besides the overrides.
 
 Construction: a small package `/app/<pkg>/` started with `python3 -m <pkg>.main`. The job
 loads a settings profile and hands it down a call chain to a consumer that reads one key,
@@ -29,10 +29,13 @@ Traps, by construction or checked (each a declared shortcut where it applies):
 - the root-cause line is never in the traceback, so reporting the last frame
   (`last-frame`), the first frame in the package's own code (`first-app-frame`) or the frame
   that read the setting (`caller-frame`) fails;
-- the bad value also sits in one or two other, unused profiles (any but the active one);
-  on easy/medium one of them comes before the active profile in the file, so the first
-  `grep` hit of the literal (`grep-first`, ValueError only) and the first entry of the key
-  with the bad value (`first-bad`, overrides first) fail;
+- the bad value also sits in other, unused profiles (any but the active one): on
+  easy/medium one or two in `settings.py`, one of them before the active profile in the
+  file; on hard none or one there and two in `overrides.py`. So the first `grep` hit of the
+  literal (`grep-first`, ValueError only) and the first entry of the key with the bad value
+  (`first-bad`, overrides first) fail. On hard a `settings.py` decoy catches a reader that
+  stops at the first matching literal without following the overrides; it is drawn on about
+  half of the instances, which sets how hard the level is;
 - medium/hard: assuming the `prod` profile fails (`assume-prod`);
 - hard: the traceback has two sections and its last frame is the re-raise; ignoring the
   overrides and reporting the profile's own entry fails (`profile-line`); two other
@@ -272,9 +275,10 @@ def build(ctx):
         bad = f"{good // 60}m" if fmt == "minutes" else fmt.format(good)
     bad_src = repr(bad).replace("'", '"')
 
-    # Profiles: every key with a good value. The bad value sits in 1-2 decoy profiles and, on
-    # easy/medium, in the active profile, after a decoy in file order; on hard the active
-    # profile's own entry is good and the bad value is in its override.
+    # Profiles: every key with a good value. The bad value sits in decoy profiles (1-2 on
+    # easy/medium, 0-1 on hard) and, on easy/medium, in the active profile, after a decoy in
+    # file order; on hard the active profile's own entry is good and the bad value is in its
+    # override.
     keys = sorted(INT_KEYS) + [ZERO_KEY, "log_level"]
     rng.shuffle(keys)
 
@@ -290,7 +294,7 @@ def build(ctx):
     bad_profiles = set(decoys) if p["overrides"] else set(decoys) | {active}
     for prof in bad_profiles:
         values[prof] = [(k, bad_src if k == key else v) for k, v in values[prof]]
-    if min(bad_profiles, key=profiles.index) == active:
+    if bad_profiles and min(bad_profiles, key=profiles.index) == active:
         raise Reject("the first profile with the bad value is the active one")
     overrides = None
     if p["overrides"]:
@@ -436,14 +440,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="traceback-locate",
-    version=3,
+    version=4,
     cluster="diagnosis",
     category="debugging",
     skills=("python", "tracebacks", "code-reading", "diagnosis"),
     difficulties={
         "easy": {"profiles": ["dev", "staging", "prod"], "active_choices": ["staging", "prod"], "decoys": [1, 2], "deploy": False, "pipeline": False, "overrides": False, "reraise": False, "zero_kind": False, "noise": 0},
         "medium": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": [1, 2], "deploy": True, "pipeline": True, "overrides": False, "reraise": False, "zero_kind": True, "noise": 1},
-        "hard": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": [1, 2], "override_decoys": 2, "deploy": True, "pipeline": True, "overrides": True, "reraise": True, "zero_kind": True, "noise": 3},
+        "hard": {"profiles": ["dev", "test", "staging", "prod"], "active_choices": ["test", "staging"], "decoys": [0, 1], "override_decoys": 2, "deploy": True, "pipeline": True, "overrides": True, "reraise": True, "zero_kind": True, "noise": 3},
     },
     build=build,
 )

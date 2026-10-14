@@ -8,10 +8,12 @@ normalized by trimming, lowercasing and dropping a `+tag` from the local part, a
 a leading US country code `1` from 11-digit numbers. The instruction states every rule, with
 examples, at every difficulty; the data decides which rules matter.
 
-Data per difficulty (`level`): easy has `contacts.csv` only, with no `+tags`, no gmail
-addresses written with and without dots, and no country codes, so trimming, lowercasing and
-keeping digits suffice. Medium adds the `+tag`, gmail-dot and country-code variants (a
-quarter of phones are written with `+1`) and a bridging person. Hard adds a second file,
+Data per difficulty: `variants` lists the spellings that occur beyond case, whitespace and
+phone punctuation: `plus-tag` (emails with a `+tag`), `country-code` (a quarter of phones
+written with `+1`), `gmail-dots` (gmail addresses with and without dots, and another domain
+whose dotted and dotless addresses are different people) and `bridge` (a person whose rows
+connect only through a third row). Easy has `contacts.csv` only, with `plus-tag` and
+`country-code`; medium adds `gmail-dots` and `bridge`. Hard (`level` 3) adds a second file,
 `crm_export.csv`, with its own column names (`Full Name`, `E-mail`, `Phone Number`). The
 number of background people is drawn from a range per difficulty, so the answer varies
 across seeds.
@@ -26,11 +28,12 @@ Planted in every instance, each breaking one wrong method by construction:
 - a person linked only by a phone in two formats (breaks raw phones and `email-key-only`);
 - two people with an empty phone and two with an empty email (`empty-match` merges them);
 - two different people with the same name (`by-name` merges them);
-- medium/hard: a `+tag` person (`no-plus-tags`), a gmail dots person (`no-gmail-dots`), two
-  different people at another domain whose addresses differ only by a dot (`over-normalize`
-  merges them), a `+1` country-code person (`no-country-code`), and a person whose third row
-  bridges two earlier, unconnected rows (`greedy`, which marks a row as a duplicate only if
-  it matches an earlier row, counts that person twice);
+- with `plus-tag`: a `+tag` person (`no-plus-tags`); with `country-code`: a `+1`
+  country-code person (`no-country-code`); with `gmail-dots`: a gmail dots person
+  (`no-gmail-dots`) and two different people at another domain whose addresses differ only
+  by a dot (`over-normalize` merges them); with `bridge`: a person whose third row bridges
+  two earlier, unconnected rows (`greedy`, which marks a row as a duplicate only if it
+  matches an earlier row, counts that person twice);
 - hard: people whose rows are all in the second file (`first-file`); `build` redraws when
   there is none.
 
@@ -173,6 +176,8 @@ def _solution(mode):
 
 # ----------------------------------------------------------------------------- generation
 
+# The wrong methods each variant's planted people break.
+VARIANT_SHORTCUTS = {"plus-tag": ["no-plus-tags"], "country-code": ["no-country-code"], "gmail-dots": ["over-normalize", "no-gmail-dots"], "bridge": ["greedy"]}
 PHONE_STYLES = ["({a}) {e}-{n}", "{a}-{e}-{n}", "{a}.{e}.{n}", "{a}{e}{n}", "{a} {e} {n}"]
 CC_STYLES = ["+1 {a} {e} {n}", "+1-{a}-{e}-{n}", "1 ({a}) {e}-{n}", "+1 ({a}) {e}-{n}"]
 
@@ -195,8 +200,8 @@ class _People:
     """People with unique normalized emails and phones. Emails are derived from the person's
     name; uniqueness is kept even with every dot removed, so only planted pairs collide."""
 
-    def __init__(self, rng, level):
-        self.rng, self.level = rng, level
+    def __init__(self, rng, variants):
+        self.rng, self.variants = rng, variants
         self.people = []  # each: {"name", "rows": [(email, phone)]}
         self.emails, self.phones = set(), set()
 
@@ -232,7 +237,7 @@ class _People:
                 return d
 
     def fmt(self, digits, avoid=()):
-        styles = PHONE_STYLES + (CC_STYLES if self.level >= 2 and self.rng.random() < 0.25 else [])
+        styles = PHONE_STYLES + (CC_STYLES if "country-code" in self.variants and self.rng.random() < 0.25 else [])
         return _phone(self.rng, digits, styles, avoid)
 
     def add(self, who, rows):
@@ -258,8 +263,8 @@ class _People:
         self.add(who, rows)
 
 
-def _people(rng, level, n_background):
-    P = _People(rng, level)
+def _people(rng, variants, n_background):
+    P = _People(rng, variants)
     # linked only by an email differing in case/whitespace; the second phone is another number
     who = P.person()
     e = P.email(who)
@@ -279,20 +284,23 @@ def _people(rng, level, n_background):
     P.add(who, [(P.email(who), P.fmt(P.phone()))])
     P.add(who, [(P.email(who), P.fmt(P.phone()))])
     bridge = None
-    if level >= 2:
+    if "plus-tag" in variants:
         who = P.person()
         e = P.email(who, domain=rng.choice(["acme.io", "example.org", "mailbox.net"]))
         local, _, domain = e.partition("@")
         P.add(who, [(f"{local}+{rng.choice(TAGS)}@{domain}", P.fmt(P.phone())), (e, "")])
+    if "gmail-dots" in variants:
         who = P.dotted("gmail.com")  # one person, with and without the dot
         P.add(who, [(f"{who[0]}.{who[1]}@gmail.com", P.fmt(P.phone())), (f"{who[0]}{who[1]}@gmail.com", rng.choice(["", P.fmt(P.phone())]))])
         dom = rng.choice(["acme.io", "northwind.co"])
         who = P.dotted(dom)  # two people (with one name), with and without the dot
         P.add(who, [(f"{who[0]}.{who[1]}@{dom}", P.fmt(P.phone()))])
         P.add(who, [(f"{who[0]}{who[1]}@{dom}", P.fmt(P.phone()))])
+    if "country-code" in variants:
         who = P.person()
         d = P.phone()
         P.add(who, [(P.email(who), _phone(rng, d, CC_STYLES)), (P.email(who), _phone(rng, d, PHONE_STYLES))])
+    if "bridge" in variants:
         who = P.person()
         e1, d2 = P.email(who), P.phone()
         bridge = P.add(who, [(e1, P.fmt(P.phone())), (P.email(who), P.fmt(d2)), (_cased(rng, e1), P.fmt(d2))])
@@ -315,8 +323,8 @@ def _render(rows, columns, crm):
 
 def build(ctx):
     rng, p = ctx.rng, ctx.params
-    level = p["level"]
-    people, bridge = _people(rng, level, rng.randint(*p["n_background"]))
+    level, variants = p["level"], p["variants"]
+    people, bridge = _people(rng, variants, rng.randint(*p["n_background"]))
     rows = [(i, j, person["name"], e, ph) for i, person in enumerate(people) for j, (e, ph) in enumerate(person["rows"])]
     rng.shuffle(rows)
     if bridge is not None:  # the bridging row comes after the two rows it connects
@@ -339,8 +347,9 @@ def build(ctx):
     texts = sorted((n, t) for n, t in ((k.split("/")[-1], v) for k, v in files.items()))
     count = _NS["answer"](texts, "oracle")
     modes = ["no-normalization", "email-only-normalized", "phone-only-normalized", "email-key-only", "phone-key-only", "pair-key", "empty-match", "by-name"]
-    if level >= 2:
-        modes += ["over-normalize", "no-gmail-dots", "no-plus-tags", "no-country-code", "greedy"]
+    for variant, wrong in VARIANT_SHORTCUTS.items():
+        if variant in variants:
+            modes += wrong
     if level == 3:
         modes.append("first-file")
     return TaskSpec(
@@ -349,20 +358,20 @@ def build(ctx):
         grader=NumericAnswer("/app/answer.txt", float(count)),
         oracle=_solution("oracle"),
         shortcuts={m: _solution(m) for m in modes},
-        params={"level": level, "people": len(people), "rows": len(rows)},
+        params={"level": level, "variants": list(variants), "people": len(people), "rows": len(rows)},
     )
 
 
 FAMILY = Family(
     name="dedupe-contacts",
-    version=3,
+    version=4,
     cluster="tabular-data",
     category="data",
     skills=("csv", "normalization", "deduplication", "union-find", "python"),
     difficulties={
-        "easy": {"level": 1, "n_background": [5, 12]},
-        "medium": {"level": 2, "n_background": [7, 14]},
-        "hard": {"level": 3, "n_background": [10, 18]},
+        "easy": {"level": 1, "variants": ["plus-tag", "country-code"], "n_background": [5, 12]},
+        "medium": {"level": 2, "variants": ["plus-tag", "country-code", "gmail-dots", "bridge"], "n_background": [7, 14]},
+        "hard": {"level": 3, "variants": ["plus-tag", "country-code", "gmail-dots", "bridge"], "n_background": [10, 18]},
     },
     build=build,
 )

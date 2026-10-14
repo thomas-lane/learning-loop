@@ -1,25 +1,34 @@
 """sqlite-query: the net revenue of one month's orders by customers of one region, from a
 SQLite database (Python's sqlite3 module; the image has no sqlite3 CLI).
 
-`/app/data/shop.db` has the same schema at every difficulty: `customers` (with `deleted_at`),
-`addresses` (a customer's region is that of their primary address, `is_primary = 1`) and
-`orders` (with the shipping warehouse's `region`, the cart's `created_at`, `placed_at`,
-`refunded_cents` and `deleted_at`). The instruction, identical at every difficulty except for
-the drawn month and region, states every rule. The answer is
+`/app/data/shop.db` has the same schema at every difficulty: `customers` (with the `region`
+recorded at sign-up and `deleted_at`), `addresses` (a customer's region is that of their
+primary address, `is_primary = 1`) and `orders` (with the shipping warehouse's `region`, the
+cart's `created_at`, `placed_at`, `refunded_cents` and `deleted_at`). Timestamps are ISO 8601
+text with a `T` between date and time (`2026-03-31T18:05:00`). The instruction, identical at
+every difficulty except for the drawn month and region, states every rule. The answer is
 SUM(amount_cents - COALESCE(refunded_cents, 0)) over the qualifying orders, in dollars.
 
-Data per difficulty (`level`) decides which rules matter; traps:
+Data per difficulty (`level`) decides which rules matter. Traps at every level:
 
-- all: `refunded_cents` is NULL for most orders, so `amount_cents - refunded_cents` silently
-  drops them from the SUM (`null-drop`); some qualifying orders have refunds (`gross`);
-  soft-deleted orders (`deleted_at` set) qualify otherwise (`deleted-orders`).
-- easy: every customer has one (primary) address and no customer is deleted; every order
-  ships from its customer's region and was placed; carts were opened minutes to hours before
-  they were placed.
-- medium: as easy, plus a soft-deleted customer of the region with a qualifying order
-  (`deleted-customers`), and `created_at` becomes misleading: orders placed early on the
-  first day of the month were opened the month before, and never-placed carts were opened in
-  the month (`created-at`).
+- `refunded_cents` is NULL for most orders, so `amount_cents - refunded_cents` silently drops
+  them from the SUM (`null-drop`); some qualifying orders have refunds (`gross`);
+- soft-deleted orders (`deleted_at` set) qualify otherwise (`deleted-orders`), and so does an
+  order of a soft-deleted customer of the region (`deleted-customers`);
+- an order was placed on the last day of the month: bounding the month with
+  `BETWEEN '<first day> 00:00:00' AND '<last day> 23:59:59'` compares text, and `T` sorts
+  after the space, so it leaves out that whole day (`day-end-bound`);
+- `customers.region` is out of date for customers who moved: a customer of the region by
+  primary address signed up elsewhere and one who signed up in the region lives elsewhere,
+  both with orders in the month (`customer-region`).
+
+Per level:
+
+- easy: every customer has one (primary) address; every order ships from its customer's
+  region and was placed; carts were opened minutes to hours before they were placed.
+- medium: as easy, but `created_at` becomes misleading: orders placed early on the first day
+  of the month were opened the month before, and never-placed carts were opened in the month
+  (`created-at`).
 - hard: as medium, plus customers with secondary addresses, so joining all addresses
   double-counts (`address-join`) or admits a customer whose only address in the region is
   secondary (`any-address`); and many orders ship from another region's warehouse, so
@@ -63,6 +72,9 @@ Write the amount in dollars with two decimals (for example `1234.50`), and nothi
 """
 
 SOLVER = '''
+import datetime
+
+
 def answer(con, region, start, end, mode):
     """Net revenue in cents of the orders the mode's query selects."""
     if mode == "gross":
@@ -75,12 +87,18 @@ def answer(con, region, start, end, mode):
     joins = "JOIN customers c ON c.id = o.customer_id"
     where = [date + " >= ?", date + " < ?"]
     args = [start, end]
+    if mode == "day-end-bound":  # BETWEEN '<first day> 00:00:00' AND '<last day> 23:59:59'
+        last = datetime.datetime.fromisoformat(end) - datetime.timedelta(seconds=1)
+        where = [date + " BETWEEN ? AND ?"]
+        args = [start.replace("T", " "), last.strftime("%Y-%m-%d %H:%M:%S")]
     if mode != "deleted-orders":
         where.append("o.deleted_at IS NULL")
     if mode != "deleted-customers":
         where.append("c.deleted_at IS NULL")
     if mode == "order-region":
         where.append("o.region = ?")
+    elif mode == "customer-region":
+        where.append("c.region = ?")
     elif mode == "address-join":
         joins += " JOIN addresses a ON a.customer_id = c.id"
         where.append("a.region = ?")
@@ -121,7 +139,7 @@ def _solution(mode, region, start, end):
 
 
 SCHEMA = [
-    "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, deleted_at TEXT)",
+    "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, region TEXT NOT NULL, deleted_at TEXT)",
     "CREATE TABLE addresses (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), region TEXT NOT NULL, city TEXT NOT NULL, is_primary INTEGER NOT NULL)",
     "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), region TEXT NOT NULL, created_at TEXT NOT NULL, placed_at TEXT, amount_cents INTEGER NOT NULL, refunded_cents INTEGER, deleted_at TEXT)",
 ]
@@ -129,7 +147,7 @@ CITIES = {"north": ["Aberdeen", "Tromso"], "south": ["Seville", "Naples"], "east
 
 
 COLUMNS = {
-    "customers": ["id", "name", "deleted_at"],
+    "customers": ["id", "name", "region", "deleted_at"],
     "addresses": ["id", "customer_id", "region", "city", "is_primary"],
     "orders": ["id", "customer_id", "region", "created_at", "placed_at", "amount_cents", "refunded_cents", "deleted_at"],
 }
@@ -155,7 +173,7 @@ def _db_bytes(tables):
 
 
 def _ts(dt):
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def build(ctx):
@@ -169,13 +187,12 @@ def build(ctx):
     # Customers: (primary region, deleted?, extra address regions)
     custs = []
     for _ in range(p["n_customers"]):
-        custs.append({"region": rng.choice(REGIONS) if rng.random() < 0.6 else region, "deleted": level >= 2 and rng.random() < 0.08, "extra": []})
+        custs.append({"region": rng.choice(REGIONS) if rng.random() < 0.6 else region, "deleted": rng.random() < 0.08, "extra": []})
     in_region = [i for i, c in enumerate(custs) if c["region"] == region and not c["deleted"]]
     if len(in_region) < 4:
         raise Reject("too few live customers in the region")
-    if level >= 2:  # a deleted customer of the region
-        k = rng.choice([i for i in range(len(custs)) if i not in in_region[:3]])
-        custs[k].update(region=region, deleted=True)
+    k = rng.choice([i for i in range(len(custs)) if i not in in_region[:3]])  # a deleted customer of the region
+    custs[k].update(region=region, deleted=True)
     if level == 3:
         for c in custs:
             c["extra"] = [rng.choice(REGIONS) for _ in range(rng.choice([0, 0, 1, 2]))]
@@ -214,9 +231,10 @@ def build(ctx):
     for _ in range(4):
         order(rng.choice(live_region), in_month(), refund=None)  # NULL refunds: `null-drop` undercounts
     order(rng.choice(live_region), in_month(), deleted=True)  # `deleted-orders` overcounts
+    deleted_cust = [i for i, c in enumerate(custs) if c["region"] == region and c["deleted"]]
+    order(rng.choice(deleted_cust), in_month())  # `deleted-customers` overcounts
+    order(rng.choice(live_region), end - timedelta(seconds=rng.randint(60, 86000)))  # last day: `day-end-bound` misses it
     if level >= 2:
-        deleted_cust = [i for i, c in enumerate(custs) if c["region"] == region and c["deleted"]]
-        order(rng.choice(deleted_cust), in_month())  # `deleted-customers` overcounts
         for _ in range(2):  # opened the evening before the month starts: `created-at` misses them
             placed = start + timedelta(minutes=rng.randint(5, 300))
             order(rng.choice(live_region), placed, created=start - timedelta(minutes=rng.randint(10, 600)))
@@ -232,6 +250,19 @@ def build(ctx):
             order(rng.choice(live_region), in_month())
             orders[-1]["region"] = rng.choice(others)
 
+    # The region at sign-up: the primary region, except for customers who moved since.
+    for c in custs:
+        c["signup"] = rng.choice([r for r in REGIONS if r != c["region"]]) if rng.random() < 0.15 else c["region"]
+    mover_in = rng.choice(live_region)  # lives in the region, signed up elsewhere: `customer-region` misses them
+    custs[mover_in]["signup"] = rng.choice(others)
+    order(mover_in, in_month())
+    live_out = [i for i, c in enumerate(custs) if c["region"] != region and not c["deleted"] and region not in c["extra"]]
+    if not live_out:
+        raise Reject("no live customer outside the region")
+    mover_out = rng.choice(live_out)  # signed up in the region, lives elsewhere: `customer-region` counts them
+    custs[mover_out]["signup"] = region
+    order(mover_out, in_month())
+
     # Assign ids in the order the carts were opened, like an auto-increment column.
     rng.shuffle(orders)
     orders.sort(key=lambda o: o["created"])
@@ -240,7 +271,7 @@ def build(ctx):
     customers = []
     for i, c in enumerate(custs):
         deleted_at = _ts(datetime(2026, 1, 1) + timedelta(days=rng.randint(0, 270), seconds=rng.randint(0, 86399))) if c["deleted"] else None
-        customers.append({"id": cid[i], "name": names[i], "deleted_at": deleted_at})
+        customers.append({"id": cid[i], "name": names[i], "region": c["signup"], "deleted_at": deleted_at})
     addresses = []
     for i, c in enumerate(custs):
         regs = [(c["region"], 1)] + [(r, 0) for r in c["extra"]]
@@ -267,9 +298,9 @@ def build(ctx):
     con.deserialize(db)
     cents = _NS["answer"](con, region, s, e, "oracle")
     con.close()
-    modes = ["null-drop", "gross", "deleted-orders"]
+    modes = ["null-drop", "gross", "deleted-orders", "deleted-customers", "day-end-bound", "customer-region"]
     if level >= 2:
-        modes += ["deleted-customers", "created-at"]
+        modes.append("created-at")
     if level == 3:
         modes += ["address-join", "any-address", "order-region"]
     return TaskSpec(
@@ -284,7 +315,7 @@ def build(ctx):
 
 FAMILY = Family(
     name="sqlite-query",
-    version=3,
+    version=4,
     cluster="tabular-data",
     category="data",
     skills=("sql", "sqlite", "nulls", "joins", "python"),

@@ -9,10 +9,10 @@ under the output directory of the archive that holds A. The grader is a FileTree
 Data per difficulty (the bundle always also holds `README.md`, `VERSION`, `etc/bundle.conf`,
 `etc/bundle.conf.bak` and `docs/configuration.md`):
 
-- easy: one service archive `<svc>.tar.gz` at the top of the bundle;
-- medium: three service archives at the top, two of which hold `conf.d/limits.conf`;
-- hard: four service archives under `services/`, the last one a `.tgz`, two holding
-  `conf.d/limits.conf`, and the first holding a further archive `plugins/<name>.tgz`.
+- easy: one service archive `<svc>.tgz` at the top of the bundle;
+- medium: two service archives `<svc>.tgz` at the top, both holding `conf.d/limits.conf`;
+- hard: three service archives under `services/`, `.tar.gz` except the last, a `.tgz`; two
+  hold `conf.d/limits.conf`, and the first holds a further archive `plugins/<name>.tgz`.
 
 Traps and the shortcut that checks each:
 
@@ -23,10 +23,11 @@ Traps and the shortcut that checks each:
   (`skip-nested`), flattening paths (`flatten`) or extracting inner archives at the top of
   /app/out (`inner-at-root`) fails; on medium/hard several inner archives share the member
   path `conf.d/limits.conf`, so flattening or extracting at the top also overwrites files;
-- hard: one inner archive is a `.tgz` and another contains a nested `.tgz`, so treating only
-  `.tar.gz` as archives (`tar-gz-only`) or descending only one level (`one-level`) fails.
-  Without these archives those two methods are correct, so the shortcuts are declared only
-  on hard.
+- every level has a `.tgz` inner archive (on easy and medium every inner archive is one), so
+  treating only `.tar.gz` as archives (`tar-gz-only`) fails;
+- hard: one inner archive contains a further `.tgz`, so descending only one level
+  (`one-level`) fails. Without that archive the method is correct, so the shortcut is
+  declared only on hard.
 
 Every trap holds by construction, so the first draw is always used. The archives are built
 byte-for-byte deterministically: sorted members, fixed mtime, uid/gid 0, GNU format, and
@@ -170,7 +171,7 @@ def build(ctx):
     folder = "services/" if p["subdir"] else ""
     for i, svc in enumerate(services):
         plugin = rng.choice(PLUGINS) if p["nested"] and i == 0 else None
-        ext = ".tgz" if p["tgz"] and i == len(services) - 1 else ".tar.gz"
+        ext = ".tgz" if p["tgz"] == "all" or (p["tgz"] == "last" and i == len(services) - 1) else ".tar.gz"
         outer[f"{folder}{svc}{ext}"] = targz(_service(rng, svc, shared_limits=p["shared"] and i < 2, plugin=plugin))
     bundle = targz(outer)
     expected = _NS["extract"](bundle, "oracle")
@@ -178,8 +179,7 @@ def build(ctx):
     shortcuts["skip-nested"] = Solution(SKIP_NESTED, _skip_nested)
     if p["nested"]:
         shortcuts["one-level"] = _py_solution("one-level")
-    if p["tgz"]:
-        shortcuts["tar-gz-only"] = _py_solution("tar-gz-only")
+    shortcuts["tar-gz-only"] = _py_solution("tar-gz-only")
     return TaskSpec(
         instruction=INSTRUCTION,
         files={"bundle.tar.gz": bundle},
@@ -192,14 +192,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="extract-subset",
-    version=3,
+    version=4,
     cluster="filesystem",
     category="shell",
     skills=("shell", "tar", "gzip", "archives"),
     difficulties={
-        "easy": {"services": 1, "subdir": False, "shared": False, "nested": False, "tgz": False},
-        "medium": {"services": 3, "subdir": False, "shared": True, "nested": False, "tgz": False},
-        "hard": {"services": 4, "subdir": True, "shared": True, "nested": True, "tgz": True},
+        "easy": {"services": 1, "subdir": False, "shared": False, "nested": False, "tgz": "all"},
+        "medium": {"services": 2, "subdir": False, "shared": True, "nested": False, "tgz": "all"},
+        "hard": {"services": 3, "subdir": True, "shared": True, "nested": True, "tgz": "last"},
     },
     build=build,
 )

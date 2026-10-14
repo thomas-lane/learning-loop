@@ -15,10 +15,10 @@ Construction: keys are dealt roles that plant each trap: a key set differently i
 overrides and the current file, a key only the current file sets (differently from its
 default), a key empty in the current file whose default applies, required keys filled from
 the current file and from the overrides, and unknown keys in the current file. DATABASE_URL
-is always present and every value of it contains `=` (`?sslmode=...`). Medium adds an
-unknown key in the overrides and an override with an empty value; hard has two override
-layers that disagree on a key and `export ` prefixes in the current file (one on a key whose
-value comes from the current file).
+is always present and every value of it contains `=` (`?sslmode=...`). Every level has an
+override with an empty value (the current file's value applies); medium adds an unknown key
+in the overrides; hard has two override layers that disagree on a key and `export ` prefixes
+in the current file (one on a key whose value comes from the current file).
 
 Traps (declared shortcuts, all failing by construction):
 - `env-wins`: the current file beats the overrides;
@@ -27,7 +27,7 @@ Traps (declared shortcuts, all failing by construction):
 - `keep-unknown`: keys outside the template stay;
 - `append-overrides`: `cat overrides >> .env`, which leaves duplicate keys;
 - `awk-split`: an awk merge with `-F=` that reads only `$2`, cutting values at their second `=`;
-- medium/hard `override-empty-clears`: an empty override empties the key;
+- `override-empty-clears`: an empty override empties the key;
 - hard `common-wins`: the override layers in the wrong order (the lower number wins);
 - hard `export-as-unknown`: `export KEY=...` lines read as an unknown key `export KEY`.
 
@@ -200,7 +200,7 @@ def _differs(rng, gen, app, *avoid):
 
 def _roles(rng, p):
     roles = ["override_beats_env", "env_value", "env_empty", "required_from_env", "required_from_override"]
-    if p["override_extras"]:
+    if p["override_empty"]:
         roles += ["override_empty"]
     if p["layers"] == 2:
         roles += ["layer_order"]
@@ -271,7 +271,7 @@ def build(ctx):
             expected[key] = d
     for key in rng.sample(UNKNOWN, p["unknown_keys"]):
         current.insert(rng.randint(0, len(current)), (key, UNKNOWN_GEN(rng, app)))
-    if p["override_extras"]:
+    if p["override_unknown"]:
         layers[-1].insert(rng.randint(0, len(layers[-1])), (rng.choice([k for k in UNKNOWN if k not in dict(current)]), UNKNOWN_GEN(rng, app)))
     if p["exports"]:
         exported |= {k for k, _ in current if rng.random() < 0.4}
@@ -297,7 +297,7 @@ def build(ctx):
     shortcuts = {m: _solution(m, layer_files) for m in ("env-wins", "ignore-current", "empty-is-set", "keep-unknown")}
     shortcuts["append-overrides"] = _append_model(layer_files)
     shortcuts["awk-split"] = _awk_model(layer_files)
-    if p["override_extras"]:
+    if p["override_empty"]:
         shortcuts["override-empty-clears"] = _solution("override-empty-clears", layer_files)
     if n_layers == 2:
         shortcuts["common-wins"] = _solution("common-wins", layer_files)
@@ -315,14 +315,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="env-reconcile",
-    version=3,
+    version=4,
     cluster="config-repair",
     category="config",
     skills=("dotenv", "precedence", "config-repair", "shell"),
     difficulties={
-        "easy": {"n_keys": 7, "layers": 1, "unknown_keys": 1, "override_extras": False, "exports": False},
-        "medium": {"n_keys": 10, "layers": 1, "unknown_keys": 2, "override_extras": True, "exports": False},
-        "hard": {"n_keys": 13, "layers": 2, "unknown_keys": 3, "override_extras": True, "exports": True},
+        "easy": {"n_keys": 7, "layers": 1, "unknown_keys": 1, "override_empty": True, "override_unknown": False, "exports": False},
+        "medium": {"n_keys": 10, "layers": 1, "unknown_keys": 2, "override_empty": True, "override_unknown": True, "exports": False},
+        "hard": {"n_keys": 13, "layers": 2, "unknown_keys": 3, "override_empty": True, "override_unknown": True, "exports": True},
     },
     build=build,
 )

@@ -53,7 +53,7 @@ def _load_module(module: str):
 
 FAMILY_MODULES = {name: _load_module(module) for name, module in MODULES.items()}
 FAMILIES = {name: mod.FAMILY for name, mod in FAMILY_MODULES.items()}
-VERSIONS = {"implement-function": 3, "format-converter": 3, "write-validator": 3, "refactor-preserve": 3, "cli-flags": 3}
+VERSIONS = {"implement-function": 4, "format-converter": 4, "write-validator": 4, "refactor-preserve": 4, "cli-flags": 4}
 
 
 def _build(family: str, difficulty: str, seed: int):
@@ -334,18 +334,18 @@ def test_format_converter_key_and_traps(rendered, difficulty, seed):
     assert len(inputs) == 3
     for text in inputs:
         lines = text.splitlines()
+        assert any(ln.startswith("#") for ln in lines) and any(not ln.strip() for ln in lines)
         if kv:
             assert re.search(r'="[^"]* [^"]*"', text) and re.search(r'="[^"]*,[^"]*"', text)  # spaces (split) and commas (CSV quoting)
+            assert ('\\"' in text) == params["escapes"]
             if difficulty != "easy":
-                assert '\\"' in text and any(ln.startswith("#") for ln in lines) and any(not ln.strip() for ln in lines)
+                assert params["escapes"]
             if difficulty == "hard":
                 assert re.search(r"=[^\" ]*['\\\\][^ ]*", text)  # a bare value shlex would misread
         else:
             assert '"' in text  # hand-built JSON must escape it
             ints = [(s, e) for n, s, e, k in params["fields"] if k == "int" and n != "id"]
-            if difficulty != "easy":
-                assert any(ln.startswith("#") for ln in lines)
-                assert any(not ln.startswith("#") and ln.ljust(e)[s - 1 : e].strip() == "" for ln in lines for s, e in ints)
+            assert any(ln.strip() and not ln.startswith("#") and ln.ljust(e)[s - 1 : e].strip() == "" for ln in lines for s, e in ints)
             if difficulty == "hard":
                 width = max(e for _, _, e, _ in params["fields"])
                 assert any(ord(ch) > 127 for ch in text) and any(len(ln) < width for ln in lines if not ln.startswith("#"))
@@ -470,8 +470,8 @@ def test_write_validator_key_and_traps(rendered, difficulty, seed):
     assert multi and any(sorted(cs, key=schema_order) != cs for cs in multi)  # checking in schema order is not enough
     assert any("unknown_field" in result(r) for r in dicts) and any(type(r) is not dict for r in records)
     date = next(f[0] for f in schema if f[1] == "date")
-    library_traps = any(r.get(date) == "2026-2-03" for r in dicts) and any(r.get(date) == "20260203" for r in dicts)
-    assert library_traps == (difficulty != "easy")
+    assert not any(r.get(date) == "2026-2-03" for r in dicts)  # strptime-date is planted at no difficulty
+    assert any(r.get(date) == "20260203" for r in dicts) == (difficulty != "easy")
 
 
 # --------------------------------------------------------------------------- #
@@ -646,6 +646,7 @@ def test_cli_flags_key_and_traps(rendered, tmp_path, difficulty, seed):
     assert all(c["stdout"] != example for c in key["checks"])
     assert any('"' in n for n in counts) and '\\"' in checks["json"]["stdout"]
     assert {checks["limit_zero"]["exit"], checks["limit_negative"]["exit"]} == {2}
+    assert len(checks["only_repeated"]["stdout"].splitlines()) == 2  # --only given twice, at every difficulty
     if difficulty != "easy":
         assert any("," in n for n in counts)
         boundary = int(checks["min_count_boundary"]["argv"][-1])
@@ -655,7 +656,6 @@ def test_cli_flags_key_and_traps(rendered, tmp_path, difficulty, seed):
         top = max(counts, key=lambda n: (counts[n], [-ord(ch) for ch in n]))
         assert c["argv"][c["argv"].index("--exclude") + 1] == top and len(c["stdout"].splitlines()) == 2
         assert checks["only_and_exclude"]["exit"] == 2 and checks["missing_log"]["exit"] == 1
-        assert len(checks["only_repeated"]["stdout"].splitlines()) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -842,6 +842,32 @@ def test_refactor_preserve_difficulty_is_in_the_data():
         assert invalid["easy"] < invalid["medium"] < invalid["hard"]
 
 
+def test_refactor_preserve_subtle_invalid_strings_by_difficulty():
+    """Every difficulty checks a space inside a part (where the spaces extension allows none),
+    medium adds whitespace only, hard a decimal and a sign; each raises in the extended
+    grammar. Easy checked no subtle string before."""
+    want = {"easy": {"split"}, "medium": {"split", "blank"}, "hard": {"split", "blank", "decimal", "sign"}}
+    for difficulty in DIFFICULTIES:
+        for seed in range(10):
+            spec = _build("refactor-preserve", difficulty, seed)
+            exts = spec.params["extensions"]
+            parse = (lambda s: _duration(s, exts)) if spec.params["domain"] == "timesheet" else (lambda s: _size(s, exts))
+            strings = [c["args"][0] for c in spec.grader.checks if c["name"].startswith("helper_invalid")][3:]
+            kinds = set()
+            for s in strings:
+                assert _call_or_error(parse, [s])[0] == "raises", s
+                t = s.strip()
+                if not t:
+                    kinds.add("blank")
+                elif "." in t:
+                    kinds.add("decimal")
+                elif t.startswith("-"):
+                    kinds.add("sign")
+                elif re.fullmatch(r"[0-9]+ [hm]|[0-9]+[kmg] b", t.lower()):
+                    kinds.add("split")
+            assert kinds == want[difficulty] and len(strings) == len(kinds), (difficulty, seed, strings)
+
+
 # --------------------------------------------------------------------------- #
 # implement-function
 # --------------------------------------------------------------------------- #
@@ -857,8 +883,9 @@ def test_implement_function_shortcut_names_are_unique_across_the_catalog():
 
 
 def test_implement_function_examples_cover_edges_by_difficulty():
-    """Easy's docstring examples show every trap its hidden checks test, hard's none; the two
-    functions are drawn the same way at every difficulty."""
+    """Easy's docstring examples show half of the edge cases its hidden checks test, medium's
+    one, hard's none; the two functions are drawn the same way at every difficulty."""
+    mod = FAMILY_MODULES["implement-function"]
     funcs = {d: Counter() for d in DIFFICULTIES}
     for seed in range(12):
         for difficulty in DIFFICULTIES:
@@ -866,17 +893,14 @@ def test_implement_function_examples_cover_edges_by_difficulty():
             examples = _examples(spec.files["toolkit.py"])
             for func in spec.params["functions"]:
                 funcs[difficulty][func] += 1
-                p = spec.params["spec"][func]
-                as_checks = [
-                    {"args": a, "kind": "raises"} if r is RAISES else {"args": a, "kind": "equal", "expected": r}
-                    for a, r in examples[func]
-                ]
-                hidden_raises = any(c["kind"] == "raises" for c in spec.grader.checks if c["func"] == func)
-                if difficulty == "easy":
-                    _traps_present(func, as_checks, p, mutation=False)
-                    assert hidden_raises == any(c["kind"] == "raises" for c in as_checks)
+                entry, p = mod.CATALOG[func], spec.params["spec"][func]
+                labels = [label for label, _ in entry.edges(rng_for(FAMILIES["implement-function"], difficulty, seed), p)]
+                shown = spec.params["shown_edges"][func]
+                assert len(shown) == {"easy": len(labels) // 2, "medium": 1, "hard": 0}[difficulty] and set(shown) <= set(labels)
+                typical = 3 if difficulty == "easy" else 2
+                assert len(examples[func]) == typical + len(shown)
                 if difficulty == "hard":
-                    assert all(c["kind"] == "equal" for c in as_checks) and len(as_checks) == 2
+                    assert all(r is not RAISES for _, r in examples[func])
     assert all(len(c) >= 6 for c in funcs.values())
 
 
@@ -904,14 +928,20 @@ def test_format_converter_instruction_matches_the_grader():
 
 def test_format_converter_data_by_difficulty():
     """Every difficulty can contain every case of the grammar; the data decides which do. A
-    fixed-width export always has an optional integer field (for spaces-only integers), and
-    from medium on both conversions contain a spaces-only blank line."""
+    fixed-width export always has an optional integer field (for spaces-only integers), both
+    conversions contain a spaces-only blank line at every difficulty, and escapes are in some
+    easy key=value logs and in every medium and hard one."""
+    escapes = {d: Counter() for d in DIFFICULTIES}
     for seed in range(30):
         for difficulty in DIFFICULTIES:
             spec = _build("format-converter", difficulty, seed)
             if spec.params["conversion"] == "fixed-jsonl":
                 assert any(k == "int" and n != "id" for n, _, _, k in spec.params["fields"])
-            if difficulty != "easy":
-                for c in spec.grader.checks:
-                    ((_, text),) = c["inputs"].items()
-                    assert not text or any(ln and not ln.strip() for ln in text.splitlines())
+            else:
+                escapes[difficulty][spec.params["escapes"]] += 1
+                assert ("keeps-backslashes" in spec.shortcuts) == spec.params["escapes"]
+            for c in spec.grader.checks:
+                ((_, text),) = c["inputs"].items()
+                assert not text or any(ln and not ln.strip() for ln in text.splitlines())
+    assert escapes["easy"][True] and escapes["easy"][False]
+    assert not escapes["medium"][False] and not escapes["hard"][False]

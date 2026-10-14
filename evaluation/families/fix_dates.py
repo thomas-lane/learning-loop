@@ -2,23 +2,23 @@
 
 `/app/dates.py` holds 4 / 5 / 7 small functions on ISO date strings (days in a month, month
 end, adding months, ISO week; medium adds business days, hard adds age and ISO weeks per
-year), and 1 / 2 / 4 of them carry a bug from a catalog of classic calendar mistakes:
+year), and 2 / 2 / 3 of them carry a bug from a catalog of classic calendar mistakes:
 leap-year rules, December and year wrap-around, month-end clamping, ISO week-year
 boundaries, weekends and holidays, birthdays. Each function's bug is drawn uniformly from
 its catalog entries. The functions take every date as an argument and never read the
 clock, so the hidden checks are reproducible. The instruction is the same at every
-difficulty apart from the function list: some results are wrong in calendar edge cases
-"such as month ends, leap years and year boundaries" (every level has a bug in one of the
-first four functions, which these describe), some visible tests fail, and they may not
-cover every bug.
+difficulty apart from the function list: some results are wrong, some visible tests fail,
+and they may not cover every bug.
 
 `/app/test_dates.py` holds two visible tests per function, of different kinds and at least
 one of them not an error check, so neither the tested functions nor their number of tests
-say where the bugs are. All / half / a quarter of the bugs (at least one) are *visible*: one
+say where the bugs are. All / half / a third of the bugs (2 / 1 / 1) are *visible*: one
 test of that function fails because of its bug, both with that bug alone and with every bug
 in place. Every other function's tests pass on the module as given; for a function with a
 *hidden* bug they exercise behavior the bug does not touch. Every visible test passes once
-only the hidden bugs are left. Hidden checks use fresh seed-specific dates (never a visible
+only the hidden bugs are left. Difficulty comes mostly from the hidden bugs (easy none,
+medium one, hard two): a bug only a docstring describes is much harder to find than one a
+failing test shows. Hidden checks use fresh seed-specific dates (never a visible
 test's) chosen to hit each boundary: century years, 31st-of-month moves, December targets,
 dates whose ISO year differs from the calendar year, spans that cross a weekend without
 landing on it, weekday holidays inside a span, birthdays a few days away after decades of
@@ -611,17 +611,17 @@ def build(ctx):
 
 FAMILY = Family(
     name="fix-dates",
-    version=3,
+    version=4,
     cluster="fix-code",
     category="debugging",
     skills=("python", "debugging", "dates", "reading-docs"),
     difficulties={
-        "easy": {"functions": ["days_in_month", "month_end", "add_months", "iso_week"], "n_bugs": 1, "visible_bug_tests": 1.0},
+        "easy": {"functions": ["days_in_month", "month_end", "add_months", "iso_week"], "n_bugs": 2, "visible_bug_tests": 1.0},
         "medium": {"functions": ["days_in_month", "month_end", "add_months", "iso_week", "add_business_days"], "n_bugs": 2, "visible_bug_tests": 0.5},
         "hard": {
             "functions": ["days_in_month", "month_end", "add_months", "iso_week", "add_business_days", "age", "weeks_in_year"],
-            "n_bugs": 4,
-            "visible_bug_tests": 0.25,
+            "n_bugs": 3,
+            "visible_bug_tests": 0.33,
         },
     },
     build=build,

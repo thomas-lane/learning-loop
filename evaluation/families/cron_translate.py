@@ -9,16 +9,20 @@ The key is built with the same parser from the oracle's lines. The instruction i
 every difficulty; easy and medium simply have no paused job.
 
 Construction: each job is a structured schedule rendered into English. Every instance has an
-"every N minutes" job, a job that runs on Sunday, a day-of-month job and a job on other
-weekdays. Medium/hard write some times on a 12-hour clock and always include an afternoon
-time (hard also `12:xx AM`, which is hour 0); hard phrases some intervals as "every quarter
-hour"/"every half hour", adds month lists, business-hours windows and one paused job.
+"every N minutes" job, a job that runs on Sunday, a day-of-month job, a job on other weekdays
+and month-list jobs ("at 4:40 PM on the 15th of March and September"), which set both the
+day-of-month and the month field: easy has 5 jobs with one month-list job, medium 8 jobs with
+two, hard 10 jobs with four. Medium/hard write some times on a 12-hour clock and always
+include an afternoon time (hard also `12:xx AM`, which is hour 0); hard phrases some
+intervals as "every quarter hour"/"every half hour", adds business-hours windows and one
+paused job.
 
 Traps (declared shortcuts, each writing the lines that method produces, all failing by
 construction):
 - `sunday-is-1`: weekdays numbered 1-7 from Sunday (every weekday off by one);
 - `dom-dow-swap`: the day of the month written in the day-of-week field;
 - `every-n-as-value`: "every N minutes" written as minute N (and "every N hours" as hour N);
+- `months-as-weekdays`: a month-list job's months written in the day-of-week field;
 - medium/hard `ignore-pm`: 12-hour times copied without converting (2:30 PM as hour 2);
 - hard `include-paused`: paused jobs included.
 
@@ -119,9 +123,13 @@ def _kind(rng, kind, fmt12, spoken):
         days = sorted(rng.sample(range(1, 29), 2))
         return f"on the {_ordinal(days[0])} and the {_ordinal(days[1])} of every month at {_say_time(t)}", {**_at(t), "dom": ("vals", days), "mon": ANY, "dow": ANY}
     if kind == "month_list":
-        start = rng.randint(1, 3)
-        months = [start, start + 3, start + 6, start + 9]
-        return f"at {_say_time(t)} on the 1st of {_and([MONTHS[m - 1] for m in months])}", {**_at(t), "dom": ("vals", [1]), "mon": ("vals", months), "dow": ANY}
+        d = rng.choice([1, 1, 10, 15, 20])
+        if rng.random() < 0.5:
+            start = rng.randint(1, 3)
+            months = [start, start + 3, start + 6, start + 9]
+        else:
+            months = sorted(rng.sample(range(1, 13), rng.randint(2, 3)))
+        return f"at {_say_time(t)} on the {_ordinal(d)} of {_and([MONTHS[m - 1] for m in months])}", {**_at(t), "dom": ("vals", [d]), "mon": ("vals", months), "dow": ANY}
     if kind == "business":
         n = rng.choice([10, 15, 20, 30])
         a, b = rng.choice([(8, 17), (9, 17), (9, 18), (7, 19)])
@@ -155,6 +163,8 @@ def _line(job, bug=None):
     fields = [_field(s["min"], bug, "min"), _field(s["hour"], bug, "hour"), _field(s["dom"], bug, "dom"), _field(s["mon"], bug, "mon"), _field(s["dow"], bug, "dow")]
     if bug == "dom-dow-swap":
         fields[2], fields[4] = fields[4], fields[2]
+    if bug == "months-as-weekdays" and fields[3] != "*":
+        fields[3], fields[4] = "*", fields[3]
     return " ".join(fields) + " " + job["command"]
 
 
@@ -203,7 +213,7 @@ def build(ctx):
         blocks.append("\n".join(block))
     text = "# Scheduled jobs for app-01. All times are server time (UTC).\n\n" + "\n\n".join(blocks) + "\n"
     expected = parse_crontab("".join(ln + "\n" for ln in lines))
-    bugs = ["sunday-is-1", "dom-dow-swap", "every-n-as-value"] + (["ignore-pm"] if p["clock12"] else []) + (["include-paused"] if paused else [])
+    bugs = ["sunday-is-1", "dom-dow-swap", "every-n-as-value", "months-as-weekdays"] + (["ignore-pm"] if p["clock12"] else []) + (["include-paused"] if paused else [])
     return TaskSpec(
         instruction=INSTRUCTION,
         files={"jobs.txt": text},
@@ -224,15 +234,15 @@ def _retime(job, hour):
 
 FAMILY = Family(
     name="cron-translate",
-    version=3,
+    version=4,
     cluster="config-repair",
     category="config",
     skills=("cron", "translation", "canonical-form"),
     difficulties={
-        "easy": {"n_jobs": 4, "required": ["every_min", "sunday", "monthly", "weekly"], "extra": [], "clock12": False, "midnight": False, "paused": False, "spoken_intervals": False},
+        "easy": {"n_jobs": 5, "required": ["every_min", "sunday", "monthly", "weekly", "month_list"], "extra": [], "clock12": False, "midnight": False, "paused": False, "spoken_intervals": False},
         "medium": {
-            "n_jobs": 6,
-            "required": ["every_min", "weekend", "monthly", "weekdays", "dow_list"],
+            "n_jobs": 8,
+            "required": ["every_min", "weekend", "monthly", "weekdays", "dow_list", "month_list", "month_list"],
             "extra": ["daily", "every_hours", "dom_list"],
             "clock12": True,
             "midnight": False,
@@ -240,8 +250,8 @@ FAMILY = Family(
             "spoken_intervals": False,
         },
         "hard": {
-            "n_jobs": 8,
-            "required": ["every_min", "sunday", "dom_list", "dow_list", "business", "month_list"],
+            "n_jobs": 10,
+            "required": ["every_min", "sunday", "dom_list", "dow_list", "business", "month_list", "month_list", "month_list", "month_list"],
             "extra": ["daily", "every_hours", "weekdays", "weekend", "monthly"],
             "clock12": True,
             "midnight": True,

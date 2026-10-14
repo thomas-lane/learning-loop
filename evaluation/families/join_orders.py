@@ -7,20 +7,24 @@ leading zeros. The answer is a JSON object over every customer in customers.csv 
 join: customers without orders get 0, orders of unknown customers are left out).
 
 The instruction is the same at every difficulty: it states the full matching rule with
-examples and that each order file names its columns in a header whose order can differ
-between files. The data decides which variations occur:
+an example, lists the order files' column names and says that each file names its columns
+in a header row. The data decides which variations occur. `layouts` gives each order file's
+column order: `L` as the instruction lists the names (`order_id, placed, customer_id,
+quantity`), `R` another order (`customer_id, quantity, order_id, placed`):
 
-- easy: 10 customers, one order file; IDs differ in case and whitespace only;
-- medium: 14 customers, two order files; IDs also differ in leading zeros;
-- hard: 18 customers, three order files, the last with its columns in another order.
+- easy: 10 customers, one order file, `R`; IDs differ in case and whitespace only;
+- medium: 14 customers, two order files, `L` and `R`; IDs also differ in leading zeros;
+- hard: 18 customers, three order files, `L`, `L` and `R`.
 
 Traps, all planted in every instance: for each variation in play (trim, case, leading zeros)
 at least one order differs from its customer's ID *only* in that respect, so a join that
 skips that normalization (`no-trim`, `no-case`, `no-zeros`; `exact-join` skips all) loses
 that order; at least two customers have no orders (`inner-join` drops them); at least two
 orders belong to IDs absent from customers.csv (`outer-join` adds them). Medium/hard spread
-the orders over several files (`first-file` loses the rest); hard's reordered file breaks
-reusing the first file's column positions (`fixed-columns`).
+the orders over several files (`first-file` loses the rest). A file in order `R` breaks
+indexing columns by the instruction's order (`listed-columns`, declared when the first file
+is `R`; otherwise it is the same as `fixed-columns`), and a file in another order than the
+first file breaks reusing the first file's column positions (`fixed-columns`).
 
 Every solution, right or wrong, is one Python source (`SOLVER`) run with a mode: the shell
 form runs it on /app/data, the model runs the same source on the generated files, so the two
@@ -70,11 +74,14 @@ def canon(raw, flags):
     return s
 
 
+LISTED = ["order_id", "placed", "customer_id", "quantity"]
+
+
 def _rows(texts, mode):
     first = next(csv.reader(io.StringIO(texts[0][1]))) if texts else []
     for _, text in texts:
-        if mode == "fixed-columns":
-            cols = first
+        if mode in ("fixed-columns", "listed-columns"):
+            cols = first if mode == "fixed-columns" else LISTED
             for parts in list(csv.reader(io.StringIO(text)))[1:]:
                 yield dict(zip(cols, parts))
         else:
@@ -159,7 +166,7 @@ def _render(rows, columns):
 
 def build(ctx):
     rng, p = ctx.rng, ctx.params
-    flags = p["flags"]
+    flags, layouts = p["flags"], p["layouts"]
     nums = rng.sample(range(1, 10000), p["n_customers"] + 3)
     ids = []
     for num in nums[: p["n_customers"]]:
@@ -184,7 +191,7 @@ def build(ctx):
         [{"customer_id": f"{pre}-{num:05d}", "name": names[k], "country": rng.choice(COUNTRIES)} for k, (pre, num) in enumerate(ids)],
         ["customer_id", "name", "country"],
     )
-    months = MONTHS[-p["n_files"] :]
+    months = MONTHS[-len(layouts) :]
     by_month: dict[str, list] = {m: [] for m in months}
     for k, (who, need) in enumerate(plan):
         month = months[k % len(months)] if k < len(months) else rng.choice(months)
@@ -196,37 +203,39 @@ def build(ctx):
         for r in rows:
             oid += rng.randint(1, 7)
             r["order_id"] = f"O-{oid}"
-        cols = REORDERED if p["reorder"] and i == len(months) - 1 else ORDER_COLUMNS
+        cols = REORDERED if layouts[i] == "R" else ORDER_COLUMNS
         files[f"data/orders/{m}.csv"] = _render(rows, cols)
 
     expected = _NS["answer"](files["data/customers.csv"], [(f"{m}.csv", files[f"data/orders/{m}.csv"]) for m in months], "oracle")
     shortcuts = {m: _solution(m) for m in ("exact-join", "no-trim", "no-case", "inner-join", "outer-join")}
     if "Z" in flags:
         shortcuts["no-zeros"] = _solution("no-zeros")
-    if p["n_files"] > 1:
+    if len(layouts) > 1:
         shortcuts["first-file"] = _solution("first-file")
-    if p["reorder"]:
+    if any(lay != layouts[0] for lay in layouts):
         shortcuts["fixed-columns"] = _solution("fixed-columns")
+    if layouts[0] == "R":
+        shortcuts["listed-columns"] = _solution("listed-columns")
     return TaskSpec(
         instruction=INSTRUCTION,
         files=files,
         grader=ParsedAnswer("/app/answer.json", "json", expected),
         oracle=_solution("oracle"),
         shortcuts=shortcuts,
-        params={"n_customers": p["n_customers"], "n_files": p["n_files"], "flags": p["flags"], "reorder": p["reorder"]},
+        params={"n_customers": p["n_customers"], "n_files": len(layouts), "flags": flags, "layouts": layouts},
     )
 
 
 FAMILY = Family(
     name="join-orders",
-    version=3,
+    version=4,
     cluster="tabular-data",
     category="data",
     skills=("csv", "join", "normalization", "python"),
     difficulties={
-        "easy": {"n_customers": 10, "n_files": 1, "flags": "SC", "reorder": False},
-        "medium": {"n_customers": 14, "n_files": 2, "flags": "SCZ", "reorder": False},
-        "hard": {"n_customers": 18, "n_files": 3, "flags": "SCZ", "reorder": True},
+        "easy": {"n_customers": 10, "flags": "SC", "layouts": "R"},
+        "medium": {"n_customers": 14, "flags": "SCZ", "layouts": "LR"},
+        "hard": {"n_customers": 18, "flags": "SCZ", "layouts": "LLR"},
     },
     build=build,
 )

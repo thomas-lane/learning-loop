@@ -2,16 +2,19 @@
 in two formats?
 
 The logs under /app/logs are nginx access logs (`access.log*`, request time in seconds in the
-last field) and JSON-lines application logs (`app.jsonl*`, `duration_ms` in milliseconds).
-An endpoint is the URL path without its query string. The instruction is the same at every
+last field) and JSON-lines application logs (`app.jsonl*`, the URL in `path` and the request
+time in `duration_ms`, in milliseconds). An endpoint is the URL path without its query string.
+The instruction names only `duration_ms`. The URL field is called `path`, the name solvers
+most often assume without reading the file, because a wrong guess silently drops every JSON
+request, a failure that tests none of the traps below. The instruction is the same at every
 difficulty (it names rotated, gzip-compressed and archived logs in subdirectories, and query
 strings, wherever they occur). The data per difficulty:
 
 - easy: `access.log` and `app.jsonl`; no URL has a query string;
 - medium: `access.log`, `access.log.1` and `app.jsonl`; about 30% of URLs carry a query
   string;
-- hard: `access.log`, `access.log.1.gz`, `app.jsonl` and `archive/app.jsonl.1.gz`, with
-  query strings as on medium.
+- hard: `access.log`, `app.jsonl` and `archive/app.jsonl.1.gz` (gzip-compressed, in a
+  subdirectory), with query strings as on medium.
 
 Construction, with H a base latency in ms (every role is a different endpoint):
 
@@ -100,7 +103,7 @@ def requests(texts, mode):
                 continue
             if line.lstrip().startswith("{"):
                 rec = json.loads(line)
-                yield rec["url"], float(rec["duration_ms"])
+                yield rec["path"], float(rec["duration_ms"])
             else:
                 fields = line.split()
                 seconds = float(fields[-1])
@@ -278,7 +281,7 @@ def _render(rng, recs, names, with_queries):
                 stamp = ts.strftime("%d/%b/%Y:%H:%M:%S +0000")
                 lines.append(f'{_ip(rng)} - - [{stamp}] "{method} {url} HTTP/1.1" {status} {rng.randint(120, 40_000)} "-" "curl/8.5.0" {value / 1000:.3f}')
             else:
-                rec = {"ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "level": "info", "method": method, "url": url, "status": status, "duration_ms": value}
+                rec = {"ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "level": "info", "method": method, "path": url, "status": status, "duration_ms": value}
                 lines.append(json.dumps(rec))
         text = "\n".join(lines) + "\n"
         out[f"logs/{name}"] = gzip_bytes(text.encode()) if name.endswith(".gz") else text
@@ -314,14 +317,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="latency-p95",
-    version=2,  # v2: one instruction for every level
+    version=3,  # v3: the JSON field holding the URL is `path`; hard has one compressed (archived) log
     cluster="text-analytics",
     category="data",
     skills=("logs", "json", "percentiles", "units", "aggregation", "python"),
     difficulties={
         "easy": {"files": ["access.log", "app.jsonl"], "queries": False, "background": 3},
         "medium": {"files": ["access.log", "access.log.1", "app.jsonl"], "queries": True, "background": 3},
-        "hard": {"files": ["access.log", "access.log.1.gz", "app.jsonl", "archive/app.jsonl.1.gz"], "queries": True, "background": 3},
+        "hard": {"files": ["access.log", "app.jsonl", "archive/app.jsonl.1.gz"], "queries": True, "background": 3},
     },
     build=build,
 )

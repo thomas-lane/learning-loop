@@ -10,18 +10,18 @@ hand. The grader parses the file as TOML and compares it with the expected struc
 The instruction is the same at every difficulty, including the note about `tomllib` and the
 missing TOML writer.
 
-Construction: each instance draws its changes from a pool: easy one of each kind (rename,
-unit conversion, table move, removal); medium two of each, one of the two conversions always
-being `[database] connect_timeout`, which holds a fractional seconds value (2.5 s must become
-the integer 2500); hard has three renames and three moves, the same two conversions as medium
-plus `[[workers]] interval` (several entries, each with a seconds value to convert), the two
-removals plus `[server] debug`, whose name also exists in `[logging]` (where it stays), and a
-"planned, not released" schema 3 section that must not be applied.
+Construction: each instance draws its changes from a pool: easy two renames, two unit
+conversions, two table moves and one removal; medium two of each kind, one of the two
+conversions always being `[database] connect_timeout`, which holds a fractional seconds value
+(2.5 s must become the integer 2500); hard has medium's changes plus `[[workers]] interval`
+(several entries, each with a seconds value to convert), `[server] debug` as a third removal,
+whose name also exists in `[logging]` (where it stays), and a "planned, not released" schema 3
+section that must not be applied.
 
 Traps (declared shortcuts, all failing by construction):
 - `no-unit-conversion`: renames the converted keys but keeps their old numbers;
 - `keep-removed`: keeps the removed keys;
-- `partial-move`: moves all but the last moved table (easy: none);
+- `partial-move`: moves all but the last moved table;
 - medium/hard `float-ms`: multiplies a fractional seconds value without making it an integer;
 - hard `first-worker-only`: converts only the first `[[workers]]` entry;
 - hard `remove-everywhere`: deletes the removed key from every table (`sed -i '/^debug = /d'`);
@@ -323,14 +323,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="toml-migrate",
-    version=2,
+    version=3,
     cluster="config-repair",
     category="config",
     skills=("toml", "migration", "unit-conversion", "config-repair"),
     difficulties={
-        "easy": {"renames": 1, "converts": 1, "moves": 1, "removes": 1, "fractional": False, "workers": 0, "planned": False},
+        "easy": {"renames": 2, "converts": 2, "moves": 2, "removes": 1, "fractional": False, "workers": 0, "planned": False},
         "medium": {"renames": 2, "converts": 2, "moves": 2, "removes": 2, "fractional": True, "workers": 0, "planned": False},
-        "hard": {"renames": 3, "converts": 2, "moves": 3, "removes": 2, "fractional": True, "workers": 3, "planned": True},
+        "hard": {"renames": 2, "converts": 2, "moves": 2, "removes": 2, "fractional": True, "workers": 3, "planned": True},
     },
     build=build,
 )

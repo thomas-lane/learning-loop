@@ -128,28 +128,45 @@ def _ip_top(lines, take):
     return _unique_max(Counter(ln.split()[0] for ln in lines if take(ln)))
 
 
+def _size_decoy_sizes(lines):
+    return [int(ln.split()[9]) for ln in lines if ln.split()[8] == "200" and ln.split()[9].startswith("5")]
+
+
 @pytest.mark.parametrize("difficulty", list(FAMILIES["log-triage"].difficulties))
 @pytest.mark.parametrize("seed", SEEDS)
 def test_log_triage_size_decoy_is_graded(tmp_path, difficulty, seed):
-    """The size decoy grades with difficulty: none on easy; 4-digit sizes 5000-5999 on medium,
-    so only a grep not anchored after the status fails; 3-digit sizes 500-599 on hard, so a
-    grep with spaces on both sides fails too. No other response size starts with 5."""
+    """Every level has a size decoy. With 4-digit sizes 5000-5999 only a grep not anchored
+    after the status fails; with 3-digit sizes 500-599 (hard only) a grep with spaces on both
+    sides fails too. No other response size starts with 5."""
     render(FAMILIES["log-triage"], difficulty, seed, tmp_path)
     files, expected = _files(tmp_path, "logs"), _expected(tmp_path)
     lines = [ln for t in files.values() for ln in t.splitlines()]
-    decoy_sizes = [int(ln.split()[9]) for ln in lines if ln.split()[8] == "200" and ln.split()[9].startswith("5")]
+    decoy_sizes = _size_decoy_sizes(lines)
     assert all(not ln.split()[9].startswith("5") for ln in lines if ln.split()[8] != "200")
     assert _ip_top(lines, lambda ln: ln.split()[8].startswith("5")) == expected
     unanchored = _ip_top(lines, lambda ln: re.search(r" 5[0-9]{2}", ln) is not None)
     spaced = _ip_top(lines, lambda ln: re.search(r" 5[0-9]{2} ", ln) is not None)
-    if difficulty == "easy":
-        assert not decoy_sizes and unanchored == spaced == expected
-    elif difficulty == "medium":
-        assert decoy_sizes and all(5000 <= s <= 5999 for s in decoy_sizes)
-        assert unanchored != expected and spaced == expected
+    assert decoy_sizes and unanchored != expected
+    if all(5000 <= s <= 5999 for s in decoy_sizes):
+        assert spaced == expected
     else:
-        assert decoy_sizes and all(500 <= s <= 599 for s in decoy_sizes)
-        assert unanchored != expected and spaced != expected
+        assert difficulty == "hard" and all(500 <= s <= 599 for s in decoy_sizes)
+        assert spaced != expected
+
+
+def test_log_triage_hard_mixes_3_and_4_digit_size_decoys():
+    """Easy and medium always draw the 4-digit size decoy; hard draws the 3-digit one for
+    about half of its instances and the 4-digit one for the rest."""
+    def digits(difficulty, seed):
+        spec = generate_spec(FAMILIES["log-triage"], difficulty, seed).spec
+        lines = [ln for rel, data in spec.files.items() for ln in (gzip.decompress(data) if rel.endswith(".gz") else data.encode()).decode().splitlines()]
+        return {len(str(s)) for s in _size_decoy_sizes(lines)}
+
+    seeds = range(1, 21)
+    for d in ("easy", "medium"):
+        assert all(digits(d, seed) == {4} for seed in seeds), d
+    hard = Counter(frozenset(digits("hard", seed)) for seed in seeds)
+    assert set(hard) == {frozenset({3}), frozenset({4})} and min(hard.values()) >= 5, hard
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +181,7 @@ def _latency_requests(files):
         for line in text.splitlines():
             if name.split("/")[-1].startswith("app.jsonl"):
                 rec = json.loads(line)
-                out.append((name, rec["url"], rec["duration_ms"], rec["duration_ms"]))
+                out.append((name, rec["path"], rec["duration_ms"], rec["duration_ms"]))
             else:
                 raw = float(line.rsplit(" ", 1)[1])
                 out.append((name, line.split('"')[1].split(" ")[1], round(raw * 1000), raw))
@@ -215,6 +232,19 @@ def test_latency_p95_traps(tmp_path, difficulty, seed):
     if FAMILIES["latency-p95"].difficulties[difficulty]["queries"]:
         assert any("?" in r[1] for r in reqs)
         assert _latency_top(reqs, _nearest_rank, key=lambda url: url) != expected
+
+
+@pytest.mark.parametrize("difficulty", list(FAMILIES["latency-p95"].difficulties))
+def test_latency_p95_json_logs_hold_the_url_in_path(tmp_path, difficulty):
+    """The JSON logs carry the URL in `path`, the field name solvers assume, so a solver that
+    does not read the file first still counts the JSON requests; only the declared traps decide."""
+    render(FAMILIES["latency-p95"], difficulty, 1, tmp_path)
+    files = _files(tmp_path, "logs")
+    json_logs = [t for n, t in files.items() if n.split("/")[-1].startswith("app.jsonl")]
+    assert json_logs
+    for text in json_logs:
+        for line in text.splitlines():
+            assert set(json.loads(line)) == {"ts", "level", "method", "path", "status", "duration_ms"}
 
 
 # --------------------------------------------------------------------------- #
@@ -360,3 +390,16 @@ def test_error_burst_traps(tmp_path, difficulty, seed):
         assert len(header_files) == 1
         as_utc = [(n, dt.replace(tzinfo=timezone.utc) if n in header_files else dt, line) for n, dt, line in lines]
         assert _burst(as_utc, _utc) != expected  # the header file's local times read as UTC
+
+
+def test_error_burst_hard_is_medium_with_the_header_file():
+    """Hard differs from medium only by the header-offset file; no level has a compressed log,
+    so the header offset is hard's one extra trap."""
+    fam = FAMILIES["error-burst"]
+    medium, hard = fam.difficulties["medium"], fam.difficulties["hard"]
+    assert set(medium["files"]) ^ set(hard["files"]) == {"orders-us.log", "orders-us-legacy.log"}
+    assert medium["lookalikes"] == hard["lookalikes"]
+    for d in fam.difficulties:
+        generated = generate_spec(fam, d, 1)
+        assert not any(rel.endswith(".gz") for rel in generated.spec.files), d
+        assert "plain-only" not in generated.spec.shortcuts

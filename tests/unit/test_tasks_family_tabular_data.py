@@ -1,7 +1,7 @@
 """The tabular-data families join-orders, sqlite-query, json-aggregate and dedupe-contacts:
 deterministic renders, and their traps re-derived from the rendered files, independently of
-each family's own solution models; and, for the whole cluster (with csv-revenue), one
-instruction at every difficulty."""
+each family's own solution models; csv-revenue's share of instances whose quoted commas
+decide the answer; and, for the whole cluster, one instruction at every difficulty."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import json
 import re
 import sqlite3
 from collections import Counter
+from datetime import datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
 
@@ -105,8 +106,23 @@ def test_join_orders_traps(tmp_path, difficulty, seed):
             if [spaced, cased, zeros].count(True) == 1:
                 only["S" if spaced else "C" if cased else "Z"] += 1
     assert set(only) == set(params["flags"])
-    if params["reorder"]:
-        assert len({files[n].splitlines()[0] for n in order_files}) > 1
+    listed, other = "order_id,placed,customer_id,quantity", "customer_id,quantity,order_id,placed"
+    assert [files[n].splitlines()[0] for n in order_files] == [listed if lay == "L" else other for lay in params["layouts"]]
+
+
+def test_join_orders_column_orders_per_level():
+    """Every level has a file whose columns are not in the order the instruction lists them, so
+    indexing columns by that order misreads it; medium and hard also have files whose orders
+    differ, so reusing the first file's column positions misreads one of them."""
+    fam = FAMILIES["join_orders"]
+    assert {d: p["layouts"] for d, p in fam.difficulties.items()} == {"easy": "R", "medium": "LR", "hard": "LLR"}
+    for difficulty in fam.difficulties:
+        spec = generate_spec(fam, difficulty, 1).spec
+        assert "fixed-columns" in spec.shortcuts or "listed-columns" in spec.shortcuts
+        files = file_bytes(spec)
+        for name in spec.shortcuts:
+            if name.endswith("-columns"):
+                assert grade_in_process(spec, files, spec.shortcuts[name].model(files)) == 0.0, (difficulty, name)
 
 
 # ----------------------------------------------------------------------------- sqlite-query
@@ -125,12 +141,14 @@ def test_sqlite_query_traps(tmp_path, difficulty, seed):
     con.close()
     primary = {a["customer_id"]: a["region"] for a in addresses if a["is_primary"]}
     assert len(primary) == len(customers) == len({a["customer_id"] for a in addresses}) == sum(a["is_primary"] for a in addresses)
+    signup = {c["id"]: c["region"] for c in customers.values()}  # customers.region, before it is replaced below
     for c in customers.values():
         c["region"] = primary[c["id"]]
     if level < 3:  # one address per customer, and every order ships from its customer's region
         assert len(addresses) == len(customers)
         assert all(o["region"] == customers[o["customer_id"]]["region"] for o in orders)
     deleted = lambda c: bool(c.get("deleted_at"))  # noqa: E731
+    assert all("T" in o["placed_at"] for o in orders if o["placed_at"])
 
     def in_month(o, col="placed_at"):
         return (o[col] or "").startswith(month)
@@ -144,8 +162,12 @@ def test_sqlite_query_traps(tmp_path, difficulty, seed):
     good = [o for o in orders if qualifies(o)]
     assert any(o["refunded_cents"] is None for o in good) and any((o["refunded_cents"] or 0) > 0 for o in good)
     assert any(in_month(o) and o["deleted_at"] and customers[o["customer_id"]]["region"] == region and not deleted(customers[o["customer_id"]]) for o in orders)
+    assert any(in_month(o) and not o["deleted_at"] and deleted(customers[o["customer_id"]]) and customers[o["customer_id"]]["region"] == region for o in orders)
+    last_day = f"{month}-{(datetime(2026, params['month'] + 1, 1) - timedelta(days=1)).day:02d}"
+    assert any(o["placed_at"] > f"{last_day} 23:59:59" for o in good)  # left out by BETWEEN ... '<last day> 23:59:59'
+    assert any(signup[o["customer_id"]] != region for o in good)  # a customer of the region who signed up elsewhere
+    assert any(in_month(o) and not o["deleted_at"] and not deleted(customers[o["customer_id"]]) and customers[o["customer_id"]]["region"] != region and signup[o["customer_id"]] == region for o in orders)
     if level >= 2:
-        assert any(in_month(o) and not o["deleted_at"] and deleted(customers[o["customer_id"]]) and customers[o["customer_id"]]["region"] == region for o in orders)
         assert any(not in_month(o, "created_at") for o in good)  # placed in the month, cart opened before it
         assert any(o["placed_at"] is None and in_month(o, "created_at") and customers[o["customer_id"]]["region"] == region for o in orders)
     if level == 3:
@@ -175,7 +197,7 @@ def test_sqlite_schema_is_the_same_at_every_difficulty():
     assert len({json.dumps(v) for v in schemas.values()}) == 1, schemas
     assert schemas["easy"]["addresses"] == ["id", "customer_id", "region", "city", "is_primary"]
     assert {"created_at", "placed_at", "deleted_at", "region"} <= set(schemas["easy"]["orders"])
-    assert "deleted_at" in schemas["easy"]["customers"]
+    assert {"deleted_at", "region"} <= set(schemas["easy"]["customers"])
 
 
 def test_sqlite_database_bytes_do_not_carry_the_host_sqlite_version(tmp_path):
@@ -231,21 +253,21 @@ def test_json_aggregate_traps(tmp_path, difficulty, seed):
 # ----------------------------------------------------------------------------- dedupe-contacts
 
 
-def _email(raw: str, level: int, all_domains: bool = False) -> str:
+def _email(raw: str, tags: bool = True, dots: bool = True, all_domains: bool = False) -> str:
     e = raw.strip().lower()
-    if level >= 2 and e:
-        m = re.fullmatch(r"([^@+]*)(?:\+[^@]*)?@(.*)", e)
+    if e:
+        m = re.fullmatch(r"([^@+]*)((?:\+[^@]*)?)@(.*)", e)
         assert m, raw
-        local, domain = m.groups()
-        if domain == "gmail.com" or all_domains:
+        local, tag, domain = m.groups()
+        if (domain == "gmail.com" and dots) or all_domains:
             local = local.replace(".", "")
-        e = f"{local}@{domain}"
+        e = f"{local}{'' if tags else tag}@{domain}"
     return e
 
 
-def _phone(raw: str, level: int) -> str:
+def _phone(raw: str, country_code: bool = True) -> str:
     d = re.sub(r"\D", "", raw)
-    return d[1:] if level >= 2 and len(d) == 11 and d[0] == "1" else d
+    return d[1:] if country_code and len(d) == 11 and d[0] == "1" else d
 
 
 def _components(rows, keys) -> int:
@@ -273,7 +295,7 @@ def _components(rows, keys) -> int:
 @pytest.mark.parametrize("difficulty,seed", _cases("dedupe_contacts"))
 def test_dedupe_contacts_traps(tmp_path, difficulty, seed):
     params = render(FAMILIES["dedupe_contacts"], difficulty, seed, tmp_path)
-    level = params["level"]
+    level, variants = params["level"], set(params["variants"])
     files = {k: v.decode() for k, v in _files(tmp_path, "data").items()}
     rows = []
     for name in sorted(files):
@@ -281,7 +303,7 @@ def test_dedupe_contacts_traps(tmp_path, difficulty, seed):
             rows.append((r.get("name", r.get("Full Name")), r.get("email", r.get("E-mail")), r.get("phone", r.get("Phone Number"))))
     assert sorted(files) == (["contacts.csv", "crm_export.csv"] if level == 3 else ["contacts.csv"])
 
-    def count(rows=rows, email=lambda e: _email(e, level), phone=lambda p: _phone(p, level), use=("e", "p"), empty=False):
+    def count(rows=rows, email=_email, phone=_phone, use=("e", "p"), empty=False):
         def keys(row):
             out = []
             if "e" in use and (row[1].strip() or empty):
@@ -293,27 +315,45 @@ def test_dedupe_contacts_traps(tmp_path, difficulty, seed):
         return _components(rows, keys)
 
     expected = _expected(tmp_path)
-    assert count() == expected == params["people"]  # one group per person built
-    assert count(email=lambda e: _email(e, 2), phone=lambda p: _phone(p, 2)) == expected  # the instruction's full rules, at every level
+    assert count() == expected == params["people"]  # one group per person built (the instruction's full rules)
+    only_needed = lambda e: _email(e, tags="plus-tag" in variants, dots="gmail-dots" in variants)  # noqa: E731
+    assert count(email=only_needed, phone=lambda p: _phone(p, "country-code" in variants)) == expected  # the rules a variant needs
     assert count(email=lambda e: e, phone=lambda p: p) > expected  # no normalization
     assert count(phone=lambda p: p) > expected  # emails normalized, phones raw
     assert count(email=lambda e: e) > expected  # phones normalized, emails raw
     assert count(use=("e",)) > expected and count(use=("p",)) > expected  # one key only
-    assert len({(_email(e, level), _phone(p, level)) for _, e, p in rows}) > expected  # identical (email, phone) pairs
+    assert len({(_email(e), _phone(p)) for _, e, p in rows}) > expected  # identical (email, phone) pairs
     assert count(empty=True) < expected  # empty values matched to each other
     assert len({n.strip().lower() for n, _, _ in rows}) < expected  # by name
-    if level >= 2:
-        assert count(email=lambda e: _email(e, level, all_domains=True)) < expected  # dots dropped for every domain
-        assert count(email=lambda e: _email(e, 1)) > expected  # no +tag or gmail rule
-        assert count(phone=lambda p: re.sub(r"\D", "", p)) > expected  # country code kept
+    if "plus-tag" in variants:
+        assert count(email=lambda e: _email(e, tags=False)) > expected  # +tag kept
+    if "country-code" in variants:
+        assert count(phone=lambda p: _phone(p, country_code=False)) > expected  # country code kept
+    if "gmail-dots" in variants:
+        assert count(email=lambda e: _email(e, all_domains=True)) < expected  # dots dropped for every domain
+        assert count(email=lambda e: _email(e, dots=False)) > expected  # gmail dots kept
+    if "bridge" in variants:
         seen, greedy = set(), 0  # a row is new unless it matches an earlier row
         for _, e, p in rows:
-            ks = {k for k in (("e", _email(e, level)) if e.strip() else None, ("p", _phone(p, level)) if p.strip() else None) if k}
+            ks = {k for k in (("e", _email(e)) if e.strip() else None, ("p", _phone(p)) if p.strip() else None) if k}
             greedy += not (ks & seen)
             seen |= ks
         assert greedy > expected
     if level == 3:
         assert count(rows=rows[: len(files["contacts.csv"].splitlines()) - 1]) < expected  # contacts.csv only
+
+
+def test_dedupe_contacts_variants_per_level():
+    """Easy already has `+tag` emails and `+1` phones; medium and hard add the gmail-dots and
+    bridging people."""
+    fam = FAMILIES["dedupe_contacts"]
+    assert {d: p["variants"] for d, p in fam.difficulties.items()} == {
+        "easy": ["plus-tag", "country-code"],
+        "medium": ["plus-tag", "country-code", "gmail-dots", "bridge"],
+        "hard": ["plus-tag", "country-code", "gmail-dots", "bridge"],
+    }
+    spec = generate_spec(fam, "easy", 1).spec
+    assert {"no-plus-tags", "no-country-code"} <= set(spec.shortcuts) and not {"no-gmail-dots", "over-normalize", "greedy"} & set(spec.shortcuts)
 
 
 def test_dedupe_contacts_answer_varies_across_seeds():
@@ -322,6 +362,40 @@ def test_dedupe_contacts_answer_varies_across_seeds():
     for difficulty in fam.difficulties:
         answers = {generate_spec(fam, difficulty, seed).spec.grader.expected for seed in range(30)}
         assert len(answers) >= 4, (difficulty, answers)
+
+
+# ----------------------------------------------------------------------------- csv-revenue
+
+
+def _split_top(texts: list[str]) -> str | None:
+    """The top region when every line is split on "," and fields are taken by the header's positions."""
+    t: Counter = Counter()
+    for text in texts:
+        lines = text.splitlines()
+        cols = lines[0].split(",")
+        for ln in lines[1:]:
+            r = dict(zip(cols, ln.split(",")))
+            if r["status"] == "completed":
+                t[r["region"]] += int(r["quantity"]) * round(float(r["unit_price"]) * 100)
+    best = t.most_common(2)
+    return best[0][0] if best and (len(best) == 1 or best[0][1] != best[1][1]) else None
+
+
+def test_csv_revenue_share_of_instances_whose_commas_decide():
+    """Every instance quotes product names with commas; in about the level's share of instances
+    splitting lines on "," gives a wrong region, and in the others the right one."""
+    fam = MODS["csv_revenue"].FAMILY
+    for difficulty, p in fam.difficulties.items():
+        decided = []
+        for seed in range(200):
+            spec = generate_spec(fam, difficulty, seed).spec
+            texts = [t.decode() for t in file_bytes(spec).values()]
+            assert any('"' in t for t in texts)
+            decides = spec.params["commas_decide"]
+            assert (_split_top(texts) != spec.grader.expected) == decides == ("naive-split" in spec.shortcuts), (difficulty, seed)
+            decided.append(decides)
+        assert abs(sum(decided) / len(decided) - p["deciding_commas"]) <= 0.1, difficulty
+    assert [p["deciding_commas"] for p in fam.difficulties.values()] == [0.35, 0.6, 0.75]
 
 
 # ----------------------------------------------------------------------------- json-aggregate: numbers by value

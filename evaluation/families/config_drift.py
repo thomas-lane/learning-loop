@@ -6,32 +6,39 @@ The instruction is the same at every difficulty: it says that every `.json` file
 says that an object present on only one side is reported as the settings inside it. The
 data per difficulty:
 
-- easy: drifted hosts differ only in changed values; every dump is directly in `hosts/`;
-- medium: also settings missing on the host and settings only the host has, always inside
-  objects both sides have, so every difference is a single leaf;
-- hard: also a number written as a string, an object (a section or subsection such as `db`
-  or `db.pool`) the host lacks and a section only the host has, each reported as the
-  settings inside it; drifted hosts sit in region subdirectories of `hosts/`.
+- easy: drifted hosts differ in changed values; every dump is directly in `hosts/`; some
+  instances also have one object on only one side: an object (a section or subsection such
+  as `db` or `db.pool`) the host lacks, or a section only the host has, reported as the
+  settings inside it;
+- medium: also settings missing on the host and settings only the host has, inside objects
+  both sides have, and the one-sided object on more of the instances;
+- hard: also a number written as a string, and always both an object the host lacks and a
+  section only the host has; drifted hosts sit in region subdirectories of `hosts/`.
+
+Easy and medium draw the one-sided object for a share of the instances (`object_rate` in
+`FAMILY.difficulties`) instead of always or never: it is the trap that a generic recursive
+diff gets wrong, so the share sets how hard the level is.
 
 Construction: a baseline settings tree (`/app/configs/baseline.json`, every setting nested
 in a section) and one JSON dump per host. Every dump, the baseline included, is written with
 its own key order and indentation (2 or 4 spaces, or on one line), because order and
 whitespace do not count. Drifted hosts get 1-3 drifts each (an object drift gives one
 difference per setting inside the object), and every kind of drift the level requires
-appears on some host. The answer maps each drifted host to
-{dotted setting: {"baseline", "host"}}, with null for a missing side. The grader compares
-numbers by value (`1` equals `1.0`, both JSON numbers); a number and a string still differ
-(`8080` against `"8080"`), as the instruction says.
+appears on some host, as does the one-sided object where an instance draws it. The answer
+maps each drifted host to {dotted setting: {"baseline", "host"}}, with null for a missing
+side. The grader compares numbers by value (`1` equals `1.0`, both JSON numbers); a number
+and a string still differ (`8080` against `"8080"`), as the instruction says.
 
 Traps, by construction (each a declared shortcut where it applies): some hosts differ from
 the baseline only in key order or whitespace, so comparing file text flags them (they would
 appear with no differences; `textual`); every setting is nested, so comparing only
 top-level keys reports sections instead of settings (`top-level`). Medium/hard: a host has
 a setting the baseline lacks, so walking only the baseline's settings misses it
-(`baseline-keys-only`). Hard: a port is written as "8080" on one host, so comparing values
-as strings misses it (`str-compare`); reporting an object that exists on only one side as
-one entry instead of its settings fails (`whole-object`); drifted hosts sit in region
-subdirectories, so reading only `hosts/*.json` misses them (`top-dir-only`).
+(`baseline-keys-only`). Wherever an instance has an object on only one side (hard always,
+easy/medium when drawn), reporting it as one entry instead of its settings fails
+(`whole-object`). Hard: a port is written as "8080" on one host, so comparing values as
+strings misses it (`str-compare`); drifted hosts sit in region subdirectories, so reading
+only `hosts/*.json` misses them (`top-dir-only`).
 
 Every solution is one Python source (`SOLVER`) run with a mode, as in csv-revenue.
 """
@@ -278,6 +285,8 @@ def build(ctx):
     roles += ["same"] * (n - len(roles))
     rng.shuffle(roles)
     required = list(p["required_kinds"])
+    if p["object_rate"] and rng.random() < p["object_rate"]:  # easy/medium: some instances get one object drift
+        required.append(rng.choice(p["object_kinds"]))
     rng.shuffle(required)
     drifted = [i for i, r in enumerate(roles) if r == "drift"]
     plans = {i: [] for i in drifted}
@@ -343,14 +352,14 @@ def build(ctx):
 
 FAMILY = Family(
     name="config-drift",
-    version=3,
+    version=4,
     cluster="diagnosis",
     category="data",
     skills=("json", "diffing", "python", "diagnosis"),
     difficulties={
-        "easy": {"sections": 4, "hosts": 4, "drifted": 1, "format_only": 2, "kinds": ["value"], "required_kinds": ["value"], "regions": False},
-        "medium": {"sections": 5, "hosts": 6, "drifted": 2, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["value", "extra", "missing"], "regions": False},
-        "hard": {"sections": 6, "hosts": 8, "drifted": 3, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["type", "extra", "missing-object", "extra-object", "value"], "regions": True},
+        "easy": {"sections": 4, "hosts": 4, "drifted": 1, "format_only": 2, "kinds": ["value"], "required_kinds": ["value"], "object_rate": 0.35, "object_kinds": ["missing-object", "extra-object"], "regions": False},
+        "medium": {"sections": 5, "hosts": 6, "drifted": 2, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["value", "extra", "missing"], "object_rate": 0.6, "object_kinds": ["missing-object", "extra-object"], "regions": False},
+        "hard": {"sections": 6, "hosts": 8, "drifted": 3, "format_only": 3, "kinds": ["value", "missing", "extra"], "required_kinds": ["type", "extra", "missing-object", "extra-object", "value"], "object_rate": 0.0, "object_kinds": [], "regions": True},
     },
     build=build,
 )
