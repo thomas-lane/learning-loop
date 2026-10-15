@@ -784,3 +784,14 @@ panels:
                 session-count/medium/s302, session-count/hard/s301, session-count/hard/s302,
                 write-validator/easy/s301, write-validator/easy/s302, write-validator/medium/s301,
                 write-validator/medium/s302, write-validator/hard/s301, write-validator/hard/s302]
+  # Reduced panels for the one-cycle real-stack smoke run (plan phase 4): four trained families from
+  # four clusters, two train instances and one dev instance each.
+  smoke-train:
+    split: train
+    description: Smoke-run collection panel.
+    instances: [count-errors/easy/s1, count-errors/medium/s1, fix-stats/easy/s1, fix-stats/medium/s1,
+                json-aggregate/easy/s1, json-aggregate/medium/s1, broken-symlinks/easy/s1, broken-symlinks/medium/s1]
+  smoke-dev:
+    split: dev
+    description: Smoke-run monitoring panel.
+    instances: [count-errors/easy/s101, fix-stats/easy/s101, json-aggregate/easy/s101, broken-symlinks/easy/s101]
