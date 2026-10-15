@@ -1,0 +1,786 @@
+# The first all-E4B experiment's split over the 34 calibrated families (docs/plans/first-experiment.md).
+# Ten families never appear in training: the whole config-repair cluster, to measure transfer to
+# a kind of task the learner never trained on, and one family from five other clusters, to measure
+# transfer to a new task of a familiar kind. Each trained family has 4 train instances, 1 dev
+# instance and 2 final instances per difficulty; each held-out family has 2 final instances per
+# difficulty. Seed ranges are disjoint per split and outside the reserved calibration range.
+schema_version: 1
+name: first-e4b
+description: 24 trained families; config-repair and five single families held out.
+held_out_families: [bulk-rename, cron-translate, csv-revenue, env-reconcile, fix-dates, fix-json-config, resolve-conflicts, session-count, toml-migrate, write-validator]
+
+instances:
+  # --- train (seeds 1-4), trained families ---
+  - {id: broken-symlinks/easy/s1, family: broken-symlinks, difficulty: easy, seed: 1, split: train}
+  - {id: broken-symlinks/easy/s2, family: broken-symlinks, difficulty: easy, seed: 2, split: train}
+  - {id: broken-symlinks/easy/s3, family: broken-symlinks, difficulty: easy, seed: 3, split: train}
+  - {id: broken-symlinks/easy/s4, family: broken-symlinks, difficulty: easy, seed: 4, split: train}
+  - {id: broken-symlinks/medium/s1, family: broken-symlinks, difficulty: medium, seed: 1, split: train}
+  - {id: broken-symlinks/medium/s2, family: broken-symlinks, difficulty: medium, seed: 2, split: train}
+  - {id: broken-symlinks/medium/s3, family: broken-symlinks, difficulty: medium, seed: 3, split: train}
+  - {id: broken-symlinks/medium/s4, family: broken-symlinks, difficulty: medium, seed: 4, split: train}
+  - {id: broken-symlinks/hard/s1, family: broken-symlinks, difficulty: hard, seed: 1, split: train}
+  - {id: broken-symlinks/hard/s2, family: broken-symlinks, difficulty: hard, seed: 2, split: train}
+  - {id: broken-symlinks/hard/s3, family: broken-symlinks, difficulty: hard, seed: 3, split: train}
+  - {id: broken-symlinks/hard/s4, family: broken-symlinks, difficulty: hard, seed: 4, split: train}
+  - {id: cli-flags/easy/s1, family: cli-flags, difficulty: easy, seed: 1, split: train}
+  - {id: cli-flags/easy/s2, family: cli-flags, difficulty: easy, seed: 2, split: train}
+  - {id: cli-flags/easy/s3, family: cli-flags, difficulty: easy, seed: 3, split: train}
+  - {id: cli-flags/easy/s4, family: cli-flags, difficulty: easy, seed: 4, split: train}
+  - {id: cli-flags/medium/s1, family: cli-flags, difficulty: medium, seed: 1, split: train}
+  - {id: cli-flags/medium/s2, family: cli-flags, difficulty: medium, seed: 2, split: train}
+  - {id: cli-flags/medium/s3, family: cli-flags, difficulty: medium, seed: 3, split: train}
+  - {id: cli-flags/medium/s4, family: cli-flags, difficulty: medium, seed: 4, split: train}
+  - {id: cli-flags/hard/s1, family: cli-flags, difficulty: hard, seed: 1, split: train}
+  - {id: cli-flags/hard/s2, family: cli-flags, difficulty: hard, seed: 2, split: train}
+  - {id: cli-flags/hard/s3, family: cli-flags, difficulty: hard, seed: 3, split: train}
+  - {id: cli-flags/hard/s4, family: cli-flags, difficulty: hard, seed: 4, split: train}
+  - {id: config-drift/easy/s1, family: config-drift, difficulty: easy, seed: 1, split: train}
+  - {id: config-drift/easy/s2, family: config-drift, difficulty: easy, seed: 2, split: train}
+  - {id: config-drift/easy/s3, family: config-drift, difficulty: easy, seed: 3, split: train}
+  - {id: config-drift/easy/s4, family: config-drift, difficulty: easy, seed: 4, split: train}
+  - {id: config-drift/medium/s1, family: config-drift, difficulty: medium, seed: 1, split: train}
+  - {id: config-drift/medium/s2, family: config-drift, difficulty: medium, seed: 2, split: train}
+  - {id: config-drift/medium/s3, family: config-drift, difficulty: medium, seed: 3, split: train}
+  - {id: config-drift/medium/s4, family: config-drift, difficulty: medium, seed: 4, split: train}
+  - {id: config-drift/hard/s1, family: config-drift, difficulty: hard, seed: 1, split: train}
+  - {id: config-drift/hard/s2, family: config-drift, difficulty: hard, seed: 2, split: train}
+  - {id: config-drift/hard/s3, family: config-drift, difficulty: hard, seed: 3, split: train}
+  - {id: config-drift/hard/s4, family: config-drift, difficulty: hard, seed: 4, split: train}
+  - {id: count-errors/easy/s1, family: count-errors, difficulty: easy, seed: 1, split: train}
+  - {id: count-errors/easy/s2, family: count-errors, difficulty: easy, seed: 2, split: train}
+  - {id: count-errors/easy/s3, family: count-errors, difficulty: easy, seed: 3, split: train}
+  - {id: count-errors/easy/s4, family: count-errors, difficulty: easy, seed: 4, split: train}
+  - {id: count-errors/medium/s1, family: count-errors, difficulty: medium, seed: 1, split: train}
+  - {id: count-errors/medium/s2, family: count-errors, difficulty: medium, seed: 2, split: train}
+  - {id: count-errors/medium/s3, family: count-errors, difficulty: medium, seed: 3, split: train}
+  - {id: count-errors/medium/s4, family: count-errors, difficulty: medium, seed: 4, split: train}
+  - {id: count-errors/hard/s1, family: count-errors, difficulty: hard, seed: 1, split: train}
+  - {id: count-errors/hard/s2, family: count-errors, difficulty: hard, seed: 2, split: train}
+  - {id: count-errors/hard/s3, family: count-errors, difficulty: hard, seed: 3, split: train}
+  - {id: count-errors/hard/s4, family: count-errors, difficulty: hard, seed: 4, split: train}
+  - {id: dedupe-contacts/easy/s1, family: dedupe-contacts, difficulty: easy, seed: 1, split: train}
+  - {id: dedupe-contacts/easy/s2, family: dedupe-contacts, difficulty: easy, seed: 2, split: train}
+  - {id: dedupe-contacts/easy/s3, family: dedupe-contacts, difficulty: easy, seed: 3, split: train}
+  - {id: dedupe-contacts/easy/s4, family: dedupe-contacts, difficulty: easy, seed: 4, split: train}
+  - {id: dedupe-contacts/medium/s1, family: dedupe-contacts, difficulty: medium, seed: 1, split: train}
+  - {id: dedupe-contacts/medium/s2, family: dedupe-contacts, difficulty: medium, seed: 2, split: train}
+  - {id: dedupe-contacts/medium/s3, family: dedupe-contacts, difficulty: medium, seed: 3, split: train}
+  - {id: dedupe-contacts/medium/s4, family: dedupe-contacts, difficulty: medium, seed: 4, split: train}
+  - {id: dedupe-contacts/hard/s1, family: dedupe-contacts, difficulty: hard, seed: 1, split: train}
+  - {id: dedupe-contacts/hard/s2, family: dedupe-contacts, difficulty: hard, seed: 2, split: train}
+  - {id: dedupe-contacts/hard/s3, family: dedupe-contacts, difficulty: hard, seed: 3, split: train}
+  - {id: dedupe-contacts/hard/s4, family: dedupe-contacts, difficulty: hard, seed: 4, split: train}
+  - {id: dedupe-files/easy/s1, family: dedupe-files, difficulty: easy, seed: 1, split: train}
+  - {id: dedupe-files/easy/s2, family: dedupe-files, difficulty: easy, seed: 2, split: train}
+  - {id: dedupe-files/easy/s3, family: dedupe-files, difficulty: easy, seed: 3, split: train}
+  - {id: dedupe-files/easy/s4, family: dedupe-files, difficulty: easy, seed: 4, split: train}
+  - {id: dedupe-files/medium/s1, family: dedupe-files, difficulty: medium, seed: 1, split: train}
+  - {id: dedupe-files/medium/s2, family: dedupe-files, difficulty: medium, seed: 2, split: train}
+  - {id: dedupe-files/medium/s3, family: dedupe-files, difficulty: medium, seed: 3, split: train}
+  - {id: dedupe-files/medium/s4, family: dedupe-files, difficulty: medium, seed: 4, split: train}
+  - {id: dedupe-files/hard/s1, family: dedupe-files, difficulty: hard, seed: 1, split: train}
+  - {id: dedupe-files/hard/s2, family: dedupe-files, difficulty: hard, seed: 2, split: train}
+  - {id: dedupe-files/hard/s3, family: dedupe-files, difficulty: hard, seed: 3, split: train}
+  - {id: dedupe-files/hard/s4, family: dedupe-files, difficulty: hard, seed: 4, split: train}
+  - {id: error-burst/easy/s1, family: error-burst, difficulty: easy, seed: 1, split: train}
+  - {id: error-burst/easy/s2, family: error-burst, difficulty: easy, seed: 2, split: train}
+  - {id: error-burst/easy/s3, family: error-burst, difficulty: easy, seed: 3, split: train}
+  - {id: error-burst/easy/s4, family: error-burst, difficulty: easy, seed: 4, split: train}
+  - {id: error-burst/medium/s1, family: error-burst, difficulty: medium, seed: 1, split: train}
+  - {id: error-burst/medium/s2, family: error-burst, difficulty: medium, seed: 2, split: train}
+  - {id: error-burst/medium/s3, family: error-burst, difficulty: medium, seed: 3, split: train}
+  - {id: error-burst/medium/s4, family: error-burst, difficulty: medium, seed: 4, split: train}
+  - {id: error-burst/hard/s1, family: error-burst, difficulty: hard, seed: 1, split: train}
+  - {id: error-burst/hard/s2, family: error-burst, difficulty: hard, seed: 2, split: train}
+  - {id: error-burst/hard/s3, family: error-burst, difficulty: hard, seed: 3, split: train}
+  - {id: error-burst/hard/s4, family: error-burst, difficulty: hard, seed: 4, split: train}
+  - {id: fix-pagination/easy/s1, family: fix-pagination, difficulty: easy, seed: 1, split: train}
+  - {id: fix-pagination/easy/s2, family: fix-pagination, difficulty: easy, seed: 2, split: train}
+  - {id: fix-pagination/easy/s3, family: fix-pagination, difficulty: easy, seed: 3, split: train}
+  - {id: fix-pagination/easy/s4, family: fix-pagination, difficulty: easy, seed: 4, split: train}
+  - {id: fix-pagination/medium/s1, family: fix-pagination, difficulty: medium, seed: 1, split: train}
+  - {id: fix-pagination/medium/s2, family: fix-pagination, difficulty: medium, seed: 2, split: train}
+  - {id: fix-pagination/medium/s3, family: fix-pagination, difficulty: medium, seed: 3, split: train}
+  - {id: fix-pagination/medium/s4, family: fix-pagination, difficulty: medium, seed: 4, split: train}
+  - {id: fix-pagination/hard/s1, family: fix-pagination, difficulty: hard, seed: 1, split: train}
+  - {id: fix-pagination/hard/s2, family: fix-pagination, difficulty: hard, seed: 2, split: train}
+  - {id: fix-pagination/hard/s3, family: fix-pagination, difficulty: hard, seed: 3, split: train}
+  - {id: fix-pagination/hard/s4, family: fix-pagination, difficulty: hard, seed: 4, split: train}
+  - {id: fix-parser/easy/s1, family: fix-parser, difficulty: easy, seed: 1, split: train}
+  - {id: fix-parser/easy/s2, family: fix-parser, difficulty: easy, seed: 2, split: train}
+  - {id: fix-parser/easy/s3, family: fix-parser, difficulty: easy, seed: 3, split: train}
+  - {id: fix-parser/easy/s4, family: fix-parser, difficulty: easy, seed: 4, split: train}
+  - {id: fix-parser/medium/s1, family: fix-parser, difficulty: medium, seed: 1, split: train}
+  - {id: fix-parser/medium/s2, family: fix-parser, difficulty: medium, seed: 2, split: train}
+  - {id: fix-parser/medium/s3, family: fix-parser, difficulty: medium, seed: 3, split: train}
+  - {id: fix-parser/medium/s4, family: fix-parser, difficulty: medium, seed: 4, split: train}
+  - {id: fix-parser/hard/s1, family: fix-parser, difficulty: hard, seed: 1, split: train}
+  - {id: fix-parser/hard/s2, family: fix-parser, difficulty: hard, seed: 2, split: train}
+  - {id: fix-parser/hard/s3, family: fix-parser, difficulty: hard, seed: 3, split: train}
+  - {id: fix-parser/hard/s4, family: fix-parser, difficulty: hard, seed: 4, split: train}
+  - {id: fix-shell-script/easy/s1, family: fix-shell-script, difficulty: easy, seed: 1, split: train}
+  - {id: fix-shell-script/easy/s2, family: fix-shell-script, difficulty: easy, seed: 2, split: train}
+  - {id: fix-shell-script/easy/s3, family: fix-shell-script, difficulty: easy, seed: 3, split: train}
+  - {id: fix-shell-script/easy/s4, family: fix-shell-script, difficulty: easy, seed: 4, split: train}
+  - {id: fix-shell-script/medium/s1, family: fix-shell-script, difficulty: medium, seed: 1, split: train}
+  - {id: fix-shell-script/medium/s2, family: fix-shell-script, difficulty: medium, seed: 2, split: train}
+  - {id: fix-shell-script/medium/s3, family: fix-shell-script, difficulty: medium, seed: 3, split: train}
+  - {id: fix-shell-script/medium/s4, family: fix-shell-script, difficulty: medium, seed: 4, split: train}
+  - {id: fix-shell-script/hard/s1, family: fix-shell-script, difficulty: hard, seed: 1, split: train}
+  - {id: fix-shell-script/hard/s2, family: fix-shell-script, difficulty: hard, seed: 2, split: train}
+  - {id: fix-shell-script/hard/s3, family: fix-shell-script, difficulty: hard, seed: 3, split: train}
+  - {id: fix-shell-script/hard/s4, family: fix-shell-script, difficulty: hard, seed: 4, split: train}
+  - {id: fix-stats/easy/s1, family: fix-stats, difficulty: easy, seed: 1, split: train}
+  - {id: fix-stats/easy/s2, family: fix-stats, difficulty: easy, seed: 2, split: train}
+  - {id: fix-stats/easy/s3, family: fix-stats, difficulty: easy, seed: 3, split: train}
+  - {id: fix-stats/easy/s4, family: fix-stats, difficulty: easy, seed: 4, split: train}
+  - {id: fix-stats/medium/s1, family: fix-stats, difficulty: medium, seed: 1, split: train}
+  - {id: fix-stats/medium/s2, family: fix-stats, difficulty: medium, seed: 2, split: train}
+  - {id: fix-stats/medium/s3, family: fix-stats, difficulty: medium, seed: 3, split: train}
+  - {id: fix-stats/medium/s4, family: fix-stats, difficulty: medium, seed: 4, split: train}
+  - {id: fix-stats/hard/s1, family: fix-stats, difficulty: hard, seed: 1, split: train}
+  - {id: fix-stats/hard/s2, family: fix-stats, difficulty: hard, seed: 2, split: train}
+  - {id: fix-stats/hard/s3, family: fix-stats, difficulty: hard, seed: 3, split: train}
+  - {id: fix-stats/hard/s4, family: fix-stats, difficulty: hard, seed: 4, split: train}
+  - {id: format-converter/easy/s1, family: format-converter, difficulty: easy, seed: 1, split: train}
+  - {id: format-converter/easy/s2, family: format-converter, difficulty: easy, seed: 2, split: train}
+  - {id: format-converter/easy/s3, family: format-converter, difficulty: easy, seed: 3, split: train}
+  - {id: format-converter/easy/s4, family: format-converter, difficulty: easy, seed: 4, split: train}
+  - {id: format-converter/medium/s1, family: format-converter, difficulty: medium, seed: 1, split: train}
+  - {id: format-converter/medium/s2, family: format-converter, difficulty: medium, seed: 2, split: train}
+  - {id: format-converter/medium/s3, family: format-converter, difficulty: medium, seed: 3, split: train}
+  - {id: format-converter/medium/s4, family: format-converter, difficulty: medium, seed: 4, split: train}
+  - {id: format-converter/hard/s1, family: format-converter, difficulty: hard, seed: 1, split: train}
+  - {id: format-converter/hard/s2, family: format-converter, difficulty: hard, seed: 2, split: train}
+  - {id: format-converter/hard/s3, family: format-converter, difficulty: hard, seed: 3, split: train}
+  - {id: format-converter/hard/s4, family: format-converter, difficulty: hard, seed: 4, split: train}
+  - {id: implement-function/easy/s1, family: implement-function, difficulty: easy, seed: 1, split: train}
+  - {id: implement-function/easy/s2, family: implement-function, difficulty: easy, seed: 2, split: train}
+  - {id: implement-function/easy/s3, family: implement-function, difficulty: easy, seed: 3, split: train}
+  - {id: implement-function/easy/s4, family: implement-function, difficulty: easy, seed: 4, split: train}
+  - {id: implement-function/medium/s1, family: implement-function, difficulty: medium, seed: 1, split: train}
+  - {id: implement-function/medium/s2, family: implement-function, difficulty: medium, seed: 2, split: train}
+  - {id: implement-function/medium/s3, family: implement-function, difficulty: medium, seed: 3, split: train}
+  - {id: implement-function/medium/s4, family: implement-function, difficulty: medium, seed: 4, split: train}
+  - {id: implement-function/hard/s1, family: implement-function, difficulty: hard, seed: 1, split: train}
+  - {id: implement-function/hard/s2, family: implement-function, difficulty: hard, seed: 2, split: train}
+  - {id: implement-function/hard/s3, family: implement-function, difficulty: hard, seed: 3, split: train}
+  - {id: implement-function/hard/s4, family: implement-function, difficulty: hard, seed: 4, split: train}
+  - {id: import-cycle/easy/s1, family: import-cycle, difficulty: easy, seed: 1, split: train}
+  - {id: import-cycle/easy/s2, family: import-cycle, difficulty: easy, seed: 2, split: train}
+  - {id: import-cycle/easy/s3, family: import-cycle, difficulty: easy, seed: 3, split: train}
+  - {id: import-cycle/easy/s4, family: import-cycle, difficulty: easy, seed: 4, split: train}
+  - {id: import-cycle/medium/s1, family: import-cycle, difficulty: medium, seed: 1, split: train}
+  - {id: import-cycle/medium/s2, family: import-cycle, difficulty: medium, seed: 2, split: train}
+  - {id: import-cycle/medium/s3, family: import-cycle, difficulty: medium, seed: 3, split: train}
+  - {id: import-cycle/medium/s4, family: import-cycle, difficulty: medium, seed: 4, split: train}
+  - {id: import-cycle/hard/s1, family: import-cycle, difficulty: hard, seed: 1, split: train}
+  - {id: import-cycle/hard/s2, family: import-cycle, difficulty: hard, seed: 2, split: train}
+  - {id: import-cycle/hard/s3, family: import-cycle, difficulty: hard, seed: 3, split: train}
+  - {id: import-cycle/hard/s4, family: import-cycle, difficulty: hard, seed: 4, split: train}
+  - {id: join-orders/easy/s1, family: join-orders, difficulty: easy, seed: 1, split: train}
+  - {id: join-orders/easy/s2, family: join-orders, difficulty: easy, seed: 2, split: train}
+  - {id: join-orders/easy/s3, family: join-orders, difficulty: easy, seed: 3, split: train}
+  - {id: join-orders/easy/s4, family: join-orders, difficulty: easy, seed: 4, split: train}
+  - {id: join-orders/medium/s1, family: join-orders, difficulty: medium, seed: 1, split: train}
+  - {id: join-orders/medium/s2, family: join-orders, difficulty: medium, seed: 2, split: train}
+  - {id: join-orders/medium/s3, family: join-orders, difficulty: medium, seed: 3, split: train}
+  - {id: join-orders/medium/s4, family: join-orders, difficulty: medium, seed: 4, split: train}
+  - {id: join-orders/hard/s1, family: join-orders, difficulty: hard, seed: 1, split: train}
+  - {id: join-orders/hard/s2, family: join-orders, difficulty: hard, seed: 2, split: train}
+  - {id: join-orders/hard/s3, family: join-orders, difficulty: hard, seed: 3, split: train}
+  - {id: join-orders/hard/s4, family: join-orders, difficulty: hard, seed: 4, split: train}
+  - {id: json-aggregate/easy/s1, family: json-aggregate, difficulty: easy, seed: 1, split: train}
+  - {id: json-aggregate/easy/s2, family: json-aggregate, difficulty: easy, seed: 2, split: train}
+  - {id: json-aggregate/easy/s3, family: json-aggregate, difficulty: easy, seed: 3, split: train}
+  - {id: json-aggregate/easy/s4, family: json-aggregate, difficulty: easy, seed: 4, split: train}
+  - {id: json-aggregate/medium/s1, family: json-aggregate, difficulty: medium, seed: 1, split: train}
+  - {id: json-aggregate/medium/s2, family: json-aggregate, difficulty: medium, seed: 2, split: train}
+  - {id: json-aggregate/medium/s3, family: json-aggregate, difficulty: medium, seed: 3, split: train}
+  - {id: json-aggregate/medium/s4, family: json-aggregate, difficulty: medium, seed: 4, split: train}
+  - {id: json-aggregate/hard/s1, family: json-aggregate, difficulty: hard, seed: 1, split: train}
+  - {id: json-aggregate/hard/s2, family: json-aggregate, difficulty: hard, seed: 2, split: train}
+  - {id: json-aggregate/hard/s3, family: json-aggregate, difficulty: hard, seed: 3, split: train}
+  - {id: json-aggregate/hard/s4, family: json-aggregate, difficulty: hard, seed: 4, split: train}
+  - {id: latency-p95/easy/s1, family: latency-p95, difficulty: easy, seed: 1, split: train}
+  - {id: latency-p95/easy/s2, family: latency-p95, difficulty: easy, seed: 2, split: train}
+  - {id: latency-p95/easy/s3, family: latency-p95, difficulty: easy, seed: 3, split: train}
+  - {id: latency-p95/easy/s4, family: latency-p95, difficulty: easy, seed: 4, split: train}
+  - {id: latency-p95/medium/s1, family: latency-p95, difficulty: medium, seed: 1, split: train}
+  - {id: latency-p95/medium/s2, family: latency-p95, difficulty: medium, seed: 2, split: train}
+  - {id: latency-p95/medium/s3, family: latency-p95, difficulty: medium, seed: 3, split: train}
+  - {id: latency-p95/medium/s4, family: latency-p95, difficulty: medium, seed: 4, split: train}
+  - {id: latency-p95/hard/s1, family: latency-p95, difficulty: hard, seed: 1, split: train}
+  - {id: latency-p95/hard/s2, family: latency-p95, difficulty: hard, seed: 2, split: train}
+  - {id: latency-p95/hard/s3, family: latency-p95, difficulty: hard, seed: 3, split: train}
+  - {id: latency-p95/hard/s4, family: latency-p95, difficulty: hard, seed: 4, split: train}
+  - {id: log-triage/easy/s1, family: log-triage, difficulty: easy, seed: 1, split: train}
+  - {id: log-triage/easy/s2, family: log-triage, difficulty: easy, seed: 2, split: train}
+  - {id: log-triage/easy/s3, family: log-triage, difficulty: easy, seed: 3, split: train}
+  - {id: log-triage/easy/s4, family: log-triage, difficulty: easy, seed: 4, split: train}
+  - {id: log-triage/medium/s1, family: log-triage, difficulty: medium, seed: 1, split: train}
+  - {id: log-triage/medium/s2, family: log-triage, difficulty: medium, seed: 2, split: train}
+  - {id: log-triage/medium/s3, family: log-triage, difficulty: medium, seed: 3, split: train}
+  - {id: log-triage/medium/s4, family: log-triage, difficulty: medium, seed: 4, split: train}
+  - {id: log-triage/hard/s1, family: log-triage, difficulty: hard, seed: 1, split: train}
+  - {id: log-triage/hard/s2, family: log-triage, difficulty: hard, seed: 2, split: train}
+  - {id: log-triage/hard/s3, family: log-triage, difficulty: hard, seed: 3, split: train}
+  - {id: log-triage/hard/s4, family: log-triage, difficulty: hard, seed: 4, split: train}
+  - {id: organize-files/easy/s1, family: organize-files, difficulty: easy, seed: 1, split: train}
+  - {id: organize-files/easy/s2, family: organize-files, difficulty: easy, seed: 2, split: train}
+  - {id: organize-files/easy/s3, family: organize-files, difficulty: easy, seed: 3, split: train}
+  - {id: organize-files/easy/s4, family: organize-files, difficulty: easy, seed: 4, split: train}
+  - {id: organize-files/medium/s1, family: organize-files, difficulty: medium, seed: 1, split: train}
+  - {id: organize-files/medium/s2, family: organize-files, difficulty: medium, seed: 2, split: train}
+  - {id: organize-files/medium/s3, family: organize-files, difficulty: medium, seed: 3, split: train}
+  - {id: organize-files/medium/s4, family: organize-files, difficulty: medium, seed: 4, split: train}
+  - {id: organize-files/hard/s1, family: organize-files, difficulty: hard, seed: 1, split: train}
+  - {id: organize-files/hard/s2, family: organize-files, difficulty: hard, seed: 2, split: train}
+  - {id: organize-files/hard/s3, family: organize-files, difficulty: hard, seed: 3, split: train}
+  - {id: organize-files/hard/s4, family: organize-files, difficulty: hard, seed: 4, split: train}
+  - {id: permissions-fix/easy/s1, family: permissions-fix, difficulty: easy, seed: 1, split: train}
+  - {id: permissions-fix/easy/s2, family: permissions-fix, difficulty: easy, seed: 2, split: train}
+  - {id: permissions-fix/easy/s3, family: permissions-fix, difficulty: easy, seed: 3, split: train}
+  - {id: permissions-fix/easy/s4, family: permissions-fix, difficulty: easy, seed: 4, split: train}
+  - {id: permissions-fix/medium/s1, family: permissions-fix, difficulty: medium, seed: 1, split: train}
+  - {id: permissions-fix/medium/s2, family: permissions-fix, difficulty: medium, seed: 2, split: train}
+  - {id: permissions-fix/medium/s3, family: permissions-fix, difficulty: medium, seed: 3, split: train}
+  - {id: permissions-fix/medium/s4, family: permissions-fix, difficulty: medium, seed: 4, split: train}
+  - {id: permissions-fix/hard/s1, family: permissions-fix, difficulty: hard, seed: 1, split: train}
+  - {id: permissions-fix/hard/s2, family: permissions-fix, difficulty: hard, seed: 2, split: train}
+  - {id: permissions-fix/hard/s3, family: permissions-fix, difficulty: hard, seed: 3, split: train}
+  - {id: permissions-fix/hard/s4, family: permissions-fix, difficulty: hard, seed: 4, split: train}
+  - {id: refactor-preserve/easy/s1, family: refactor-preserve, difficulty: easy, seed: 1, split: train}
+  - {id: refactor-preserve/easy/s2, family: refactor-preserve, difficulty: easy, seed: 2, split: train}
+  - {id: refactor-preserve/easy/s3, family: refactor-preserve, difficulty: easy, seed: 3, split: train}
+  - {id: refactor-preserve/easy/s4, family: refactor-preserve, difficulty: easy, seed: 4, split: train}
+  - {id: refactor-preserve/medium/s1, family: refactor-preserve, difficulty: medium, seed: 1, split: train}
+  - {id: refactor-preserve/medium/s2, family: refactor-preserve, difficulty: medium, seed: 2, split: train}
+  - {id: refactor-preserve/medium/s3, family: refactor-preserve, difficulty: medium, seed: 3, split: train}
+  - {id: refactor-preserve/medium/s4, family: refactor-preserve, difficulty: medium, seed: 4, split: train}
+  - {id: refactor-preserve/hard/s1, family: refactor-preserve, difficulty: hard, seed: 1, split: train}
+  - {id: refactor-preserve/hard/s2, family: refactor-preserve, difficulty: hard, seed: 2, split: train}
+  - {id: refactor-preserve/hard/s3, family: refactor-preserve, difficulty: hard, seed: 3, split: train}
+  - {id: refactor-preserve/hard/s4, family: refactor-preserve, difficulty: hard, seed: 4, split: train}
+  - {id: slow-query/easy/s1, family: slow-query, difficulty: easy, seed: 1, split: train}
+  - {id: slow-query/easy/s2, family: slow-query, difficulty: easy, seed: 2, split: train}
+  - {id: slow-query/easy/s3, family: slow-query, difficulty: easy, seed: 3, split: train}
+  - {id: slow-query/easy/s4, family: slow-query, difficulty: easy, seed: 4, split: train}
+  - {id: slow-query/medium/s1, family: slow-query, difficulty: medium, seed: 1, split: train}
+  - {id: slow-query/medium/s2, family: slow-query, difficulty: medium, seed: 2, split: train}
+  - {id: slow-query/medium/s3, family: slow-query, difficulty: medium, seed: 3, split: train}
+  - {id: slow-query/medium/s4, family: slow-query, difficulty: medium, seed: 4, split: train}
+  - {id: slow-query/hard/s1, family: slow-query, difficulty: hard, seed: 1, split: train}
+  - {id: slow-query/hard/s2, family: slow-query, difficulty: hard, seed: 2, split: train}
+  - {id: slow-query/hard/s3, family: slow-query, difficulty: hard, seed: 3, split: train}
+  - {id: slow-query/hard/s4, family: slow-query, difficulty: hard, seed: 4, split: train}
+  - {id: sqlite-query/easy/s1, family: sqlite-query, difficulty: easy, seed: 1, split: train}
+  - {id: sqlite-query/easy/s2, family: sqlite-query, difficulty: easy, seed: 2, split: train}
+  - {id: sqlite-query/easy/s3, family: sqlite-query, difficulty: easy, seed: 3, split: train}
+  - {id: sqlite-query/easy/s4, family: sqlite-query, difficulty: easy, seed: 4, split: train}
+  - {id: sqlite-query/medium/s1, family: sqlite-query, difficulty: medium, seed: 1, split: train}
+  - {id: sqlite-query/medium/s2, family: sqlite-query, difficulty: medium, seed: 2, split: train}
+  - {id: sqlite-query/medium/s3, family: sqlite-query, difficulty: medium, seed: 3, split: train}
+  - {id: sqlite-query/medium/s4, family: sqlite-query, difficulty: medium, seed: 4, split: train}
+  - {id: sqlite-query/hard/s1, family: sqlite-query, difficulty: hard, seed: 1, split: train}
+  - {id: sqlite-query/hard/s2, family: sqlite-query, difficulty: hard, seed: 2, split: train}
+  - {id: sqlite-query/hard/s3, family: sqlite-query, difficulty: hard, seed: 3, split: train}
+  - {id: sqlite-query/hard/s4, family: sqlite-query, difficulty: hard, seed: 4, split: train}
+  - {id: traceback-locate/easy/s1, family: traceback-locate, difficulty: easy, seed: 1, split: train}
+  - {id: traceback-locate/easy/s2, family: traceback-locate, difficulty: easy, seed: 2, split: train}
+  - {id: traceback-locate/easy/s3, family: traceback-locate, difficulty: easy, seed: 3, split: train}
+  - {id: traceback-locate/easy/s4, family: traceback-locate, difficulty: easy, seed: 4, split: train}
+  - {id: traceback-locate/medium/s1, family: traceback-locate, difficulty: medium, seed: 1, split: train}
+  - {id: traceback-locate/medium/s2, family: traceback-locate, difficulty: medium, seed: 2, split: train}
+  - {id: traceback-locate/medium/s3, family: traceback-locate, difficulty: medium, seed: 3, split: train}
+  - {id: traceback-locate/medium/s4, family: traceback-locate, difficulty: medium, seed: 4, split: train}
+  - {id: traceback-locate/hard/s1, family: traceback-locate, difficulty: hard, seed: 1, split: train}
+  - {id: traceback-locate/hard/s2, family: traceback-locate, difficulty: hard, seed: 2, split: train}
+  - {id: traceback-locate/hard/s3, family: traceback-locate, difficulty: hard, seed: 3, split: train}
+  - {id: traceback-locate/hard/s4, family: traceback-locate, difficulty: hard, seed: 4, split: train}
+  # --- dev (seed 101), trained families ---
+  - {id: broken-symlinks/easy/s101, family: broken-symlinks, difficulty: easy, seed: 101, split: dev}
+  - {id: broken-symlinks/medium/s101, family: broken-symlinks, difficulty: medium, seed: 101, split: dev}
+  - {id: broken-symlinks/hard/s101, family: broken-symlinks, difficulty: hard, seed: 101, split: dev}
+  - {id: cli-flags/easy/s101, family: cli-flags, difficulty: easy, seed: 101, split: dev}
+  - {id: cli-flags/medium/s101, family: cli-flags, difficulty: medium, seed: 101, split: dev}
+  - {id: cli-flags/hard/s101, family: cli-flags, difficulty: hard, seed: 101, split: dev}
+  - {id: config-drift/easy/s101, family: config-drift, difficulty: easy, seed: 101, split: dev}
+  - {id: config-drift/medium/s101, family: config-drift, difficulty: medium, seed: 101, split: dev}
+  - {id: config-drift/hard/s101, family: config-drift, difficulty: hard, seed: 101, split: dev}
+  - {id: count-errors/easy/s101, family: count-errors, difficulty: easy, seed: 101, split: dev}
+  - {id: count-errors/medium/s101, family: count-errors, difficulty: medium, seed: 101, split: dev}
+  - {id: count-errors/hard/s101, family: count-errors, difficulty: hard, seed: 101, split: dev}
+  - {id: dedupe-contacts/easy/s101, family: dedupe-contacts, difficulty: easy, seed: 101, split: dev}
+  - {id: dedupe-contacts/medium/s101, family: dedupe-contacts, difficulty: medium, seed: 101, split: dev}
+  - {id: dedupe-contacts/hard/s101, family: dedupe-contacts, difficulty: hard, seed: 101, split: dev}
+  - {id: dedupe-files/easy/s101, family: dedupe-files, difficulty: easy, seed: 101, split: dev}
+  - {id: dedupe-files/medium/s101, family: dedupe-files, difficulty: medium, seed: 101, split: dev}
+  - {id: dedupe-files/hard/s101, family: dedupe-files, difficulty: hard, seed: 101, split: dev}
+  - {id: error-burst/easy/s101, family: error-burst, difficulty: easy, seed: 101, split: dev}
+  - {id: error-burst/medium/s101, family: error-burst, difficulty: medium, seed: 101, split: dev}
+  - {id: error-burst/hard/s101, family: error-burst, difficulty: hard, seed: 101, split: dev}
+  - {id: fix-pagination/easy/s101, family: fix-pagination, difficulty: easy, seed: 101, split: dev}
+  - {id: fix-pagination/medium/s101, family: fix-pagination, difficulty: medium, seed: 101, split: dev}
+  - {id: fix-pagination/hard/s101, family: fix-pagination, difficulty: hard, seed: 101, split: dev}
+  - {id: fix-parser/easy/s101, family: fix-parser, difficulty: easy, seed: 101, split: dev}
+  - {id: fix-parser/medium/s101, family: fix-parser, difficulty: medium, seed: 101, split: dev}
+  - {id: fix-parser/hard/s101, family: fix-parser, difficulty: hard, seed: 101, split: dev}
+  - {id: fix-shell-script/easy/s101, family: fix-shell-script, difficulty: easy, seed: 101, split: dev}
+  - {id: fix-shell-script/medium/s101, family: fix-shell-script, difficulty: medium, seed: 101, split: dev}
+  - {id: fix-shell-script/hard/s101, family: fix-shell-script, difficulty: hard, seed: 101, split: dev}
+  - {id: fix-stats/easy/s101, family: fix-stats, difficulty: easy, seed: 101, split: dev}
+  - {id: fix-stats/medium/s101, family: fix-stats, difficulty: medium, seed: 101, split: dev}
+  - {id: fix-stats/hard/s101, family: fix-stats, difficulty: hard, seed: 101, split: dev}
+  - {id: format-converter/easy/s101, family: format-converter, difficulty: easy, seed: 101, split: dev}
+  - {id: format-converter/medium/s101, family: format-converter, difficulty: medium, seed: 101, split: dev}
+  - {id: format-converter/hard/s101, family: format-converter, difficulty: hard, seed: 101, split: dev}
+  - {id: implement-function/easy/s101, family: implement-function, difficulty: easy, seed: 101, split: dev}
+  - {id: implement-function/medium/s101, family: implement-function, difficulty: medium, seed: 101, split: dev}
+  - {id: implement-function/hard/s101, family: implement-function, difficulty: hard, seed: 101, split: dev}
+  - {id: import-cycle/easy/s101, family: import-cycle, difficulty: easy, seed: 101, split: dev}
+  - {id: import-cycle/medium/s101, family: import-cycle, difficulty: medium, seed: 101, split: dev}
+  - {id: import-cycle/hard/s101, family: import-cycle, difficulty: hard, seed: 101, split: dev}
+  - {id: join-orders/easy/s101, family: join-orders, difficulty: easy, seed: 101, split: dev}
+  - {id: join-orders/medium/s101, family: join-orders, difficulty: medium, seed: 101, split: dev}
+  - {id: join-orders/hard/s101, family: join-orders, difficulty: hard, seed: 101, split: dev}
+  - {id: json-aggregate/easy/s101, family: json-aggregate, difficulty: easy, seed: 101, split: dev}
+  - {id: json-aggregate/medium/s101, family: json-aggregate, difficulty: medium, seed: 101, split: dev}
+  - {id: json-aggregate/hard/s101, family: json-aggregate, difficulty: hard, seed: 101, split: dev}
+  - {id: latency-p95/easy/s101, family: latency-p95, difficulty: easy, seed: 101, split: dev}
+  - {id: latency-p95/medium/s101, family: latency-p95, difficulty: medium, seed: 101, split: dev}
+  - {id: latency-p95/hard/s101, family: latency-p95, difficulty: hard, seed: 101, split: dev}
+  - {id: log-triage/easy/s101, family: log-triage, difficulty: easy, seed: 101, split: dev}
+  - {id: log-triage/medium/s101, family: log-triage, difficulty: medium, seed: 101, split: dev}
+  - {id: log-triage/hard/s101, family: log-triage, difficulty: hard, seed: 101, split: dev}
+  - {id: organize-files/easy/s101, family: organize-files, difficulty: easy, seed: 101, split: dev}
+  - {id: organize-files/medium/s101, family: organize-files, difficulty: medium, seed: 101, split: dev}
+  - {id: organize-files/hard/s101, family: organize-files, difficulty: hard, seed: 101, split: dev}
+  - {id: permissions-fix/easy/s101, family: permissions-fix, difficulty: easy, seed: 101, split: dev}
+  - {id: permissions-fix/medium/s101, family: permissions-fix, difficulty: medium, seed: 101, split: dev}
+  - {id: permissions-fix/hard/s101, family: permissions-fix, difficulty: hard, seed: 101, split: dev}
+  - {id: refactor-preserve/easy/s101, family: refactor-preserve, difficulty: easy, seed: 101, split: dev}
+  - {id: refactor-preserve/medium/s101, family: refactor-preserve, difficulty: medium, seed: 101, split: dev}
+  - {id: refactor-preserve/hard/s101, family: refactor-preserve, difficulty: hard, seed: 101, split: dev}
+  - {id: slow-query/easy/s101, family: slow-query, difficulty: easy, seed: 101, split: dev}
+  - {id: slow-query/medium/s101, family: slow-query, difficulty: medium, seed: 101, split: dev}
+  - {id: slow-query/hard/s101, family: slow-query, difficulty: hard, seed: 101, split: dev}
+  - {id: sqlite-query/easy/s101, family: sqlite-query, difficulty: easy, seed: 101, split: dev}
+  - {id: sqlite-query/medium/s101, family: sqlite-query, difficulty: medium, seed: 101, split: dev}
+  - {id: sqlite-query/hard/s101, family: sqlite-query, difficulty: hard, seed: 101, split: dev}
+  - {id: traceback-locate/easy/s101, family: traceback-locate, difficulty: easy, seed: 101, split: dev}
+  - {id: traceback-locate/medium/s101, family: traceback-locate, difficulty: medium, seed: 101, split: dev}
+  - {id: traceback-locate/hard/s101, family: traceback-locate, difficulty: hard, seed: 101, split: dev}
+  # --- final, trained families (seeds 201-202) ---
+  - {id: broken-symlinks/easy/s201, family: broken-symlinks, difficulty: easy, seed: 201, split: final}
+  - {id: broken-symlinks/easy/s202, family: broken-symlinks, difficulty: easy, seed: 202, split: final}
+  - {id: broken-symlinks/medium/s201, family: broken-symlinks, difficulty: medium, seed: 201, split: final}
+  - {id: broken-symlinks/medium/s202, family: broken-symlinks, difficulty: medium, seed: 202, split: final}
+  - {id: broken-symlinks/hard/s201, family: broken-symlinks, difficulty: hard, seed: 201, split: final}
+  - {id: broken-symlinks/hard/s202, family: broken-symlinks, difficulty: hard, seed: 202, split: final}
+  - {id: cli-flags/easy/s201, family: cli-flags, difficulty: easy, seed: 201, split: final}
+  - {id: cli-flags/easy/s202, family: cli-flags, difficulty: easy, seed: 202, split: final}
+  - {id: cli-flags/medium/s201, family: cli-flags, difficulty: medium, seed: 201, split: final}
+  - {id: cli-flags/medium/s202, family: cli-flags, difficulty: medium, seed: 202, split: final}
+  - {id: cli-flags/hard/s201, family: cli-flags, difficulty: hard, seed: 201, split: final}
+  - {id: cli-flags/hard/s202, family: cli-flags, difficulty: hard, seed: 202, split: final}
+  - {id: config-drift/easy/s201, family: config-drift, difficulty: easy, seed: 201, split: final}
+  - {id: config-drift/easy/s202, family: config-drift, difficulty: easy, seed: 202, split: final}
+  - {id: config-drift/medium/s201, family: config-drift, difficulty: medium, seed: 201, split: final}
+  - {id: config-drift/medium/s202, family: config-drift, difficulty: medium, seed: 202, split: final}
+  - {id: config-drift/hard/s201, family: config-drift, difficulty: hard, seed: 201, split: final}
+  - {id: config-drift/hard/s202, family: config-drift, difficulty: hard, seed: 202, split: final}
+  - {id: count-errors/easy/s201, family: count-errors, difficulty: easy, seed: 201, split: final}
+  - {id: count-errors/easy/s202, family: count-errors, difficulty: easy, seed: 202, split: final}
+  - {id: count-errors/medium/s201, family: count-errors, difficulty: medium, seed: 201, split: final}
+  - {id: count-errors/medium/s202, family: count-errors, difficulty: medium, seed: 202, split: final}
+  - {id: count-errors/hard/s201, family: count-errors, difficulty: hard, seed: 201, split: final}
+  - {id: count-errors/hard/s202, family: count-errors, difficulty: hard, seed: 202, split: final}
+  - {id: dedupe-contacts/easy/s201, family: dedupe-contacts, difficulty: easy, seed: 201, split: final}
+  - {id: dedupe-contacts/easy/s202, family: dedupe-contacts, difficulty: easy, seed: 202, split: final}
+  - {id: dedupe-contacts/medium/s201, family: dedupe-contacts, difficulty: medium, seed: 201, split: final}
+  - {id: dedupe-contacts/medium/s202, family: dedupe-contacts, difficulty: medium, seed: 202, split: final}
+  - {id: dedupe-contacts/hard/s201, family: dedupe-contacts, difficulty: hard, seed: 201, split: final}
+  - {id: dedupe-contacts/hard/s202, family: dedupe-contacts, difficulty: hard, seed: 202, split: final}
+  - {id: dedupe-files/easy/s201, family: dedupe-files, difficulty: easy, seed: 201, split: final}
+  - {id: dedupe-files/easy/s202, family: dedupe-files, difficulty: easy, seed: 202, split: final}
+  - {id: dedupe-files/medium/s201, family: dedupe-files, difficulty: medium, seed: 201, split: final}
+  - {id: dedupe-files/medium/s202, family: dedupe-files, difficulty: medium, seed: 202, split: final}
+  - {id: dedupe-files/hard/s201, family: dedupe-files, difficulty: hard, seed: 201, split: final}
+  - {id: dedupe-files/hard/s202, family: dedupe-files, difficulty: hard, seed: 202, split: final}
+  - {id: error-burst/easy/s201, family: error-burst, difficulty: easy, seed: 201, split: final}
+  - {id: error-burst/easy/s202, family: error-burst, difficulty: easy, seed: 202, split: final}
+  - {id: error-burst/medium/s201, family: error-burst, difficulty: medium, seed: 201, split: final}
+  - {id: error-burst/medium/s202, family: error-burst, difficulty: medium, seed: 202, split: final}
+  - {id: error-burst/hard/s201, family: error-burst, difficulty: hard, seed: 201, split: final}
+  - {id: error-burst/hard/s202, family: error-burst, difficulty: hard, seed: 202, split: final}
+  - {id: fix-pagination/easy/s201, family: fix-pagination, difficulty: easy, seed: 201, split: final}
+  - {id: fix-pagination/easy/s202, family: fix-pagination, difficulty: easy, seed: 202, split: final}
+  - {id: fix-pagination/medium/s201, family: fix-pagination, difficulty: medium, seed: 201, split: final}
+  - {id: fix-pagination/medium/s202, family: fix-pagination, difficulty: medium, seed: 202, split: final}
+  - {id: fix-pagination/hard/s201, family: fix-pagination, difficulty: hard, seed: 201, split: final}
+  - {id: fix-pagination/hard/s202, family: fix-pagination, difficulty: hard, seed: 202, split: final}
+  - {id: fix-parser/easy/s201, family: fix-parser, difficulty: easy, seed: 201, split: final}
+  - {id: fix-parser/easy/s202, family: fix-parser, difficulty: easy, seed: 202, split: final}
+  - {id: fix-parser/medium/s201, family: fix-parser, difficulty: medium, seed: 201, split: final}
+  - {id: fix-parser/medium/s202, family: fix-parser, difficulty: medium, seed: 202, split: final}
+  - {id: fix-parser/hard/s201, family: fix-parser, difficulty: hard, seed: 201, split: final}
+  - {id: fix-parser/hard/s202, family: fix-parser, difficulty: hard, seed: 202, split: final}
+  - {id: fix-shell-script/easy/s201, family: fix-shell-script, difficulty: easy, seed: 201, split: final}
+  - {id: fix-shell-script/easy/s202, family: fix-shell-script, difficulty: easy, seed: 202, split: final}
+  - {id: fix-shell-script/medium/s201, family: fix-shell-script, difficulty: medium, seed: 201, split: final}
+  - {id: fix-shell-script/medium/s202, family: fix-shell-script, difficulty: medium, seed: 202, split: final}
+  - {id: fix-shell-script/hard/s201, family: fix-shell-script, difficulty: hard, seed: 201, split: final}
+  - {id: fix-shell-script/hard/s202, family: fix-shell-script, difficulty: hard, seed: 202, split: final}
+  - {id: fix-stats/easy/s201, family: fix-stats, difficulty: easy, seed: 201, split: final}
+  - {id: fix-stats/easy/s202, family: fix-stats, difficulty: easy, seed: 202, split: final}
+  - {id: fix-stats/medium/s201, family: fix-stats, difficulty: medium, seed: 201, split: final}
+  - {id: fix-stats/medium/s202, family: fix-stats, difficulty: medium, seed: 202, split: final}
+  - {id: fix-stats/hard/s201, family: fix-stats, difficulty: hard, seed: 201, split: final}
+  - {id: fix-stats/hard/s202, family: fix-stats, difficulty: hard, seed: 202, split: final}
+  - {id: format-converter/easy/s201, family: format-converter, difficulty: easy, seed: 201, split: final}
+  - {id: format-converter/easy/s202, family: format-converter, difficulty: easy, seed: 202, split: final}
+  - {id: format-converter/medium/s201, family: format-converter, difficulty: medium, seed: 201, split: final}
+  - {id: format-converter/medium/s202, family: format-converter, difficulty: medium, seed: 202, split: final}
+  - {id: format-converter/hard/s201, family: format-converter, difficulty: hard, seed: 201, split: final}
+  - {id: format-converter/hard/s202, family: format-converter, difficulty: hard, seed: 202, split: final}
+  - {id: implement-function/easy/s201, family: implement-function, difficulty: easy, seed: 201, split: final}
+  - {id: implement-function/easy/s202, family: implement-function, difficulty: easy, seed: 202, split: final}
+  - {id: implement-function/medium/s201, family: implement-function, difficulty: medium, seed: 201, split: final}
+  - {id: implement-function/medium/s202, family: implement-function, difficulty: medium, seed: 202, split: final}
+  - {id: implement-function/hard/s201, family: implement-function, difficulty: hard, seed: 201, split: final}
+  - {id: implement-function/hard/s202, family: implement-function, difficulty: hard, seed: 202, split: final}
+  - {id: import-cycle/easy/s201, family: import-cycle, difficulty: easy, seed: 201, split: final}
+  - {id: import-cycle/easy/s202, family: import-cycle, difficulty: easy, seed: 202, split: final}
+  - {id: import-cycle/medium/s201, family: import-cycle, difficulty: medium, seed: 201, split: final}
+  - {id: import-cycle/medium/s202, family: import-cycle, difficulty: medium, seed: 202, split: final}
+  - {id: import-cycle/hard/s201, family: import-cycle, difficulty: hard, seed: 201, split: final}
+  - {id: import-cycle/hard/s202, family: import-cycle, difficulty: hard, seed: 202, split: final}
+  - {id: join-orders/easy/s201, family: join-orders, difficulty: easy, seed: 201, split: final}
+  - {id: join-orders/easy/s202, family: join-orders, difficulty: easy, seed: 202, split: final}
+  - {id: join-orders/medium/s201, family: join-orders, difficulty: medium, seed: 201, split: final}
+  - {id: join-orders/medium/s202, family: join-orders, difficulty: medium, seed: 202, split: final}
+  - {id: join-orders/hard/s201, family: join-orders, difficulty: hard, seed: 201, split: final}
+  - {id: join-orders/hard/s202, family: join-orders, difficulty: hard, seed: 202, split: final}
+  - {id: json-aggregate/easy/s201, family: json-aggregate, difficulty: easy, seed: 201, split: final}
+  - {id: json-aggregate/easy/s202, family: json-aggregate, difficulty: easy, seed: 202, split: final}
+  - {id: json-aggregate/medium/s201, family: json-aggregate, difficulty: medium, seed: 201, split: final}
+  - {id: json-aggregate/medium/s202, family: json-aggregate, difficulty: medium, seed: 202, split: final}
+  - {id: json-aggregate/hard/s201, family: json-aggregate, difficulty: hard, seed: 201, split: final}
+  - {id: json-aggregate/hard/s202, family: json-aggregate, difficulty: hard, seed: 202, split: final}
+  - {id: latency-p95/easy/s201, family: latency-p95, difficulty: easy, seed: 201, split: final}
+  - {id: latency-p95/easy/s202, family: latency-p95, difficulty: easy, seed: 202, split: final}
+  - {id: latency-p95/medium/s201, family: latency-p95, difficulty: medium, seed: 201, split: final}
+  - {id: latency-p95/medium/s202, family: latency-p95, difficulty: medium, seed: 202, split: final}
+  - {id: latency-p95/hard/s201, family: latency-p95, difficulty: hard, seed: 201, split: final}
+  - {id: latency-p95/hard/s202, family: latency-p95, difficulty: hard, seed: 202, split: final}
+  - {id: log-triage/easy/s201, family: log-triage, difficulty: easy, seed: 201, split: final}
+  - {id: log-triage/easy/s202, family: log-triage, difficulty: easy, seed: 202, split: final}
+  - {id: log-triage/medium/s201, family: log-triage, difficulty: medium, seed: 201, split: final}
+  - {id: log-triage/medium/s202, family: log-triage, difficulty: medium, seed: 202, split: final}
+  - {id: log-triage/hard/s201, family: log-triage, difficulty: hard, seed: 201, split: final}
+  - {id: log-triage/hard/s202, family: log-triage, difficulty: hard, seed: 202, split: final}
+  - {id: organize-files/easy/s201, family: organize-files, difficulty: easy, seed: 201, split: final}
+  - {id: organize-files/easy/s202, family: organize-files, difficulty: easy, seed: 202, split: final}
+  - {id: organize-files/medium/s201, family: organize-files, difficulty: medium, seed: 201, split: final}
+  - {id: organize-files/medium/s202, family: organize-files, difficulty: medium, seed: 202, split: final}
+  - {id: organize-files/hard/s201, family: organize-files, difficulty: hard, seed: 201, split: final}
+  - {id: organize-files/hard/s202, family: organize-files, difficulty: hard, seed: 202, split: final}
+  - {id: permissions-fix/easy/s201, family: permissions-fix, difficulty: easy, seed: 201, split: final}
+  - {id: permissions-fix/easy/s202, family: permissions-fix, difficulty: easy, seed: 202, split: final}
+  - {id: permissions-fix/medium/s201, family: permissions-fix, difficulty: medium, seed: 201, split: final}
+  - {id: permissions-fix/medium/s202, family: permissions-fix, difficulty: medium, seed: 202, split: final}
+  - {id: permissions-fix/hard/s201, family: permissions-fix, difficulty: hard, seed: 201, split: final}
+  - {id: permissions-fix/hard/s202, family: permissions-fix, difficulty: hard, seed: 202, split: final}
+  - {id: refactor-preserve/easy/s201, family: refactor-preserve, difficulty: easy, seed: 201, split: final}
+  - {id: refactor-preserve/easy/s202, family: refactor-preserve, difficulty: easy, seed: 202, split: final}
+  - {id: refactor-preserve/medium/s201, family: refactor-preserve, difficulty: medium, seed: 201, split: final}
+  - {id: refactor-preserve/medium/s202, family: refactor-preserve, difficulty: medium, seed: 202, split: final}
+  - {id: refactor-preserve/hard/s201, family: refactor-preserve, difficulty: hard, seed: 201, split: final}
+  - {id: refactor-preserve/hard/s202, family: refactor-preserve, difficulty: hard, seed: 202, split: final}
+  - {id: slow-query/easy/s201, family: slow-query, difficulty: easy, seed: 201, split: final}
+  - {id: slow-query/easy/s202, family: slow-query, difficulty: easy, seed: 202, split: final}
+  - {id: slow-query/medium/s201, family: slow-query, difficulty: medium, seed: 201, split: final}
+  - {id: slow-query/medium/s202, family: slow-query, difficulty: medium, seed: 202, split: final}
+  - {id: slow-query/hard/s201, family: slow-query, difficulty: hard, seed: 201, split: final}
+  - {id: slow-query/hard/s202, family: slow-query, difficulty: hard, seed: 202, split: final}
+  - {id: sqlite-query/easy/s201, family: sqlite-query, difficulty: easy, seed: 201, split: final}
+  - {id: sqlite-query/easy/s202, family: sqlite-query, difficulty: easy, seed: 202, split: final}
+  - {id: sqlite-query/medium/s201, family: sqlite-query, difficulty: medium, seed: 201, split: final}
+  - {id: sqlite-query/medium/s202, family: sqlite-query, difficulty: medium, seed: 202, split: final}
+  - {id: sqlite-query/hard/s201, family: sqlite-query, difficulty: hard, seed: 201, split: final}
+  - {id: sqlite-query/hard/s202, family: sqlite-query, difficulty: hard, seed: 202, split: final}
+  - {id: traceback-locate/easy/s201, family: traceback-locate, difficulty: easy, seed: 201, split: final}
+  - {id: traceback-locate/easy/s202, family: traceback-locate, difficulty: easy, seed: 202, split: final}
+  - {id: traceback-locate/medium/s201, family: traceback-locate, difficulty: medium, seed: 201, split: final}
+  - {id: traceback-locate/medium/s202, family: traceback-locate, difficulty: medium, seed: 202, split: final}
+  - {id: traceback-locate/hard/s201, family: traceback-locate, difficulty: hard, seed: 201, split: final}
+  - {id: traceback-locate/hard/s202, family: traceback-locate, difficulty: hard, seed: 202, split: final}
+  # --- final, held-out cluster config-repair (seeds 301-302) ---
+  - {id: cron-translate/easy/s301, family: cron-translate, difficulty: easy, seed: 301, split: final}
+  - {id: cron-translate/easy/s302, family: cron-translate, difficulty: easy, seed: 302, split: final}
+  - {id: cron-translate/medium/s301, family: cron-translate, difficulty: medium, seed: 301, split: final}
+  - {id: cron-translate/medium/s302, family: cron-translate, difficulty: medium, seed: 302, split: final}
+  - {id: cron-translate/hard/s301, family: cron-translate, difficulty: hard, seed: 301, split: final}
+  - {id: cron-translate/hard/s302, family: cron-translate, difficulty: hard, seed: 302, split: final}
+  - {id: env-reconcile/easy/s301, family: env-reconcile, difficulty: easy, seed: 301, split: final}
+  - {id: env-reconcile/easy/s302, family: env-reconcile, difficulty: easy, seed: 302, split: final}
+  - {id: env-reconcile/medium/s301, family: env-reconcile, difficulty: medium, seed: 301, split: final}
+  - {id: env-reconcile/medium/s302, family: env-reconcile, difficulty: medium, seed: 302, split: final}
+  - {id: env-reconcile/hard/s301, family: env-reconcile, difficulty: hard, seed: 301, split: final}
+  - {id: env-reconcile/hard/s302, family: env-reconcile, difficulty: hard, seed: 302, split: final}
+  - {id: fix-json-config/easy/s301, family: fix-json-config, difficulty: easy, seed: 301, split: final}
+  - {id: fix-json-config/easy/s302, family: fix-json-config, difficulty: easy, seed: 302, split: final}
+  - {id: fix-json-config/medium/s301, family: fix-json-config, difficulty: medium, seed: 301, split: final}
+  - {id: fix-json-config/medium/s302, family: fix-json-config, difficulty: medium, seed: 302, split: final}
+  - {id: fix-json-config/hard/s301, family: fix-json-config, difficulty: hard, seed: 301, split: final}
+  - {id: fix-json-config/hard/s302, family: fix-json-config, difficulty: hard, seed: 302, split: final}
+  - {id: resolve-conflicts/easy/s301, family: resolve-conflicts, difficulty: easy, seed: 301, split: final}
+  - {id: resolve-conflicts/easy/s302, family: resolve-conflicts, difficulty: easy, seed: 302, split: final}
+  - {id: resolve-conflicts/medium/s301, family: resolve-conflicts, difficulty: medium, seed: 301, split: final}
+  - {id: resolve-conflicts/medium/s302, family: resolve-conflicts, difficulty: medium, seed: 302, split: final}
+  - {id: resolve-conflicts/hard/s301, family: resolve-conflicts, difficulty: hard, seed: 301, split: final}
+  - {id: resolve-conflicts/hard/s302, family: resolve-conflicts, difficulty: hard, seed: 302, split: final}
+  - {id: toml-migrate/easy/s301, family: toml-migrate, difficulty: easy, seed: 301, split: final}
+  - {id: toml-migrate/easy/s302, family: toml-migrate, difficulty: easy, seed: 302, split: final}
+  - {id: toml-migrate/medium/s301, family: toml-migrate, difficulty: medium, seed: 301, split: final}
+  - {id: toml-migrate/medium/s302, family: toml-migrate, difficulty: medium, seed: 302, split: final}
+  - {id: toml-migrate/hard/s301, family: toml-migrate, difficulty: hard, seed: 301, split: final}
+  - {id: toml-migrate/hard/s302, family: toml-migrate, difficulty: hard, seed: 302, split: final}
+  # --- final, held-out single families (seeds 301-302) ---
+  - {id: bulk-rename/easy/s301, family: bulk-rename, difficulty: easy, seed: 301, split: final}
+  - {id: bulk-rename/easy/s302, family: bulk-rename, difficulty: easy, seed: 302, split: final}
+  - {id: bulk-rename/medium/s301, family: bulk-rename, difficulty: medium, seed: 301, split: final}
+  - {id: bulk-rename/medium/s302, family: bulk-rename, difficulty: medium, seed: 302, split: final}
+  - {id: bulk-rename/hard/s301, family: bulk-rename, difficulty: hard, seed: 301, split: final}
+  - {id: bulk-rename/hard/s302, family: bulk-rename, difficulty: hard, seed: 302, split: final}
+  - {id: csv-revenue/easy/s301, family: csv-revenue, difficulty: easy, seed: 301, split: final}
+  - {id: csv-revenue/easy/s302, family: csv-revenue, difficulty: easy, seed: 302, split: final}
+  - {id: csv-revenue/medium/s301, family: csv-revenue, difficulty: medium, seed: 301, split: final}
+  - {id: csv-revenue/medium/s302, family: csv-revenue, difficulty: medium, seed: 302, split: final}
+  - {id: csv-revenue/hard/s301, family: csv-revenue, difficulty: hard, seed: 301, split: final}
+  - {id: csv-revenue/hard/s302, family: csv-revenue, difficulty: hard, seed: 302, split: final}
+  - {id: fix-dates/easy/s301, family: fix-dates, difficulty: easy, seed: 301, split: final}
+  - {id: fix-dates/easy/s302, family: fix-dates, difficulty: easy, seed: 302, split: final}
+  - {id: fix-dates/medium/s301, family: fix-dates, difficulty: medium, seed: 301, split: final}
+  - {id: fix-dates/medium/s302, family: fix-dates, difficulty: medium, seed: 302, split: final}
+  - {id: fix-dates/hard/s301, family: fix-dates, difficulty: hard, seed: 301, split: final}
+  - {id: fix-dates/hard/s302, family: fix-dates, difficulty: hard, seed: 302, split: final}
+  - {id: session-count/easy/s301, family: session-count, difficulty: easy, seed: 301, split: final}
+  - {id: session-count/easy/s302, family: session-count, difficulty: easy, seed: 302, split: final}
+  - {id: session-count/medium/s301, family: session-count, difficulty: medium, seed: 301, split: final}
+  - {id: session-count/medium/s302, family: session-count, difficulty: medium, seed: 302, split: final}
+  - {id: session-count/hard/s301, family: session-count, difficulty: hard, seed: 301, split: final}
+  - {id: session-count/hard/s302, family: session-count, difficulty: hard, seed: 302, split: final}
+  - {id: write-validator/easy/s301, family: write-validator, difficulty: easy, seed: 301, split: final}
+  - {id: write-validator/easy/s302, family: write-validator, difficulty: easy, seed: 302, split: final}
+  - {id: write-validator/medium/s301, family: write-validator, difficulty: medium, seed: 301, split: final}
+  - {id: write-validator/medium/s302, family: write-validator, difficulty: medium, seed: 302, split: final}
+  - {id: write-validator/hard/s301, family: write-validator, difficulty: hard, seed: 301, split: final}
+  - {id: write-validator/hard/s302, family: write-validator, difficulty: hard, seed: 302, split: final}
+
+panels:
+  train:
+    split: train
+    description: Collection panel, every trained family at every difficulty.
+    instances: [broken-symlinks/easy/s1, broken-symlinks/easy/s2, broken-symlinks/easy/s3,
+                broken-symlinks/easy/s4, broken-symlinks/medium/s1, broken-symlinks/medium/s2,
+                broken-symlinks/medium/s3, broken-symlinks/medium/s4, broken-symlinks/hard/s1,
+                broken-symlinks/hard/s2, broken-symlinks/hard/s3, broken-symlinks/hard/s4,
+                cli-flags/easy/s1, cli-flags/easy/s2, cli-flags/easy/s3,
+                cli-flags/easy/s4, cli-flags/medium/s1, cli-flags/medium/s2,
+                cli-flags/medium/s3, cli-flags/medium/s4, cli-flags/hard/s1,
+                cli-flags/hard/s2, cli-flags/hard/s3, cli-flags/hard/s4,
+                config-drift/easy/s1, config-drift/easy/s2, config-drift/easy/s3,
+                config-drift/easy/s4, config-drift/medium/s1, config-drift/medium/s2,
+                config-drift/medium/s3, config-drift/medium/s4, config-drift/hard/s1,
+                config-drift/hard/s2, config-drift/hard/s3, config-drift/hard/s4,
+                count-errors/easy/s1, count-errors/easy/s2, count-errors/easy/s3,
+                count-errors/easy/s4, count-errors/medium/s1, count-errors/medium/s2,
+                count-errors/medium/s3, count-errors/medium/s4, count-errors/hard/s1,
+                count-errors/hard/s2, count-errors/hard/s3, count-errors/hard/s4,
+                dedupe-contacts/easy/s1, dedupe-contacts/easy/s2, dedupe-contacts/easy/s3,
+                dedupe-contacts/easy/s4, dedupe-contacts/medium/s1, dedupe-contacts/medium/s2,
+                dedupe-contacts/medium/s3, dedupe-contacts/medium/s4, dedupe-contacts/hard/s1,
+                dedupe-contacts/hard/s2, dedupe-contacts/hard/s3, dedupe-contacts/hard/s4,
+                dedupe-files/easy/s1, dedupe-files/easy/s2, dedupe-files/easy/s3,
+                dedupe-files/easy/s4, dedupe-files/medium/s1, dedupe-files/medium/s2,
+                dedupe-files/medium/s3, dedupe-files/medium/s4, dedupe-files/hard/s1,
+                dedupe-files/hard/s2, dedupe-files/hard/s3, dedupe-files/hard/s4,
+                error-burst/easy/s1, error-burst/easy/s2, error-burst/easy/s3,
+                error-burst/easy/s4, error-burst/medium/s1, error-burst/medium/s2,
+                error-burst/medium/s3, error-burst/medium/s4, error-burst/hard/s1,
+                error-burst/hard/s2, error-burst/hard/s3, error-burst/hard/s4,
+                fix-pagination/easy/s1, fix-pagination/easy/s2, fix-pagination/easy/s3,
+                fix-pagination/easy/s4, fix-pagination/medium/s1, fix-pagination/medium/s2,
+                fix-pagination/medium/s3, fix-pagination/medium/s4, fix-pagination/hard/s1,
+                fix-pagination/hard/s2, fix-pagination/hard/s3, fix-pagination/hard/s4,
+                fix-parser/easy/s1, fix-parser/easy/s2, fix-parser/easy/s3,
+                fix-parser/easy/s4, fix-parser/medium/s1, fix-parser/medium/s2,
+                fix-parser/medium/s3, fix-parser/medium/s4, fix-parser/hard/s1,
+                fix-parser/hard/s2, fix-parser/hard/s3, fix-parser/hard/s4,
+                fix-shell-script/easy/s1, fix-shell-script/easy/s2, fix-shell-script/easy/s3,
+                fix-shell-script/easy/s4, fix-shell-script/medium/s1, fix-shell-script/medium/s2,
+                fix-shell-script/medium/s3, fix-shell-script/medium/s4, fix-shell-script/hard/s1,
+                fix-shell-script/hard/s2, fix-shell-script/hard/s3, fix-shell-script/hard/s4,
+                fix-stats/easy/s1, fix-stats/easy/s2, fix-stats/easy/s3,
+                fix-stats/easy/s4, fix-stats/medium/s1, fix-stats/medium/s2,
+                fix-stats/medium/s3, fix-stats/medium/s4, fix-stats/hard/s1,
+                fix-stats/hard/s2, fix-stats/hard/s3, fix-stats/hard/s4,
+                format-converter/easy/s1, format-converter/easy/s2, format-converter/easy/s3,
+                format-converter/easy/s4, format-converter/medium/s1, format-converter/medium/s2,
+                format-converter/medium/s3, format-converter/medium/s4, format-converter/hard/s1,
+                format-converter/hard/s2, format-converter/hard/s3, format-converter/hard/s4,
+                implement-function/easy/s1, implement-function/easy/s2, implement-function/easy/s3,
+                implement-function/easy/s4, implement-function/medium/s1, implement-function/medium/s2,
+                implement-function/medium/s3, implement-function/medium/s4, implement-function/hard/s1,
+                implement-function/hard/s2, implement-function/hard/s3, implement-function/hard/s4,
+                import-cycle/easy/s1, import-cycle/easy/s2, import-cycle/easy/s3,
+                import-cycle/easy/s4, import-cycle/medium/s1, import-cycle/medium/s2,
+                import-cycle/medium/s3, import-cycle/medium/s4, import-cycle/hard/s1,
+                import-cycle/hard/s2, import-cycle/hard/s3, import-cycle/hard/s4,
+                join-orders/easy/s1, join-orders/easy/s2, join-orders/easy/s3,
+                join-orders/easy/s4, join-orders/medium/s1, join-orders/medium/s2,
+                join-orders/medium/s3, join-orders/medium/s4, join-orders/hard/s1,
+                join-orders/hard/s2, join-orders/hard/s3, join-orders/hard/s4,
+                json-aggregate/easy/s1, json-aggregate/easy/s2, json-aggregate/easy/s3,
+                json-aggregate/easy/s4, json-aggregate/medium/s1, json-aggregate/medium/s2,
+                json-aggregate/medium/s3, json-aggregate/medium/s4, json-aggregate/hard/s1,
+                json-aggregate/hard/s2, json-aggregate/hard/s3, json-aggregate/hard/s4,
+                latency-p95/easy/s1, latency-p95/easy/s2, latency-p95/easy/s3,
+                latency-p95/easy/s4, latency-p95/medium/s1, latency-p95/medium/s2,
+                latency-p95/medium/s3, latency-p95/medium/s4, latency-p95/hard/s1,
+                latency-p95/hard/s2, latency-p95/hard/s3, latency-p95/hard/s4,
+                log-triage/easy/s1, log-triage/easy/s2, log-triage/easy/s3,
+                log-triage/easy/s4, log-triage/medium/s1, log-triage/medium/s2,
+                log-triage/medium/s3, log-triage/medium/s4, log-triage/hard/s1,
+                log-triage/hard/s2, log-triage/hard/s3, log-triage/hard/s4,
+                organize-files/easy/s1, organize-files/easy/s2, organize-files/easy/s3,
+                organize-files/easy/s4, organize-files/medium/s1, organize-files/medium/s2,
+                organize-files/medium/s3, organize-files/medium/s4, organize-files/hard/s1,
+                organize-files/hard/s2, organize-files/hard/s3, organize-files/hard/s4,
+                permissions-fix/easy/s1, permissions-fix/easy/s2, permissions-fix/easy/s3,
+                permissions-fix/easy/s4, permissions-fix/medium/s1, permissions-fix/medium/s2,
+                permissions-fix/medium/s3, permissions-fix/medium/s4, permissions-fix/hard/s1,
+                permissions-fix/hard/s2, permissions-fix/hard/s3, permissions-fix/hard/s4,
+                refactor-preserve/easy/s1, refactor-preserve/easy/s2, refactor-preserve/easy/s3,
+                refactor-preserve/easy/s4, refactor-preserve/medium/s1, refactor-preserve/medium/s2,
+                refactor-preserve/medium/s3, refactor-preserve/medium/s4, refactor-preserve/hard/s1,
+                refactor-preserve/hard/s2, refactor-preserve/hard/s3, refactor-preserve/hard/s4,
+                slow-query/easy/s1, slow-query/easy/s2, slow-query/easy/s3,
+                slow-query/easy/s4, slow-query/medium/s1, slow-query/medium/s2,
+                slow-query/medium/s3, slow-query/medium/s4, slow-query/hard/s1,
+                slow-query/hard/s2, slow-query/hard/s3, slow-query/hard/s4,
+                sqlite-query/easy/s1, sqlite-query/easy/s2, sqlite-query/easy/s3,
+                sqlite-query/easy/s4, sqlite-query/medium/s1, sqlite-query/medium/s2,
+                sqlite-query/medium/s3, sqlite-query/medium/s4, sqlite-query/hard/s1,
+                sqlite-query/hard/s2, sqlite-query/hard/s3, sqlite-query/hard/s4,
+                traceback-locate/easy/s1, traceback-locate/easy/s2, traceback-locate/easy/s3,
+                traceback-locate/easy/s4, traceback-locate/medium/s1, traceback-locate/medium/s2,
+                traceback-locate/medium/s3, traceback-locate/medium/s4, traceback-locate/hard/s1,
+                traceback-locate/hard/s2, traceback-locate/hard/s3, traceback-locate/hard/s4]
+  dev:
+    split: dev
+    description: Per-cycle monitoring, one instance per trained family and difficulty.
+    instances: [broken-symlinks/easy/s101, broken-symlinks/medium/s101, broken-symlinks/hard/s101,
+                cli-flags/easy/s101, cli-flags/medium/s101, cli-flags/hard/s101,
+                config-drift/easy/s101, config-drift/medium/s101, config-drift/hard/s101,
+                count-errors/easy/s101, count-errors/medium/s101, count-errors/hard/s101,
+                dedupe-contacts/easy/s101, dedupe-contacts/medium/s101, dedupe-contacts/hard/s101,
+                dedupe-files/easy/s101, dedupe-files/medium/s101, dedupe-files/hard/s101,
+                error-burst/easy/s101, error-burst/medium/s101, error-burst/hard/s101,
+                fix-pagination/easy/s101, fix-pagination/medium/s101, fix-pagination/hard/s101,
+                fix-parser/easy/s101, fix-parser/medium/s101, fix-parser/hard/s101,
+                fix-shell-script/easy/s101, fix-shell-script/medium/s101, fix-shell-script/hard/s101,
+                fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101,
+                format-converter/easy/s101, format-converter/medium/s101, format-converter/hard/s101,
+                implement-function/easy/s101, implement-function/medium/s101, implement-function/hard/s101,
+                import-cycle/easy/s101, import-cycle/medium/s101, import-cycle/hard/s101,
+                join-orders/easy/s101, join-orders/medium/s101, join-orders/hard/s101,
+                json-aggregate/easy/s101, json-aggregate/medium/s101, json-aggregate/hard/s101,
+                latency-p95/easy/s101, latency-p95/medium/s101, latency-p95/hard/s101,
+                log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101,
+                organize-files/easy/s101, organize-files/medium/s101, organize-files/hard/s101,
+                permissions-fix/easy/s101, permissions-fix/medium/s101, permissions-fix/hard/s101,
+                refactor-preserve/easy/s101, refactor-preserve/medium/s101, refactor-preserve/hard/s101,
+                slow-query/easy/s101, slow-query/medium/s101, slow-query/hard/s101,
+                sqlite-query/easy/s101, sqlite-query/medium/s101, sqlite-query/hard/s101,
+                traceback-locate/easy/s101, traceback-locate/medium/s101, traceback-locate/hard/s101]
+  final-same-family:
+    split: final
+    description: New instances of the trained families.
+    instances: [broken-symlinks/easy/s201, broken-symlinks/easy/s202, broken-symlinks/medium/s201,
+                broken-symlinks/medium/s202, broken-symlinks/hard/s201, broken-symlinks/hard/s202,
+                cli-flags/easy/s201, cli-flags/easy/s202, cli-flags/medium/s201,
+                cli-flags/medium/s202, cli-flags/hard/s201, cli-flags/hard/s202,
+                config-drift/easy/s201, config-drift/easy/s202, config-drift/medium/s201,
+                config-drift/medium/s202, config-drift/hard/s201, config-drift/hard/s202,
+                count-errors/easy/s201, count-errors/easy/s202, count-errors/medium/s201,
+                count-errors/medium/s202, count-errors/hard/s201, count-errors/hard/s202,
+                dedupe-contacts/easy/s201, dedupe-contacts/easy/s202, dedupe-contacts/medium/s201,
+                dedupe-contacts/medium/s202, dedupe-contacts/hard/s201, dedupe-contacts/hard/s202,
+                dedupe-files/easy/s201, dedupe-files/easy/s202, dedupe-files/medium/s201,
+                dedupe-files/medium/s202, dedupe-files/hard/s201, dedupe-files/hard/s202,
+                error-burst/easy/s201, error-burst/easy/s202, error-burst/medium/s201,
+                error-burst/medium/s202, error-burst/hard/s201, error-burst/hard/s202,
+                fix-pagination/easy/s201, fix-pagination/easy/s202, fix-pagination/medium/s201,
+                fix-pagination/medium/s202, fix-pagination/hard/s201, fix-pagination/hard/s202,
+                fix-parser/easy/s201, fix-parser/easy/s202, fix-parser/medium/s201,
+                fix-parser/medium/s202, fix-parser/hard/s201, fix-parser/hard/s202,
+                fix-shell-script/easy/s201, fix-shell-script/easy/s202, fix-shell-script/medium/s201,
+                fix-shell-script/medium/s202, fix-shell-script/hard/s201, fix-shell-script/hard/s202,
+                fix-stats/easy/s201, fix-stats/easy/s202, fix-stats/medium/s201,
+                fix-stats/medium/s202, fix-stats/hard/s201, fix-stats/hard/s202,
+                format-converter/easy/s201, format-converter/easy/s202, format-converter/medium/s201,
+                format-converter/medium/s202, format-converter/hard/s201, format-converter/hard/s202,
+                implement-function/easy/s201, implement-function/easy/s202, implement-function/medium/s201,
+                implement-function/medium/s202, implement-function/hard/s201, implement-function/hard/s202,
+                import-cycle/easy/s201, import-cycle/easy/s202, import-cycle/medium/s201,
+                import-cycle/medium/s202, import-cycle/hard/s201, import-cycle/hard/s202,
+                join-orders/easy/s201, join-orders/easy/s202, join-orders/medium/s201,
+                join-orders/medium/s202, join-orders/hard/s201, join-orders/hard/s202,
+                json-aggregate/easy/s201, json-aggregate/easy/s202, json-aggregate/medium/s201,
+                json-aggregate/medium/s202, json-aggregate/hard/s201, json-aggregate/hard/s202,
+                latency-p95/easy/s201, latency-p95/easy/s202, latency-p95/medium/s201,
+                latency-p95/medium/s202, latency-p95/hard/s201, latency-p95/hard/s202,
+                log-triage/easy/s201, log-triage/easy/s202, log-triage/medium/s201,
+                log-triage/medium/s202, log-triage/hard/s201, log-triage/hard/s202,
+                organize-files/easy/s201, organize-files/easy/s202, organize-files/medium/s201,
+                organize-files/medium/s202, organize-files/hard/s201, organize-files/hard/s202,
+                permissions-fix/easy/s201, permissions-fix/easy/s202, permissions-fix/medium/s201,
+                permissions-fix/medium/s202, permissions-fix/hard/s201, permissions-fix/hard/s202,
+                refactor-preserve/easy/s201, refactor-preserve/easy/s202, refactor-preserve/medium/s201,
+                refactor-preserve/medium/s202, refactor-preserve/hard/s201, refactor-preserve/hard/s202,
+                slow-query/easy/s201, slow-query/easy/s202, slow-query/medium/s201,
+                slow-query/medium/s202, slow-query/hard/s201, slow-query/hard/s202,
+                sqlite-query/easy/s201, sqlite-query/easy/s202, sqlite-query/medium/s201,
+                sqlite-query/medium/s202, sqlite-query/hard/s201, sqlite-query/hard/s202,
+                traceback-locate/easy/s201, traceback-locate/easy/s202, traceback-locate/medium/s201,
+                traceback-locate/medium/s202, traceback-locate/hard/s201, traceback-locate/hard/s202]
+  final-held-out-cluster:
+    split: final
+    description: The held-out config-repair cluster.
+    instances: [cron-translate/easy/s301, cron-translate/easy/s302, cron-translate/medium/s301,
+                cron-translate/medium/s302, cron-translate/hard/s301, cron-translate/hard/s302,
+                env-reconcile/easy/s301, env-reconcile/easy/s302, env-reconcile/medium/s301,
+                env-reconcile/medium/s302, env-reconcile/hard/s301, env-reconcile/hard/s302,
+                fix-json-config/easy/s301, fix-json-config/easy/s302, fix-json-config/medium/s301,
+                fix-json-config/medium/s302, fix-json-config/hard/s301, fix-json-config/hard/s302,
+                resolve-conflicts/easy/s301, resolve-conflicts/easy/s302, resolve-conflicts/medium/s301,
+                resolve-conflicts/medium/s302, resolve-conflicts/hard/s301, resolve-conflicts/hard/s302,
+                toml-migrate/easy/s301, toml-migrate/easy/s302, toml-migrate/medium/s301,
+                toml-migrate/medium/s302, toml-migrate/hard/s301, toml-migrate/hard/s302]
+  final-held-out-family:
+    split: final
+    description: Held-out single families from clusters the learner trained on.
+    instances: [bulk-rename/easy/s301, bulk-rename/easy/s302, bulk-rename/medium/s301,
+                bulk-rename/medium/s302, bulk-rename/hard/s301, bulk-rename/hard/s302,
+                csv-revenue/easy/s301, csv-revenue/easy/s302, csv-revenue/medium/s301,
+                csv-revenue/medium/s302, csv-revenue/hard/s301, csv-revenue/hard/s302,
+                fix-dates/easy/s301, fix-dates/easy/s302, fix-dates/medium/s301,
+                fix-dates/medium/s302, fix-dates/hard/s301, fix-dates/hard/s302,
+                session-count/easy/s301, session-count/easy/s302, session-count/medium/s301,
+                session-count/medium/s302, session-count/hard/s301, session-count/hard/s302,
+                write-validator/easy/s301, write-validator/easy/s302, write-validator/medium/s301,
+                write-validator/medium/s302, write-validator/hard/s301, write-validator/hard/s302]

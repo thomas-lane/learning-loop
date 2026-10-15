@@ -1,0 +1,53 @@
+# The first all-E4B experiment (docs/plans/first-experiment.md): Gemma-4-E4B with thinking on is
+# the learner and, through editor.mode initial_policy, the editor, on the calibrated suite split in
+# evaluation/splits/first-e4b.yaml. Decoding, context and editor settings are pilot-e4b's. The file
+# has no `base:` so that later edits to the pilot configs cannot change this experiment.
+# Hyperparameters are INITIAL CHOICES, not tuned.
+name: first-e4b
+description: Verified efficiency edits -> LoRA DPO, 3 cycles, 24 trained families; config-repair and five single families held out.
+condition: learning
+learner:
+  model_profile: gemma-4-e4b-it-thinking
+  initial_checkpoint: base
+  max_context_tokens: 131072      # server window: editor requests hold a whole episode
+cycles: 3
+seeds: {root: 20261015, loop_seed: 0}
+tasks:
+  splits: evaluation/splits/first-e4b.yaml
+  collection_panel: train
+  attempts_per_instance: 4
+evaluation:
+  dev_panels: [dev]
+  attempts_per_instance: 2
+  cadence: every_cycle
+  final_panels: [final-same-family, final-held-out-cluster, final-held-out-family]   # only via `loop evaluate --final`
+episode:
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  max_turns: 30
+  max_context_tokens: 32768       # every learner request (prompt + output) fits; all roles alike
+  max_episode_tokens: null        # the context cap and max_turns bound an episode; no summed-token budget
+  tool_timeout_sec: 60
+  agent_timeout_sec: 3600
+  max_output_chars: 8000
+editor:
+  mode: initial_policy            # the fixed initial instruction-tuned policy
+  prompt: prompts/editor/v1.md
+  sampling: {temperature: 1.0, top_p: 0.95, top_k: 64, max_output_tokens: 16384}
+  assistant_text_policy: keep_reasoning
+verification:
+  mode: continuation
+  continuations_per_branch: 1
+  acceptance_rule: strict_all_success_v1
+  min_token_saving: 50
+  audit: {fraction: 0.0}
+training:
+  trainer: trl_dpo
+  optimizer_steps: 40
+  dpo: {beta: 0.1, learning_rate: 5.0e-6, per_device_batch_size: 1, gradient_accumulation_steps: 4, max_length: null,
+        max_length_margin: 2048, split_pair_backward: true, gradient_checkpointing: true}
+  lora: {r: 16, alpha: 32}
+  data: {selection: current_and_history, buffer_capacity: 256, history_fraction: 0.5, task_balanced: true}
+runtime:
+  infra_retries: 2
+labels:
+  hyperparameters: initial choices, not optimized
