@@ -229,9 +229,24 @@ def test_latency_p95_traps(tmp_path, difficulty, seed):
     for k in range(1, len(files)):
         for combo in itertools.combinations(files, k):
             assert _latency_top(reqs, _nearest_rank, set(combo)) != expected, combo
-    if FAMILIES["latency-p95"].difficulties[difficulty]["queries"]:
-        assert any("?" in r[1] for r in reqs)
+    query_files = FAMILIES["latency-p95"].difficulties[difficulty]["query_files"]
+    assert {r[0] for r in reqs if "?" in r[1]} == set(query_files)
+    if query_files:
         assert _latency_top(reqs, _nearest_rank, key=lambda url: url) != expected
+
+
+def test_latency_p95_levels_add_query_strings_then_an_archived_log():
+    """Medium is easy's two files with query strings in the nginx log only (JSON paths never
+    carry one); hard is medium plus the compressed log in a subdirectory."""
+    levels = FAMILIES["latency-p95"].difficulties
+    easy, medium, hard = levels["easy"], levels["medium"], levels["hard"]
+    assert medium["files"] == easy["files"] == ["access.log", "app.jsonl"]
+    assert easy["query_files"] == [] and medium["query_files"] == hard["query_files"] == ["access.log"]
+    assert hard["files"] == medium["files"] + ["archive/app.jsonl.1.gz"]
+    for d in ("medium", "hard"):
+        shortcuts = generate_spec(FAMILIES["latency-p95"], d, 1).spec.shortcuts
+        assert "with-query" in shortcuts
+        assert ("plain-only" in shortcuts) == ("top-level-only" in shortcuts) == (d == "hard")
 
 
 @pytest.mark.parametrize("difficulty", list(FAMILIES["latency-p95"].difficulties))
@@ -329,18 +344,12 @@ def test_session_count_traps(tmp_path, difficulty, seed):
 
 
 def _error_lines(files):
-    """[(file, aware datetime or naive for a header file's declared offset, line)] for every log line."""
+    """[(file, aware datetime, line)] for every log line; every timestamp carries its offset."""
     out = []
     for name, text in files.items():
-        declared = None
         for line in text.splitlines():
-            if line.startswith("# timezone: UTC"):
-                declared = line.split()[2][len("UTC"):]
-                continue
             stamp = datetime.fromisoformat(line.split()[0])
-            if stamp.tzinfo is None:
-                assert declared is not None
-                stamp = stamp.replace(tzinfo=datetime.strptime(declared, "%z").tzinfo)
+            assert stamp.tzinfo is not None, (name, line)
             out.append((name, stamp, line))
     return out
 
@@ -385,21 +394,23 @@ def test_error_burst_traps(tmp_path, difficulty, seed):
             return dt.replace(tzinfo=None) - whole
 
         assert _burst(lines, hours_only) != expected
-    if difficulty == "hard":
-        header_files = {n for n, t in files.items() if t.startswith("# timezone:")}
-        assert len(header_files) == 1
-        as_utc = [(n, dt.replace(tzinfo=timezone.utc) if n in header_files else dt, line) for n, dt, line in lines]
-        assert _burst(as_utc, _utc) != expected  # the header file's local times read as UTC
+    compressed = {n for n in files if n.endswith(".gz")}
+    assert len(compressed) == (difficulty == "hard")
+    if compressed:
+        assert _burst(lines, _utc, set(files) - compressed) != expected  # the compressed log skipped
 
 
-def test_error_burst_hard_is_medium_with_the_header_file():
-    """Hard differs from medium only by the header-offset file; no level has a compressed log,
-    so the header offset is hard's one extra trap."""
+def test_error_burst_hard_is_medium_with_one_log_compressed():
+    """Hard differs from medium only in that search-in.log is the gzip-compressed
+    search-in.log.1.gz; no level has an offset-less (header-offset) file."""
     fam = FAMILIES["error-burst"]
     medium, hard = fam.difficulties["medium"], fam.difficulties["hard"]
-    assert set(medium["files"]) ^ set(hard["files"]) == {"orders-us.log", "orders-us-legacy.log"}
+    assert set(medium["files"]) ^ set(hard["files"]) == {"search-in.log", "search-in.log.1.gz"}
     assert medium["lookalikes"] == hard["lookalikes"]
     for d in fam.difficulties:
         generated = generate_spec(fam, d, 1)
-        assert not any(rel.endswith(".gz") for rel in generated.spec.files), d
-        assert "plain-only" not in generated.spec.shortcuts
+        assert not any(isinstance(v, str) and v.startswith("#") for v in generated.spec.files.values()), d
+        assert "naive-as-utc" not in generated.spec.shortcuts
+        assert ("plain-only" in generated.spec.shortcuts) == (d == "hard")
+    data = generate_spec(fam, "hard", 1).spec.files["logs/search-in.log.1.gz"]
+    assert gzip.decompress(data).decode().split()[0].endswith("+05:30")

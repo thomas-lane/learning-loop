@@ -4,8 +4,7 @@
 `/app/logsum.sh LOG_DIR OUT_FILE [PATTERN]` counts the lines containing PATTERN (a fixed
 string, default ERROR) in each `*.log` file directly inside LOG_DIR, writes `<name>: <count>`
 lines to OUT_FILE and prints `total: <sum>`; a missing LOG_DIR is an error (exit 2). The
-script is built from five sites, and 1 / 2 / 2 of them carry a bug drawn uniformly from that
-site's catalog of classic strict-mode mistakes:
+script is built from five sites, each with a catalog of classic strict-mode mistakes:
 
 - `pattern`: `pattern=$3` dies with "unbound variable" when PATTERN is omitted;
 - `check_dir`: the error is reported but not propagated (`[ -d ... ] || echo ...`, exit 0),
@@ -18,7 +17,20 @@ site's catalog of classic strict-mode mistakes:
 - `guard`: without `[ -f "$f" ] || continue`, a directory with no .log file feeds the literal
   `*.log` to grep.
 
-Hard moves the counting function into `/app/lib/count.sh`, which the script sources. The
+Easy has one bug, medium and hard two, one of them *hidden* (no visible case fails because
+of it; see below). Each bug is drawn uniformly from the sites whose catalog holds a kind the
+level allows (`visible_kinds` for the visible bugs, `hidden_kinds` for the hidden one), then
+uniformly from those kinds:
+
+- easy: one of the word-splitting bugs (`unquoted_test`, `unquoted_dir`, `ls_words`), which a
+  rewrite with quoted expansions fixes on the way;
+- medium: those and the missing guard, for both bugs;
+- hard: the hidden bug as at medium; the visible one from the whole catalog, so the bugs
+  whose failure gives the least to go on (the silent `set -e` exit of a no-match `grep -c`,
+  a regex count, an unbound variable, an error that does not stop the script) appear only
+  at hard, and only where a failing case points at them.
+
+Hard also moves the counting function into `/app/lib/count.sh`, which the script sources. The
 instruction is the same at every difficulty: fix the script "and any file it sources"; some
 visible cases fail, and they may not cover every bug.
 
@@ -36,9 +48,8 @@ half of the bugs (one at every level) are *visible*: some case fails because of 
 them, both with that bug alone and with every bug in place (`build` redraws when another bug
 masks one: `for f in $(ls ...)` never enters the loop without a .log file, which hides a
 missing guard). Every other visible case passes on the script as given, and every visible
-case passes once only the hidden bugs are left. Medium and hard have one hidden bug, which
-is what mostly sets their difficulty (a bug no failing case shows is much harder to find);
-hard also splits the script in two files.
+case passes once only the hidden bugs are left. The hidden bug is what mostly sets medium
+apart from easy (a bug no failing case shows is much harder to find).
 Hidden checks never reuse a visible case's arguments. In the regex-looking PATTERN check,
 each log's decoy lines (which match PATTERN only as a regular expression) differ in number
 from its matching lines, so the regex count always differs from the fixed-string count.
@@ -53,8 +64,8 @@ Traps, each declared as a shortcut that must fail:
 - `find-pipeline`: everything fixed, but the loop rewritten as `find ... | sort | while
   read`, which also descends into subdirectories and loses the total in the pipeline's
   subshell;
-- `drop-errexit` (when the `count` bug is the no-match exit): everything else fixed, and the
-  no-match exit silenced by removing `-e` from the `set` line.
+- `drop-errexit` (when the `count` bug is the no-match exit, at hard): everything else
+  fixed, and the no-match exit silenced by removing `-e` from the `set` line.
 
 Generation runs the scripts with the host's bash; the Docker check runs bash 5.2 in the
 container. The script and every variant use only behavior that is the same in bash 3.2 and
@@ -408,9 +419,17 @@ def build(ctx):
     rng, p = ctx.rng, ctx.params
     split = p["split_lib"]
     artifacts = (SCRIPT, LIB) if split else (SCRIPT,)
-    bugged = sorted(rng.sample(SITES, p["n_bugs"]))
-    bugs = {s: rng.choice(sorted(BUGS[s])) for s in bugged}
-    visible_bugs = sorted(rng.sample(bugged, max(1, round(len(bugged) * p["visible_bug_tests"]))))
+    n_visible = max(1, round(p["n_bugs"] * p["visible_bug_tests"]))
+
+    def draw(kinds, taken, k):
+        """{site: bug} for k sites outside `taken`, each with a bug drawn from `kinds`."""
+        sites = [s for s in SITES if s not in taken and set(kinds) & set(BUGS[s])]
+        return {s: rng.choice(sorted(set(kinds) & set(BUGS[s]))) for s in rng.sample(sites, k)}
+
+    hidden = draw(p["hidden_kinds"], (), p["n_bugs"] - n_visible)
+    shown = draw(p["visible_kinds"], hidden, n_visible)
+    bugs = dict(sorted({**hidden, **shown}.items()))
+    visible_bugs = sorted(shown)
     bug_text = {s: BUGS[s][b][0] for s, b in bugs.items()}
     hidden_only = {s: t for s, t in bug_text.items() if s not in visible_bugs}
     fixed, buggy, partial = _script({}, split=split), _script(bug_text, split=split), _script(hidden_only, split=split)
@@ -476,16 +495,20 @@ def build(ctx):
     )
 
 
+# the bug kinds each level draws its visible and hidden bugs from (see the module docstring)
+QUOTING = ("unquoted_test", "unquoted_dir", "ls_words")
+ALL_BUGS = tuple(sorted(b for kinds in BUGS.values() for b in kinds))
+
 FAMILY = Family(
     name="fix-shell-script",
-    version=4,
+    version=5,
     cluster="fix-code",
     category="debugging",
     skills=("shell", "bash", "debugging", "quoting"),
     difficulties={
-        "easy": {"n_bugs": 1, "visible_bug_tests": 1.0, "split_lib": False},
-        "medium": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": False},
-        "hard": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": True},
+        "easy": {"n_bugs": 1, "visible_bug_tests": 1.0, "split_lib": False, "visible_kinds": QUOTING, "hidden_kinds": ()},
+        "medium": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": False, "visible_kinds": QUOTING + ("no_empty_guard",), "hidden_kinds": QUOTING + ("no_empty_guard",)},
+        "hard": {"n_bugs": 2, "visible_bug_tests": 0.5, "split_lib": True, "visible_kinds": ALL_BUGS, "hidden_kinds": QUOTING + ("no_empty_guard",)},
     },
     build=build,
 )

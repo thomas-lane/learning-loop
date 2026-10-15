@@ -11,10 +11,15 @@ difficulty (it names rotated, gzip-compressed and archived logs in subdirectorie
 strings, wherever they occur). The data per difficulty:
 
 - easy: `access.log` and `app.jsonl`; no URL has a query string;
-- medium: `access.log`, `access.log.1` and `app.jsonl`; about 30% of URLs carry a query
-  string;
-- hard: `access.log`, `app.jsonl` and `archive/app.jsonl.1.gz` (gzip-compressed, in a
-  subdirectory), with query strings as on medium.
+- medium: the same files; about 30% of the URLs in `access.log` carry a query string;
+- hard: medium plus `archive/app.jsonl.1.gz` (gzip-compressed, in a subdirectory).
+
+Query strings appear only in the nginx log (`query_files`). Most solvers strip them from
+the nginx request line but take the JSON `path` as it is, and the max decoy's one-request
+group (below) turns that one slip into a wrong answer, so query strings in the JSON logs
+too would leave medium and hard nearly unsolvable. Medium keeps easy's two files so that
+query strings are its only new trap: a third, rotated log makes solvers write longer
+generic readers that break in ways none of the traps below test.
 
 Construction, with H a base latency in ms (every role is a different endpoint):
 
@@ -29,9 +34,9 @@ Construction, with H a base latency in ms (every role is a different endpoint):
 - mean decoy M: every request 0.6-0.9H, mostly in JSON files (wins on the mean, and when
   seconds are mixed with milliseconds unconverted, and when only JSON files are read, since
   T's JSON requests are all fast);
-- max decoy X: a single 8-10H outlier (wins on the max; on medium/hard its URL carries a
-  query string no other request has, so grouping by URL with the query string makes that
-  one-request group the winner);
+- max decoy X: a single 8-10H outlier (wins on the max; on medium/hard it is in the nginx
+  log and its URL carries a query string no other request has, so grouping by URL with the
+  query string makes that one-request group the winner);
 - text decoy F: exactly two nginx requests at 1.15-1.4H and many fast JSON ones (wins when
   only the nginx files are read);
 - per-file decoys D_g: one request at 1.1-1.35H in every file except g and enough fast
@@ -199,7 +204,7 @@ def _unique_top(recs, names):
     return ranked[0][1] if len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= 5 else None
 
 
-def _plan(rng, names, n_background):
+def _plan(rng, names, n_background, query_files):
     """[(endpoint, ms, file, query or None)] and the target endpoint."""
     text_files = [n for n in names if _is_text(n)]
     json_files = [n for n in names if not _is_text(n)]
@@ -236,7 +241,7 @@ def _plan(rng, names, n_background):
         add(mean, ms(0.6, 0.9), json_files if i < 0.6 * n_m else names)
 
     n_x = rng.randint(40, 55)
-    add(peak, ms(8.0, 10.0), names, OUTLIER_QUERY)
+    add(peak, ms(8.0, 10.0), query_files or names, OUTLIER_QUERY)
     for _ in range(n_x - 1):
         add(peak, ms(0.1, 0.3), names)
 
@@ -262,7 +267,7 @@ def _ip(rng):
     return f"10.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
 
 
-def _render(rng, recs, names, with_queries):
+def _render(rng, recs, names, query_files):
     out = {}
     start = datetime(2026, 9, 1) + timedelta(days=rng.randint(0, 20))
     for age, name in enumerate(names):  # a rotated file (.1, archive/) is a day older
@@ -270,6 +275,7 @@ def _render(rng, recs, names, with_queries):
         rng.shuffle(rows)
         ts = start - timedelta(days=1 if (".1" in name or "/" in name) else 0)
         lines = []
+        with_queries = name in query_files
         for ep, value, _, query in rows:
             ts += timedelta(seconds=rng.randint(1, 60))
             if query is None and with_queries and rng.random() < QUERY_RATE:
@@ -291,7 +297,7 @@ def _render(rng, recs, names, with_queries):
 def build(ctx):
     p = ctx.params
     names = p["files"]
-    recs, target = _plan(ctx.rng, names, p["background"])
+    recs, target = _plan(ctx.rng, names, p["background"], p["query_files"])
     if _unique_top(recs, set(names)) != target:
         raise Reject("the target is not the unique top endpoint")
     for k in range(1, len(names)):
@@ -299,7 +305,7 @@ def build(ctx):
             if _unique_top(recs, set(subset)) == target:
                 raise Reject(f"reading only {subset} gives the right answer")
     modes = ["mean", "max", "floor-index", "linear-interpolation", "quantiles-exclusive", "text-only", "json-only", "no-unit-conversion"]
-    if p["queries"]:
+    if p["query_files"]:
         modes.append("with-query")
     if any(n.endswith(".gz") for n in names):
         modes.append("plain-only")
@@ -307,24 +313,24 @@ def build(ctx):
         modes.append("top-level-only")
     return TaskSpec(
         instruction=INSTRUCTION,
-        files=_render(ctx.rng, recs, names, p["queries"]),
+        files=_render(ctx.rng, recs, names, p["query_files"]),
         grader=ExactAnswer("/app/answer.txt", target),
         oracle=_solution("oracle"),
         shortcuts={m: _solution(m) for m in modes},
-        params={"files": list(names), "queries": p["queries"]},
+        params={"files": list(names), "query_files": list(p["query_files"])},
     )
 
 
 FAMILY = Family(
     name="latency-p95",
-    version=3,  # v3: the JSON field holding the URL is `path`; hard has one compressed (archived) log
+    version=4,  # v4: query strings only in the nginx log; medium drops the rotated access.log.1
     cluster="text-analytics",
     category="data",
     skills=("logs", "json", "percentiles", "units", "aggregation", "python"),
     difficulties={
-        "easy": {"files": ["access.log", "app.jsonl"], "queries": False, "background": 3},
-        "medium": {"files": ["access.log", "access.log.1", "app.jsonl"], "queries": True, "background": 3},
-        "hard": {"files": ["access.log", "app.jsonl", "archive/app.jsonl.1.gz"], "queries": True, "background": 3},
+        "easy": {"files": ["access.log", "app.jsonl"], "query_files": [], "background": 3},
+        "medium": {"files": ["access.log", "app.jsonl"], "query_files": ["access.log"], "background": 3},
+        "hard": {"files": ["access.log", "app.jsonl", "archive/app.jsonl.1.gz"], "query_files": ["access.log"], "background": 3},
     },
     build=build,
 )

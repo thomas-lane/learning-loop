@@ -645,6 +645,27 @@ def test_fix_stats_hard_always_has_a_percentile_bug_that_is_often_missed():
     assert drawn == {"rank_off_by_one", "unsorted"}
 
 
+# (kinds a visible bug may be, kinds a hidden bug may be) per level: the bugs whose failure
+# gives the least to go on are only visible, and only at hard
+SHELL_WORD_SPLITTING = {"unquoted_test", "unquoted_dir", "ls_words"}
+SHELL_KINDS_PER_LEVEL = {
+    "easy": (SHELL_WORD_SPLITTING, set()),
+    "medium": (SHELL_WORD_SPLITTING | {"no_empty_guard"}, SHELL_WORD_SPLITTING | {"no_empty_guard"}),
+    "hard": (set(SHELL_EXPOSES), SHELL_WORD_SPLITTING | {"no_empty_guard"}),
+}
+
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_fix_shell_script_bug_kinds_per_level(difficulty):
+    family = FAMILIES["fix-shell-script"]
+    visible_kinds, hidden_kinds = SHELL_KINDS_PER_LEVEL[difficulty]
+    assert (set(family.difficulties[difficulty]["visible_kinds"]), set(family.difficulties[difficulty]["hidden_kinds"])) == (visible_kinds, hidden_kinds)
+    for seed in range(1, 5):
+        params = generate_spec(family, difficulty, seed).spec.params
+        for site, bug in params["bugs"].items():
+            assert bug in (visible_kinds if site in params["visible_bug_tests"] else hidden_kinds), (seed, site, bug)
+
+
 @pytest.mark.parametrize(("difficulty", "seed"), [("easy", 500123), ("easy", 500208), ("medium", 500118)])
 def test_fix_shell_script_regex_pattern_seeds_generate(difficulty, seed):
     # these draws had as many decoy lines as matching lines, so the regex count equalled the
