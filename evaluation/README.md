@@ -56,8 +56,8 @@ methods, each declared as a runnable solution that must fail on every instance (
 [Checks](#checks-every-instance-and-every-family)). Each family module's docstring states the
 task, how the data is built, and every trap and shortcut; this table is the index.
 
-Families are grouped into seven **clusters** of related skills (`Family.cluster`), five each,
-so held-out sets can leave out single families (near) or whole clusters (far). Difficulties
+Families are grouped into seven **clusters** of related skills (`Family.cluster`), five each
+(four in `filesystem`), so held-out sets can leave out single families (near) or whole clusters (far). Difficulties
 are `easy`, `medium` and `hard`. A family's instruction is the same text at every difficulty
 (only values drawn for the instance, such as file or function names, differ): it states every
 rule that applies at any level, and the data decides which ones matter. Harder levels have more
@@ -86,7 +86,6 @@ so success would measure following directions rather than noticing the problem i
 | filesystem | `organize-files` | move tickets into queue folders chosen by their header fields | `FileTree` |
 | | `dedupe-files` | delete duplicate files across dated snapshots, keeping the oldest copy | `FileTree` |
 | | `bulk-rename` | standardize file names, resolving collisions by rule | `FileTree` |
-| | `extract-subset` | extract only the `.conf` files from nested tar.gz archives, keeping paths | `FileTree` |
 | | `permissions-fix` | set file modes from a glob-to-mode policy (last matching rule wins) | `FileTree` (with modes) |
 | fix-code | `fix-stats` | fix the bugs in a small statistics library | `Checks` |
 | | `fix-parser` | fix the bugs in a small INI reader/writer | `Checks` |

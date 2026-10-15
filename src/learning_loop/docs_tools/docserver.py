@@ -38,6 +38,8 @@ NAV: list[tuple[str, str]] = [
     ("docs/operations.md", "Operations"),
     ("docs/runpod.md", "Runpod deployment"),
     ("docs/glossary.md", "Glossary"),
+    ("docs/decisions.md", "Decisions"),
+    ("docs/plans/first-experiment.md", "Plan: first experiment"),
     ("evaluation/README.md", "Tasks and agent"),
     ("AGENTS.md", "Developer guide"),
 ]

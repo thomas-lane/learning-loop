@@ -21,7 +21,6 @@ from . import (
     dedupe_files,
     env_reconcile,
     error_burst,
-    extract_subset,
     fix_dates,
     fix_json_config,
     fix_pagination,
@@ -49,7 +48,7 @@ from . import (
 
 _MODULES = (
     broken_symlinks, bulk_rename, cli_flags, config_drift, count_errors, cron_translate, csv_revenue,
-    dedupe_contacts, dedupe_files, env_reconcile, error_burst, extract_subset, fix_dates, fix_json_config,
+    dedupe_contacts, dedupe_files, env_reconcile, error_burst, fix_dates, fix_json_config,
     fix_pagination, fix_parser, fix_shell_script, fix_stats, format_converter, implement_function, import_cycle,
     join_orders, json_aggregate, latency_p95, log_triage, organize_files, permissions_fix, refactor_preserve,
     resolve_conflicts, session_count, slow_query, sqlite_query, toml_migrate, traceback_locate, write_validator,

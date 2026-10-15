@@ -7,15 +7,12 @@ from __future__ import annotations
 
 import dataclasses
 import fnmatch
-import gzip
 import hashlib
 import importlib.util
-import io
 import json
 import os
 import re
 import stat
-import tarfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -26,7 +23,7 @@ from learning_loop.tasks.family_lint import nondeterminism
 from learning_loop.tasks.generate import generate_spec
 from learning_loop.tasks.render import render
 
-MODULES = ["organize_files", "dedupe_files", "bulk_rename", "extract_subset", "permissions_fix"]
+MODULES = ["organize_files", "dedupe_files", "bulk_rename", "permissions_fix"]
 SEEDS = [1, 2, 3]
 
 
@@ -268,55 +265,6 @@ def test_bulk_rename_suffix_if_taken_is_declared_with_its_trap(seed):
     assert "suffix-if-taken" in gen.spec.shortcuts and gen.shortcut_rewards["suffix-if-taken"] < 1
     names = [rel.rpartition("/")[2] for rel in gen.spec.files if rel.count("/") == 1]
     assert any(len(olds) > 1 and new in olds[1:] for new, olds in _groups(names).items())
-
-
-# --------------------------------------------------------------------------- extract-subset
-
-
-def _walk_archive(blob: bytes, prefix: str, out: dict, decoys: list, levels: list, depth: int = 0):
-    """Collect the `.conf` files ({output path: (depth, bytes)}), the `conf` decoys and the
-    inner archives of a gzipped tar, checking that it was built deterministically."""
-    assert blob[4:8] == b"\0\0\0\0"  # gzip header mtime 0
-    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(blob)), mode="r:") as tf:
-        members = tf.getmembers()
-        assert [m.name for m in members] == sorted(m.name for m in members)
-        assert all(m.uid == 0 and m.gid == 0 and m.mtime == members[0].mtime for m in members)
-        for m in members:
-            data = tf.extractfile(m).read()
-            stem = re.sub(r"\.(tar\.gz|tgz)$", "", m.name)
-            if stem != m.name:
-                levels.append((depth + 1, m.name))
-                _walk_archive(data, os.path.join(prefix, stem), out, decoys, levels, depth + 1)
-            elif m.name.endswith(".conf"):
-                out[os.path.join(prefix, m.name)] = (depth, data)
-            elif "conf" in m.name:
-                decoys.append((depth, m.name))
-
-
-@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
-@pytest.mark.parametrize("seed", SEEDS)
-def test_extract_subset_answer_and_traps(tmp_path, difficulty, seed):
-    files, key = _render(tmp_path, "extract_subset", difficulty, seed)
-    assert sorted(_tree(files)) == ["bundle.tar.gz"]
-    out, decoys, levels = {}, [], []
-    _walk_archive((files / "bundle.tar.gz").read_bytes(), "", out, decoys, levels)
-    assert key["expected"] == {rel: {"sha256": _sha(data)} for rel, (_, data) in out.items()}
-    assert {0, 1} <= {d for d, _ in decoys}  # `*conf*` matches decoys in the bundle and inside archives
-    assert any("/" in rel for rel in out)  # flattening changes paths
-    assert any(depth >= 1 for depth, _ in out.values())  # skipping inner archives, or extracting them at the top
-    basenames = [rel.rsplit("/", 1)[-1] for rel in out]
-    if difficulty != "easy":
-        assert len(set(basenames)) < len(basenames)
-    top = [name for depth, name in levels if depth == 1]
-    assert len(top) == {"easy": 1, "medium": 2, "hard": 3}[difficulty]  # easy: a single inner archive
-    assert any("/" in name for name in top) == (difficulty == "hard")  # `services/` only on hard
-    # treating only `.tar.gz` as archives misses a `.tgz` on every level; easy and medium use
-    # `.tgz` alone, hard both suffixes
-    assert any(name.endswith(".tgz") for name in top)
-    assert all(name.endswith(".tgz") for name in top) == (difficulty != "hard")
-    assert any(depth == 2 for depth, _ in levels) == (difficulty == "hard")
-    if difficulty == "hard":
-        assert any(depth == 2 for depth, _ in out.values())  # a .conf two archives deep
 
 
 # --------------------------------------------------------------------------- permissions-fix

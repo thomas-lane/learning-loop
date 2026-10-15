@@ -26,6 +26,26 @@ terminates pods recorded in the created-pod ledger.
 Credentials live in the git-ignored `.env` (template: `.env.example`), loaded automatically by
 `loop`; configs refer to them by variable name only, and they are never synced to remote hosts.
 
+## Working agreement
+
+How agents work in this repository with its owner. The rules above still apply in full.
+
+- Proceed through the phases planned in `docs/plans/` and commit on the working branch without
+  asking. Each phase ends at its acceptance check. Pushing to the Docker host's own remote to run
+  code there is allowed; pushing anywhere else is not.
+- Read-only work needs no approval: reading code, runs and logs, and SSH commands that change
+  nothing. Neither does fixing a regression your own change caused.
+- Pod spend up to $5 per run needs no approval, within the pod rules above. A larger run needs
+  the owner's approval of its estimated cost first.
+- Stop for the owner only for:
+  - an acceptance check that fails or needs the owner's sign-off;
+  - a blocker you cannot resolve;
+  - a decision that changes the experiment's science, such as models, editor, acceptance rule,
+    metrics, splits and held-out families, or what task instructions say.
+  
+  Log such a decision in `docs/decisions.md` with the default you would take, marked
+  **default**, so work that does not depend on it can continue.
+
 ## Where things live
 
 Architecture, the module map and data flow are in `docs/architecture.md`; the contents of a run
@@ -167,6 +187,8 @@ update that file instead of repeating the information elsewhere:
 | the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
 | task families, the task spec and renderer, environment guarantees, splits, the agent, grading, the replay contract | `evaluation/README.md` |
 | development commands, test layout, integrity invariants, this policy | `AGENTS.md` |
+| a standing decision or preference, or a default taken under the working agreement | `docs/decisions.md` |
+| the plan to the next experiment, its phases or their acceptance checks | `docs/plans/` |
 
 Rules:
 
