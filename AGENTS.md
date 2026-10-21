@@ -28,9 +28,11 @@ Credentials live in the git-ignored `.env` (template: `.env.example`), loaded au
 
 ## Working agreement
 
-How agents work in this repository with its owner. The rules above still apply in full.
+How agents work in this repository with its owner. The rules above still apply in full. The
+plans and the decisions log live in `notes/`, which git ignores: they are working notes between
+the owner and agents, not documentation of the system.
 
-- Proceed through the phases planned in `docs/plans/` and commit on the working branch without
+- Proceed through the phases planned in `notes/plans/` and commit on the working branch without
   asking. Each phase ends at its acceptance check. Pushing to the Docker host's own remote to run
   code there is allowed; pushing anywhere else is not.
 - Read-only work needs no approval: reading code, runs and logs, and SSH commands that change
@@ -43,7 +45,7 @@ How agents work in this repository with its owner. The rules above still apply i
   - a decision that changes the experiment's science, such as models, editor, acceptance rule,
     metrics, splits and held-out families, or what task instructions say.
   
-  Log such a decision in `docs/decisions.md` with the default you would take, marked
+  Log such a decision in `notes/decisions.md` with the default you would take, marked
   **default**, so work that does not depend on it can continue.
 
 ## Where things live
@@ -187,8 +189,8 @@ update that file instead of repeating the information elsewhere:
 | the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
 | task families, the task spec and renderer, environment guarantees, splits, the agent, grading, the replay contract | `evaluation/README.md` |
 | development commands, test layout, integrity invariants, this policy | `AGENTS.md` |
-| a standing decision or preference, or a default taken under the working agreement | `docs/decisions.md` |
-| the plan to the next experiment, its phases or their acceptance checks | `docs/plans/` |
+| a standing decision or preference, or a default taken under the working agreement | `notes/decisions.md` (untracked) |
+| the plan to the next experiment, its phases or their acceptance checks | `notes/plans/` (untracked) |
 
 Rules:
 

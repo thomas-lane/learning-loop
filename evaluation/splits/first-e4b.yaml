@@ -1,4 +1,4 @@
-# The first all-E4B experiment's split over the 34 calibrated families (docs/plans/first-experiment.md).
+# The first all-E4B experiment's split over the 34 calibrated families.
 # Ten families never appear in training: the whole config-repair cluster, to measure transfer to
 # a kind of task the learner never trained on, and one family from five other clusters, to measure
 # transfer to a new task of a familiar kind. Each trained family has 4 train instances, 1 dev
@@ -784,7 +784,7 @@ panels:
                 session-count/medium/s302, session-count/hard/s301, session-count/hard/s302,
                 write-validator/easy/s301, write-validator/easy/s302, write-validator/medium/s301,
                 write-validator/medium/s302, write-validator/hard/s301, write-validator/hard/s302]
-  # Reduced panels for the one-cycle real-stack smoke run (plan phase 4): four trained families from
+  # Reduced panels for a one-cycle real-stack smoke run: four trained families from
   # four clusters, two train instances and one dev instance each.
   smoke-train:
     split: train

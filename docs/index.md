@@ -28,13 +28,6 @@ rendered, with working links and diagrams, with `uv run loop docs --open`.
 |---|---|
 | add or change a task family or split; see what the learner sees, what every task environment guarantees and how grading is kept hidden from it | [Tasks and agent](../evaluation/README.md) |
 
-## Planning
-
-| I want to... | Read |
-|---|---|
-| know why the project works the way it does: standing decisions and the owner's preferences | [Decisions](decisions.md) |
-| see the plan to the first all-E4B experiment: what is done, the remaining phases and their acceptance checks | [Plan: first experiment](plans/first-experiment.md) |
-
 ## Developing
 
 | I want to... | Read |

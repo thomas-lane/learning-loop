@@ -1,4 +1,4 @@
-# The first all-E4B experiment (docs/plans/first-experiment.md): Gemma-4-E4B with thinking on is
+# The first all-E4B experiment: Gemma-4-E4B with thinking on is
 # the learner and, through editor.mode initial_policy, the editor, on the calibrated suite split in
 # evaluation/splits/first-e4b.yaml. Decoding, context and editor settings are pilot-e4b's. The file
 # has no `base:` so that later edits to the pilot configs cannot change this experiment.

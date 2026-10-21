@@ -22,3 +22,6 @@ configs/machines/local/*
 *.env
 !.env.example
 .lavish/
+
+# Owner-and-agent working notes (decisions log, plans)
+notes/
