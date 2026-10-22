@@ -142,7 +142,7 @@ class PodSpec(Strict):
     cloud_type: Literal["SECURE", "COMMUNITY"] = Field(default="SECURE", description="Runpod cloud to create the pod in.")
     image: str = Field(default="runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404", description="Container image; it must run sshd and install `PUBLIC_KEY` (Runpod's PyTorch images do). The project environment brings its own torch.")
     container_disk_gb: int = Field(default=200, ge=20, description="Ephemeral disk for the environment, model downloads and scratch files (discarded on termination).")
-    allowed_cuda_versions: list[str] = Field(default_factory=lambda: ["13.0", "13.1", "13.2"], description="Host CUDA (driver) versions to accept. Runpod matches each version exactly, so list every acceptable one; the locked torch wheels need CUDA 13.0, which any CUDA 13 driver runs.")
+    allowed_cuda_versions: list[str] = Field(default_factory=list, description="Host CUDA (driver) versions to accept, matched exactly from Runpod's list (which ends at 13.0, while hosts also run newer CUDA 13 drivers); empty accepts any. Either way, preparation refuses a pod whose driver is older than CUDA 13, which the locked torch wheels need.")
 
 
 class RunpodConfig(Strict):

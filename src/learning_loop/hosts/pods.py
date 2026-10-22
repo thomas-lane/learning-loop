@@ -51,6 +51,8 @@ WATCHDOG_PID_REL = "runs/_pod/watchdog.pid"
 LEDGER_NAME = "created.jsonl"  # under KNOWN_HOSTS_DIR
 CREATED_PREFIX = "lfe-"
 # Runpod's create errors while no machine has a free GPU of the requested types (retried)
+# The setup script's warning for a driver older than CUDA 13; preparation refuses such a pod.
+CUDA_TOO_OLD = "torch wheels need CUDA 13"
 NO_CAPACITY = ("no longer any instances available", "not enough free gpus", "no instances available", "could not find any")
 
 
@@ -326,9 +328,10 @@ class PodLifecycle:
             "containerDiskInGb": spec.container_disk_gb,
             "volumeInGb": 0,
             "ports": ["22/tcp"],
-            "allowedCudaVersions": list(spec.allowed_cuda_versions),
             "env": {"PUBLIC_KEY": _public_key(self.cfg.identity_file)},  # type: ignore[union-attr]
         }
+        if spec.allowed_cuda_versions:
+            body["allowedCudaVersions"] = list(spec.allowed_cuda_versions)
         waiting = False
         while True:
             try:
@@ -437,6 +440,8 @@ class PodLifecycle:
         for workdir, roles in self._workdirs(pod).items():
             out = root._ssh(f"WORKDIR={workdir} bash -s", stdin=script, timeout=900)
             warnings = [ln for ln in (out.stdout + out.stderr).splitlines() if ln.startswith("WARNING")]
+            if any(CUDA_TOO_OLD in w for w in warnings):
+                raise RunpodError(f"pod {pod}: {next(w for w in warnings if CUDA_TOO_OLD in w)}")
             remote = Remote(_runpod_host(pod, workdir))
             remote.push_repo()
             argv = ["uv", "sync", "--frozen"] + (["--extra", "train"] if roles & {"inference", "training", "editor_inference"} else [])

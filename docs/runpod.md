@@ -54,8 +54,10 @@ Runpod's *PyTorch* templates provide all of this; so does any Ubuntu-based image
 
 **GPU driver: CUDA 13.** The pod's NVIDIA driver must support CUDA 13.x (driver branch R580 or
 newer). If Runpod's deploy page has a CUDA version filter, pick 13.x. The setup script prints the
-driver's CUDA version and warns if it is below 13. Created pods get this automatically
-(`allowed_cuda_versions`).
+driver's CUDA version and warns if it is below 13; a pod the run prepares with such a driver is
+refused (and a created one terminated). Runpod's CUDA filter (`allowed_cuda_versions`) can name
+versions only up to 13.0 and matches them exactly, so created pods leave it empty by default to
+include hosts with newer CUDA 13 drivers.
 
 **GPU memory (estimates).**
 

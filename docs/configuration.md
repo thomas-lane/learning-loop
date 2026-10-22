@@ -295,7 +295,7 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `runpod.create.<name>.cloud_type` | `SECURE` or `COMMUNITY` | `SECURE` | Runpod cloud to create the pod in. |
 | `runpod.create.<name>.image` | str | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Container image; it must run sshd and install `PUBLIC_KEY` (Runpod's PyTorch images do). The project environment brings its own torch. |
 | `runpod.create.<name>.container_disk_gb` | int (>= 20) | `200` | Ephemeral disk for the environment, model downloads and scratch files (discarded on termination). |
-| `runpod.create.<name>.allowed_cuda_versions` | list of str | `['13.0', '13.1', '13.2']` | Host CUDA (driver) versions to accept. Runpod matches each version exactly, so list every acceptable one; the locked torch wheels need CUDA 13.0, which any CUDA 13 driver runs. |
+| `runpod.create.<name>.allowed_cuda_versions` | list of str | `[]` | Host CUDA (driver) versions to accept, matched exactly from Runpod's list (which ends at 13.0, while hosts also run newer CUDA 13 drivers); empty accepts any. Either way, preparation refuses a pod whose driver is older than CUDA 13, which the locked torch wheels need. |
 | `runs_dir` | str | `runs` | Directory for run directories (relative to the repository root). |
 | `hardware_notes` | str or null | null | Free text recorded with the run. |
 
