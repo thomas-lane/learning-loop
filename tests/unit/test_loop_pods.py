@@ -310,7 +310,7 @@ def test_created_pod_is_created_prepared_watched_and_terminated(api, tmp_path):
     body = api.created[pid]["body"]
     assert body["name"].startswith("lfe-a100-") and body["gpuTypeIds"] == ["NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
     assert body["gpuTypePriority"] == "custom" and body["cloudType"] == "SECURE" and body["volumeInGb"] == 0
-    assert body["allowedCudaVersions"] == ["13.0"] and body["ports"] == ["22/tcp"]
+    assert body["allowedCudaVersions"] == ["13.0", "13.1", "13.2"] and body["ports"] == ["22/tcp"]  # every CUDA 13 driver
     assert body["env"] == {"PUBLIC_KEY": "ssh-ed25519 AAAATEST user@laptop"}  # only the public key reaches the pod
     assert KEY not in json.dumps(body) and KEY not in json.dumps(FakeRemote.log)
     watchdog = [e for e in FakeRemote.log if e[0] == "detached"][0][2]
