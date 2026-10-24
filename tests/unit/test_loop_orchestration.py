@@ -397,3 +397,29 @@ def test_edit_stage_requests_proposals_concurrently_up_to_the_editor_limit(tmp_p
     ctx = run(co.create_run(EXP, MACHINE, run_id="editconc", runs_dir=tmp_path, overrides=["cycles=1"]))
     assert len(manifest(ctx, 0, "edit").items) >= 2
     assert peak == 2
+
+
+def test_resume_with_only_training_left_starts_no_server_before_it(tmp_path, monkeypatch):
+    """A cycle whose serving stages are done goes straight to training: the preflight warms no
+    server, which would take the accelerator a still-running trainer needs."""
+    real_train, real_preflight = co.train_checkpoint, co.preflight
+
+    def trainer_died(*a, **k):
+        raise RuntimeError("trainer died")
+
+    monkeypatch.setattr(co, "train_checkpoint", trainer_died)
+    ctx = co.create_run(EXP, MACHINE, run_id="trainleft", runs_dir=tmp_path, overrides=["cycles=1"])
+    with pytest.raises(RuntimeError, match="trainer died"):
+        run(ctx)
+    assert manifest(ctx, 0, "verify").status == "done" and cycle(ctx, 0)["status"] == "running"
+    warmed = []
+
+    async def preflight(ctx, log, first_server=None):
+        warmed.append(first_server)
+        await real_preflight(ctx, log, first_server)
+
+    monkeypatch.setattr(co, "train_checkpoint", real_train)
+    monkeypatch.setattr(co, "preflight", preflight)
+    ctx2 = run(co.open_run(ctx.run_dir))
+    assert warmed == [None] and cycle(ctx2, 0)["update"] == "trained"
+    assert co.serving_work_left(ctx2, 1) is False  # the finished final evaluation

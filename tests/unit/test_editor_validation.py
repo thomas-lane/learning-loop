@@ -282,6 +282,25 @@ class FakePolicy:
         )
 
 
+async def test_unparsed_editor_answer_is_invalid_not_an_abstention(tmp_path):
+    """A block the server could not parse is no answer, whatever tool name it starts with."""
+    from learning_loop.episodes.policy import normalize_message
+
+    summary, turns = source(tmp_path)
+    block = '<|tool_call>call:abstain{edit_justification:<|"|>unsure<|"|> trailing}<tool_call|>'
+    history, call_errors, repairs = normalize_message({"content": block}, "x", ["unterminated value"])
+    pol = FakePolicy(history)
+    pol.decide = lambda *a, **k: _async(PolicyDecision(
+        raw_request={}, raw_response={"id": "r", "learning_loop": {"parse_errors": ["unterminated value"]}}, history_message=history,
+        finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "invalid" and p.rejection_reasons == ["no_tool_call", "unparsed_tool_call:unterminated value"]
+
+
+async def _async(value):
+    return value
+
+
 def _editor(policy, **kw):
     return LLMEditor(policy, mode="initial_policy", checkpoint_id="base", prompt_path=PROMPT, root_seed=5, **kw)
 

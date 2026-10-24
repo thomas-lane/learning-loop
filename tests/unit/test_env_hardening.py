@@ -250,6 +250,32 @@ async def test_bash_timeout_is_clamped_and_recorded(instance):
         assert te.timeout_sec is None and te.timed_out is None
 
 
+async def test_listing_the_temp_dir_is_the_same_in_every_replay(instance):
+    """The bash wrapper's stderr file has a fixed name, so a replayed listing matches exactly."""
+    seen = []
+    for _ in range(2):
+        async with LocalSession(_files(instance), _cfg(5)) as s:
+            te = await s.execute("c", "bash", {"command": 'ls -a "$TMPDIR"; echo oops >&2'}, None)
+            seen.append(te.observation)
+    assert seen[0] == seen[1] == "[exit code 0]\n.\n..\n.ll-stderr\n[stderr]\noops"
+
+
+async def test_read_file_notes_a_line_longer_than_the_output_limit(tmp_path):
+    (tmp_path / "long.json").write_text("x" * 20_000 + "\n")
+    async with LocalSession(tmp_path, _cfg(5)) as s:
+        te = await s.execute("c", "read_file", {"path": "/app/long.json"}, None)
+    assert "x" * 3600 + "\n" in te.observation
+    assert te.observation.endswith("[line 1 is cut at 3600 of its 20000 characters; use bash to read the rest]")
+
+
+def test_only_unreadable_files_among_the_artifacts_are_graded():
+    from learning_loop.episodes.backends import graded_files
+
+    left = ["/app/out/a.txt", "/app/output.txt", "/app/tmp_input", "/app/out"]
+    assert graded_files(left, ["/app/out/", {"source": "/app/answer.txt"}]) == ["/app/out/a.txt", "/app/out"]
+    assert graded_files(["/app/answer.txt"], [{"source": "/app/answer.txt"}]) == ["/app/answer.txt"]
+
+
 # --------------------------------------------------------------------------- #
 # 8. stub core counts
 # --------------------------------------------------------------------------- #

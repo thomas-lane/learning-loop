@@ -35,7 +35,8 @@ laptop (coordinator)                                  Runpod pod (GPU host)
 
 - **The coordinator runs on your laptop** (or another Linux machine with Docker), because the
   tasks run in Docker containers and a standard Runpod pod has no Docker daemon. The pod only
-  serves models and trains.
+  serves models and trains. The run directory must be on a case-sensitive filesystem, which on
+  a Mac means a case-sensitive APFS volume ([operations](operations.md#troubleshooting)).
 - **The server is reached only through the run's SSH tunnel.** Never expose its port through
   Runpod's public HTTP proxy, which has no authentication.
 

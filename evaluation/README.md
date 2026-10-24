@@ -302,7 +302,8 @@ becomes tokens (Gemma 4's and Qwen3's keep it for every turn after the last user
   number, and lines end only at `\n`, so the numbers match theirs. The separator is an arrow, not
   a tab, because models mistook a tab after the number for the file's own separator and copied
   the numbers into files they wrote; the tool description says the prefix is not part of the
-  file. A page ends early, at a whole line, to fit `max_output_chars`. Missing files,
+  file. A page ends early, at a whole line, to fit `max_output_chars`; a single line longer than
+  that is shown up to the limit, with a note giving its full length. Missing files,
   directories and other non-regular files get an `[error]` naming the reason.
 - `write_file`: writes exactly the given content (creating parent directories). An existing
   file keeps its mode; a new file gets 0644 and the container user as owner (an upload through
@@ -357,8 +358,11 @@ not a malformed call.
 **After the episode**, the agent gives the owner read access to any file under `/app` that lacks
 it and rwx to any directory that lacks it, because Harbor copies artifacts out through the host,
 which could not read such a file back and silently drops the contents of such a directory.
-Directory modes are never graded. A file its owner cannot read is never a valid answer, so such
-an episode is scored 0 and its summary names the files (`unreadable_artifact`).
+Directory modes are never graded. A file its owner cannot read is never a valid answer, so an
+episode that leaves one among the task's artifacts is scored 0 and its summary names those
+files (`unreadable_artifact`). Such files elsewhere under `/app` are never copied or graded, so
+they only appear in `unreadable_files`, and an episode that stopped on an infrastructure failure
+keeps its missing reward.
 
 **Modes.** *CLI mode* takes the options in `configs/local-llama.yaml` (`max_tokens` covers
 reasoning plus the tool call, hence 8192), sends no request seed and relies on Harbor's

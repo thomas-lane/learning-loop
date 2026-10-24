@@ -258,7 +258,7 @@ def parse_crontab(text):
         if not line or line.startswith("#") or (not line.startswith("@") and _CRON_VAR.match(line)):
             continue
         if line.startswith("@"):
-            alias, _, command = line.partition(" ")
+            alias, command = (line.split(None, 1) + [""])[:2]  # any blank ends the alias, as in cron
             if alias not in _CRON_ALIASES:
                 raise ValueError("unsupported %r" % alias)
             parts = _CRON_ALIASES[alias].split() + [command.strip()]

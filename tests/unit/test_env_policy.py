@@ -148,6 +148,15 @@ async def test_server_reported_unparsed_tool_call_is_a_parse_error():
     assert {r["field"] for r in d.repairs} == {"tool_call", "content"}
 
 
+async def test_json_block_name_is_not_taken_from_the_word_call_in_its_arguments():
+    msg = {"role": "assistant", "content": '<tool_call>{"name": "bash", "arguments": {"command": "recall \\* x"}}</tool_call>'}
+    body = _completion(msg, {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, "stop")
+    body["learning_loop"] = {"parse_errors": ["invalid JSON in <tool_call> block"]}
+    pol, _ = _policy(lambda r: httpx.Response(200, json=body))
+    d = await pol.decide(MSGS, TOOLS, None)
+    assert d.history_message["tool_calls"][0]["function"]["name"] == "bash"
+
+
 async def test_gemma_block_name_is_recovered_and_an_empty_thought_is_kept():
     msg = {"role": "assistant", "content": "<|tool_call>call{write_file{path:<|\"|>a<|\"|>}<tool_call|>", "reasoning_content": ""}
     body = _completion(msg, {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, "stop")

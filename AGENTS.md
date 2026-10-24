@@ -119,7 +119,7 @@ have failed before it.
   held-out families; prompts contain only messages before the intervened turn; editor
   justifications and verification evidence live in companion records, never in `prompt/chosen/rejected`.
 - **Hidden grading stays hidden**: tasks use Harbor's separate verifier with explicit artifact
-  transfer; the `checks` grader, the only one that executes agent code, runs it as an unprivileged child that
+  transfer; the `checks` and `commands` graders, the only ones that execute agent code, run it as an unprivileged child that
   cannot read `/tests` or write `/logs/verifier`, and the parent judges its raw outputs. The host
   agent never writes through the container-writable `/logs/agent` mount except via a
   symlink-refusing copy. The editor sees only the instruction, the learner's system prompt and tool

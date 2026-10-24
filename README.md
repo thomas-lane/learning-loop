@@ -105,6 +105,12 @@ the tasks outside the loop, use `evaluation/run.sh` ([evaluation/README.md](eval
 | `uv run loop smoke train` | real LoRA DPO (Qwen3-0.6B, MPS, 2 steps) on **labeled fixture** pairs, reload check, adapter serving, one Docker episode | ~2 min |
 | `uv run loop smoke live` | the real small learner and editor on one short task | ~10-20 min |
 
+`fixture-docker`, `train` and `live` run Harbor containers, so their run directory
+(`runs/_smoke/` in the checkout) must be on a case-sensitive filesystem: the run's preflight
+refuses a case-insensitive one, because agent files that differ only in letter case would merge
+when copied out for grading. macOS's default volume is case-insensitive; keep the checkout on a
+case-sensitive APFS volume, or run these on a Linux Docker host.
+
 A passing smoke test is an engineering check, not evidence that learning, Gemma or a GPU host
 works.
 

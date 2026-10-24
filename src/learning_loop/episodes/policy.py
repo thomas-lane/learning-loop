@@ -80,7 +80,9 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
 
 
 _CALL_BLOCK = re.compile(r"(?:<\|tool_call>|<tool_call>)(.*?)(?:<tool_call\|>|</tool_call>|$)", re.S)
-_BLOCK_NAME = (re.compile(r"\s*call\W*([A-Za-z_][\w\-]*)"), re.compile(r'"name"\s*:\s*"([A-Za-z_][\w\-]*)"'))
+# Gemma's `call:NAME{...}` (or a garbled `call{NAME{...}`) at the start of the block, else a JSON
+# `"name": "NAME"` anywhere in it; the word `call` inside a block's arguments names nothing.
+_BLOCK_NAME = (re.compile(r"\s*call\W*([A-Za-z_][\w\-]*)").match, re.compile(r'"name"\s*:\s*"([A-Za-z_][\w\-]*)"').search)
 
 
 def _unparsed_calls(content: Any, errors: list[str], id_prefix: str) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
@@ -93,8 +95,8 @@ def _unparsed_calls(content: Any, errors: list[str], id_prefix: str) -> list[tup
     for i, err in enumerate(errors):
         block = blocks[i] if i < len(blocks) else ""
         name = "unparsed_call"
-        for pattern in _BLOCK_NAME:
-            m = pattern.search(block)
+        for find in _BLOCK_NAME:
+            m = find(block)
             if m:
                 name = m.group(1)
                 break

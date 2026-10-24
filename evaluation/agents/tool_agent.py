@@ -242,15 +242,16 @@ class ToolAgent(BaseAgent):
         """Regular files under the workdir that their owner cannot read, made owner-readable.
         Harbor copies artifacts through the host, where such a file cannot be read back, so the
         upload to the verifier would fail and the episode would look like an infrastructure
-        failure. No task's answer is a file its owner cannot read, so the backend scores such an
-        episode 0 (`unreadable_artifact`); adding the bit only lets the copy (and so the record of
-        what the agent left) complete. Returns the files changed, or "failed: ..."."""
+        failure. No task's answer is a file its owner cannot read, so the backend scores an
+        episode 0 when such a file is one of the task's artifacts (`unreadable_artifact`); adding
+        the bit only lets the copy (and so the record of what the agent left) complete. Returns
+        the files changed, or "failed: ..."."""
         cmd = f"find {shlex.quote(workdir)} -type f ! -perm -u=r -print -exec chmod u+r {{}} + 2>/dev/null; true"
         try:
             r = await environment.exec(cmd, cwd="/", timeout_sec=60)
         except Exception as e:
             return f"failed: {type(e).__name__}: {e}"
-        return (r.stdout or "").split("\n")[:100] if (r.stdout or "").strip() else []
+        return [p for p in (r.stdout or "").split("\n") if p][:100]
 
     @staticmethod
     async def _restore_dir_modes(environment: BaseEnvironment, workdir: str) -> list[str] | str:

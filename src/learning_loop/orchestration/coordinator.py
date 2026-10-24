@@ -1388,8 +1388,12 @@ def calibration_report(ctx: RunContext) -> list[dict[str, Any]]:
     from evaluation.families import FAMILIES
 
     cells: dict[tuple[str, str], dict[str, int]] = {}
-    for path in sorted(ctx.stage_dir(0, "eval").glob("items/*/summary.json")):
-        s = EpisodeSummary.model_validate(read_json(path))
+    # Each item's final output only: attempts preserved as `<id>.interrupted-N` were retried.
+    manifest = StageManifest.model_validate(read_json(ctx.stage_dir(0, "eval") / "manifest.json"))
+    for item in sorted(manifest.items.values(), key=lambda w: w.item_id):
+        s = load_summary(ctx, item)
+        if s is None:
+            continue
         inst = ctx.instances[s.instance_id]
         c = cells.setdefault((inst.family, inst.difficulty or ""), {"episodes": 0, "successes": 0, "infra": 0})
         if s.stop_category == StopCategory.INFRA:
@@ -1522,6 +1526,24 @@ def first_open_cycle(ctx: RunContext) -> int | None:
     return None
 
 
+def serving_work_left(ctx: RunContext, cycle: int) -> bool:
+    """Whether `cycle` still has a stage that needs a served model: its evaluation or, in a
+    learning cycle, collection, editing, verification or an audit. A cycle left with only export
+    and training must not start a server, which would take the accelerator the trainer (possibly
+    a detached remote one still running) needs."""
+    exp = ctx.exp
+    stages = ["eval"] if eval_due(exp, cycle) else []
+    if exp.condition == "learning" and not (cycle == exp.cycles or exp.condition == "frozen_baseline"):
+        stages += ["collect", "edit", "verify"] + (["audit"] if exp.verification.audit.fraction > 0 else [])
+
+    def done(stage: str) -> bool:
+        m = ctx.stage_dir(cycle, stage) / "manifest.json"
+        return m.exists() and read_json(m).get("status") == "done"
+
+    # An audit that selected nothing writes no manifest; counting it as left only warms a server.
+    return any(not done(st) for st in stages)
+
+
 async def preflight(ctx: RunContext, log: Callable[[str], None], first_server: CheckpointRef | None = None) -> None:
     """The Docker-host preflight (orchestration/preflight.py), while the learner's server for
     `first_server` starts; raises PreflightError before any episode when the host fails it."""
@@ -1541,7 +1563,7 @@ async def run_all(ctx: RunContext, log: Callable[[str], None] | None = None) -> 
             try:
                 first = first_open_cycle(ctx)
                 if first is not None:
-                    await preflight(ctx, log, learner_for_cycle(ctx, first))
+                    await preflight(ctx, log, learner_for_cycle(ctx, first) if serving_work_left(ctx, first) else None)
                 for c in range(ctx.exp.cycles + 1):
                     await run_cycle(ctx, c, log)
             finally:

@@ -115,3 +115,25 @@ async def test_a_file_left_unreadable_by_its_owner_is_a_graded_failure_not_infra
     res = await HarborDockerBackend().run(inst, make_plan(inst, "unreadable", scripted_spec(policy)), tmp_path / "ep")
     assert res.summary.stop_category == StopCategory.MODEL and res.summary.success is False, res.summary
     assert res.summary.reward == {"reward": 0.0} and res.summary.extra["unreadable_artifact"], res.summary
+
+
+async def test_an_unreadable_file_outside_the_artifacts_does_not_change_the_score(tmp_path):
+    """Only the declared artifacts are copied and graded, so a locked scratch file elsewhere
+    under /app is recorded but leaves a correct answer correct."""
+    import yaml
+
+    from _env_helpers import scripted_spec
+
+    task = tmp_path / "copy-private__easy__s1__scratch"  # unique: Harbor names the image after the directory
+    render(fixture_family("copy_private"), "easy", 1, task)
+    rules = [
+        {"name": "solve-and-lock-scratch", "when": {"turn": 0}, "respond": {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "mkdir -p /app/out && cp /app/in/* /app/out/ && chmod 600 /app/out/* && echo x > /app/scratch && chmod 000 /app/scratch"}}]}},
+        {"name": "done", "when": {"min_turn": 1}, "respond": {"content": "done"}},
+    ]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump({"schema": "scripted_policy/v1", "label": "fixture", "rules": rules}))
+    inst = TaskInstance(instance_id="copy-private/easy/s1", family="copy-private", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "scratch", scripted_spec(policy)), tmp_path / "ep")
+    assert res.summary.success is True and res.summary.reward == {"reward": 1.0}, res.summary
+    assert res.summary.extra["unreadable_artifact"] is None and res.summary.extra["unreadable_files"] == ["/app/scratch"], res.summary

@@ -38,3 +38,11 @@ def test_calibrate_runs_and_reports_per_family_and_difficulty(tmp_path):
         rate = float(r["success_rate"])
         assert r["verdict"] == ("too hard" if rate < 0.2 else "too easy" if rate > 0.8 else "in range")
     assert (run_dir / "logs" / "preflight.jsonl").exists()  # skipped on the local fixture backend, but recorded
+    # An attempt preserved after a retry is not counted again.
+    import shutil
+
+    items = co.open_run(run_dir).stage_dir(0, "eval") / "items"
+    first = sorted(p for p in items.iterdir() if p.is_dir())[0]
+    shutil.copytree(first, items / f"{first.name}.interrupted-1")
+    again = co.calibration_report(co.open_run(run_dir))
+    assert [r["episodes"] + r["infra_excluded"] for r in again] == [4, 4]

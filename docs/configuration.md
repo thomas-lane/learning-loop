@@ -9,7 +9,7 @@ A run is defined by three kinds of YAML file:
 | Model profile | identity of a model: pinned revision, chat template, serving backends, training defaults | `configs/models/<name>.yaml` |
 
 Task instances and panels come from split files (`evaluation/splits/*.yaml`), described in
-[../evaluation/README.md](../evaluation/README.md#generators-and-splits). Terms are defined in
+[../evaluation/README.md](../evaluation/README.md#splits). Terms are defined in
 [glossary.md](glossary.md).
 
 ## Loading rules
@@ -89,7 +89,7 @@ is any `editor.mode` except `scripted`.
 - Every named panel exists in the split file; `evaluation.final_panels` are `final` or
   `external` panels; every family in `tasks.exposure_schedule` occurs in the collection panel.
   The split file passes the checks in
-  [../evaluation/README.md](../evaluation/README.md#generators-and-splits).
+  [../evaluation/README.md](../evaluation/README.md#splits).
 
 `loop evaluate` checks the per-file rules and, before it creates the run directory, that
 `--checkpoint` was trained for the learner's model profile, the `unsupported` rule for the

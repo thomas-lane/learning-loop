@@ -45,6 +45,13 @@ from .episode import EpisodeCore, load_core, run_episode, write_episode_files
 from .events import EventLog, load_turns, read_events
 from .policy import make_policy
 
+
+def graded_files(paths: list[str], artifacts: list[Any]) -> list[str]:
+    """The container paths among `paths` that are, or lie under, one of the task's declared
+    artifacts (the files and directories Harbor copies to the verifier)."""
+    roots = [(a if isinstance(a, str) else a["source"]).rstrip("/") for a in artifacts]
+    return [p for p in paths if any(p == r or p.startswith(r + "/") for r in roots)]
+
 AGENT_IMPORT_PATH = "evaluation.agents.tool_agent:ToolAgent"
 
 
@@ -195,9 +202,13 @@ class HarborDockerBackend:
             override = ("infra:no_reward", StopCategory.INFRA)
         post = read_json(rec / "post_episode.json") if (rec / "post_episode.json").exists() else {}
         unreadable = post.get("unreadable_files") or []
-        if isinstance(unreadable, list) and unreadable and override is None:
-            # The agent left a file its owner cannot read: never a valid answer, so a graded
-            # failure (ToolAgent made it readable only so the artifacts could be copied).
+        unreadable = unreadable if isinstance(unreadable, list) else []
+        graded = graded_files(unreadable, read_task_toml(Path(instance.task_dir)).get("artifacts", []))
+        if graded and override is None and core.stop_category != StopCategory.INFRA:
+            # A graded artifact its owner cannot read is never a valid answer, so a graded failure
+            # (ToolAgent made it readable only so the artifacts could be copied). Other files
+            # under /app are never copied or graded, and an infrastructure stop keeps its
+            # missing reward.
             reward = {k: 0.0 for k in (reward or {"reward": 0.0})}
 
         extra: dict[str, Any] = {
@@ -206,7 +217,8 @@ class HarborDockerBackend:
             "harbor_exception": {"type": exc_type, "message": (exc_msg or "")[:2000]} if exc_type else None,
             "verifier_environment_mode": (result.verifier_environment_mode.value if result is not None and result.verifier_environment_mode else None),
             "task_content_hash": instance.content_hash,
-            "unreadable_artifact": unreadable or None,
+            "unreadable_artifact": graded or None,
+            "unreadable_files": unreadable or None,
         }
         summary = core.to_summary(
             reward=reward,

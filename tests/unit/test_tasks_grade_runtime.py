@@ -58,6 +58,7 @@ def test_crontab_compares_when_jobs_run():
     assert not same("* * * * 1 job\n", "* * * * * job\n")  # only Mondays
     assert not same("0 3 1 * 1 job\n", "0 3 1 * * job\n")  # the 1st or a Monday, against the 1st only
     assert same("MAILTO = ops@example.com\nFOO=1\n0 3 * * * job\n", "0 3 * * * job\n")
+    assert same("@daily\tjob\n", "0 0 * * * job\n") and same("@daily  job\n", "@daily job\n")
 
 
 def test_tree_text_entries_ignore_how_the_file_ends():

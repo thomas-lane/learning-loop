@@ -144,9 +144,12 @@ def _ends(text: str, what: str) -> str:
 # stderr into stdout in no fixed order, so without the wrapper errors and data would interleave
 # differently from run to run (and replays compare observations exactly). A missing marker means
 # the wrapper itself was killed: the per-call timeout, never the command's own exit code 124.
+# The stderr file has a fixed name (calls in one environment run one at a time), so a command
+# that lists the temporary directory sees the same entries when a branch replays it; a random
+# `mktemp` name would differ on every replay and stop the branch at an observation mismatch.
 _MARK = "\x1fLL-EXIT:"
 _WRAP = (
-    '__ll_err=$(mktemp) || exit 125; bash -c {cmd} 2>"$__ll_err"; __ll_rc=$?; '
+    '__ll_err="${{TMPDIR:-/tmp}}/.ll-stderr"; bash -c {cmd} 2>"$__ll_err"; __ll_rc=$?; '
     "printf '\\n\\037LL-EXIT:%d\\n' \"$__ll_rc\"; cat \"$__ll_err\"; rm -f \"$__ll_err\"; exit 0"
 )
 
@@ -216,13 +219,16 @@ lines = [p + "\n" for p in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
 total = len(lines)
 if start > total:
     out(total=total, start=start, lines=[], final_newline=text.endswith("\n"), binary=b"\0" in data)
-page, size = [], 0
+page, size, cut = [], 0, None
 for line in lines[start - 1:start - 1 + count]:
     if page and size + len(line) + GUTTER > cap:
         break
-    page.append(line[:cap] if not page else line)
+    if not page and len(line) > cap:  # a single line longer than the limit: show its start
+        cut = [cap, len(line.rstrip("\n"))]
+        line = line[:cap]
+    page.append(line)
     size += len(page[-1]) + GUTTER
-out(total=total, start=start, lines=page, final_newline=text.endswith("\n"), binary=b"\0" in data)
+out(total=total, start=start, lines=page, cut=cut, final_newline=text.endswith("\n"), binary=b"\0" in data)
 """
 
 
@@ -264,6 +270,8 @@ async def read_file(env: Any, args: dict[str, Any], cfg: ToolConfig) -> ToolOutp
     numbered = "".join(f"{n:>6}{LINE_ARROW}{line}" for n, line in enumerate(lines, start))
     shown = [f"[{path}: lines {start}-{end} of {total}" + (" (binary data shown as text)" if page["binary"] else "") + "]\n",
              numbered if numbered.endswith("\n") else numbered + "\n"]
+    if page.get("cut"):
+        shown.append(f"[line {start} is cut at {page['cut'][0]} of its {page['cut'][1]} characters; use bash to read the rest]\n")
     if end < total:
         shown.append(f"[{total - end} more lines; next start_line={end + 1}]")
     elif not page["final_newline"]:

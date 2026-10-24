@@ -886,7 +886,15 @@ class LLMEditor(_EditorBase):
             err = f"editor_infra_error:{decision.infra_error}" if decision.infra_error else f"editor_request_error:{decision.request_error}"
             return EditProposal(**common, status="invalid", rejection_reasons=[err], raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
         server_errors = ((decision.raw_response or {}).get("learning_loop") or {}).get("parse_errors") or []
-        answer, recovered = recover_bare_answer(decision.history_message, answer_tools)
+        # A tool-call block the server could not parse stays an attempted call in a learner's
+        # history (answered with an error); for the editor it is no answer, so the proposal is
+        # invalid and names the parse error instead of taking the block's recovered tool name.
+        unparsed = {r["tool_call_id"] for r in decision.repairs if r.get("field") == "tool_call"}
+        message = decision.history_message
+        if unparsed:
+            kept = [c for c in message.get("tool_calls") or [] if c.get("id") not in unparsed]
+            message = {k: v for k, v in message.items() if k != "tool_calls"} | ({"tool_calls": kept} if kept else {})
+        answer, recovered = recover_bare_answer(message, answer_tools)
         if recovered:
             raw["answer_recovery"] = "bare_tool_call"  # the reply was the call without the format's markers
         proposal = proposal_from_tool_calls(answer, turns, parse_errors=[*decision.parse_errors, *server_errors], **common)
