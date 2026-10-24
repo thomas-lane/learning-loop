@@ -274,7 +274,8 @@ learner sees and what is counted therefore stay the same as with the transformer
   adapter overhead.
 - `inference.request_concurrency` sets how many requests vLLM batches together.
   Set `docker_concurrency` at least as large; otherwise too few episodes run at once to fill a
-  batch.
+  batch. The edit stage needs no containers and sends up to `request_concurrency` proposal
+  requests at once, so editing is batched too.
 
 Gemma-4-E4B on an A100 with the zero LoRA, 768-token generations:
 

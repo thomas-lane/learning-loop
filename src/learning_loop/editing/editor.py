@@ -750,6 +750,9 @@ def proposal_from_tool_calls(
 class _EditorBase:
     editor_id: str
     assistant_text_policy: str = "reject_nonempty"
+    # How many proposals the edit stage requests at once. Proposals are independent (each has
+    # its own seed), so the order they run in does not change them.
+    max_concurrency: int = 1
 
     async def propose(self, source: EpisodeSummary, turns: list[TurnRecord], instance: TaskInstance, instruction: str, tools: list[ToolSchema], **kw: Any) -> EditProposal:
         raise NotImplementedError
@@ -814,6 +817,9 @@ class LLMEditor(_EditorBase):
         self.include_outcome_metrics = include_outcome_metrics
         self.include_later_observations = include_later_observations
         self.assistant_text_policy = assistant_text_policy
+        # As many requests as the editor's endpoint accepts (its `request_concurrency`), which
+        # vLLM batches; its per-endpoint semaphore still enforces the limit on each request.
+        self.max_concurrency = policy.spec.max_concurrent_requests or 1
         self.decoding = {
             "sampling": policy.spec.sampling.model_dump(),
             "send_seed": policy.spec.send_seed,

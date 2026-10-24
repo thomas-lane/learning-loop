@@ -818,7 +818,7 @@ async def stage_edit(ctx: RunContext, cycle: int, learner: CheckpointRef, source
         infra = next((r for r in proposal.rejection_reasons if r.startswith("editor_infra_error")), None)
         return {"status": proposal.status, "infra_error": infra}
 
-    return await run_stage(ctx, cycle, "edit", items, fn, concurrency=1)
+    return await run_stage(ctx, cycle, "edit", items, fn, concurrency=editor.max_concurrency if editor else 1)
 
 
 def load_proposals(ctx: RunContext, edit: StageManifest) -> list[tuple[EditProposal, Path]]:

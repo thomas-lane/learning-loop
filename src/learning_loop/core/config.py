@@ -182,7 +182,7 @@ class InferenceProfile(Strict):
     device: Literal["mps", "cuda", "cpu", "auto"] = Field(default="auto", description="Managed mode: accelerator for the server.")
     startup_timeout_sec: int = Field(default=600, description="Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`).")
     request_timeout_sec: int = Field(default=600, description="Per-request client timeout; a timeout is an infrastructure failure.")
-    request_concurrency: int = Field(default=1, description="Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches).")
+    request_concurrency: int = Field(default=1, description="Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. The edit stage sends this many proposal requests to the editor's endpoint at once. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches).")
 
     @model_validator(mode="after")
     def _check(self) -> "InferenceProfile":

@@ -372,3 +372,28 @@ def test_dropped_training_pairs_are_recorded_and_reported(tmp_path, monkeypatch)
     assert "## Training data actually used" in report and "**2 exported pair(s) were dropped before training**" in report
     rows = (ctx.run_dir / "reports" / "training_data.csv").read_text()
     assert "p-a: oversize:90>64" in rows
+
+
+def test_edit_stage_requests_proposals_concurrently_up_to_the_editor_limit(tmp_path, monkeypatch):
+    """Proposals run as many at a time as the editor's endpoint accepts, not one by one."""
+    real = co.build_editor
+    in_flight, peak = 0, 0
+
+    class Tracked:
+        def __init__(self, inner):
+            self.inner, self.editor_id, self.max_concurrency = inner, inner.editor_id, 2
+
+        async def propose_for(self, **kw):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            try:
+                return await self.inner.propose_for(**kw)
+            finally:
+                in_flight -= 1
+
+    monkeypatch.setattr(co, "build_editor", lambda ctx, learner: Tracked(real(ctx, learner)))
+    ctx = run(co.create_run(EXP, MACHINE, run_id="editconc", runs_dir=tmp_path, overrides=["cycles=1"]))
+    assert len(manifest(ctx, 0, "edit").items) >= 2
+    assert peak == 2
