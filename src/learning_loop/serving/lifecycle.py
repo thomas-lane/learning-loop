@@ -63,8 +63,9 @@ class InferenceManager:
     """One manager per role (learner / editor) per coordinator process."""
 
     def __init__(self, profile: InferenceProfile, model: ModelProfile, log_dir: Path, role: str = "learner",
-                 zero_lora: dict[str, Any] | None = None):
+                 zero_lora: dict[str, Any] | None = None, max_context: int | None = None):
         self.profile = profile
+        self.max_context = max_context  # context window the managed server allocates (None: engine default)
         self.zero_lora = zero_lora  # serve base checkpoints through an all-zero LoRA of this shape
         self.model = model
         self.log_dir = Path(log_dir)
@@ -158,6 +159,8 @@ class InferenceManager:
                 argv += ["--base-checkpoint-id", ckpt.checkpoint_id]
                 if self.zero_lora:
                     argv += ["--zero-lora", json.dumps(self.zero_lora, sort_keys=True)]
+            if self.max_context is not None:
+                argv += ["--max-context", str(self.max_context)]
             if backend == "vllm":
                 sb = self._backend_profile()
                 if not sb.engine_package:

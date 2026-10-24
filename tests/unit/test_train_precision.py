@@ -1,7 +1,7 @@
-"""One numerical path for DPO log-probs: fp32 logits, fp32 sum, no Trainer mixed precision.
+"""One numerical path for DPO log-probs: TRL's chunked log-softmax (float32 accumulation over
+vocabulary chunks), fp32 sum, no Trainer mixed precision.
 
-CPU (and MPS when available) only; no model download. The CUDA path (TRL's fused Triton
-log-prob kernel on the same fp32 logits) is not exercised here.
+CPU (and MPS when available) only; no model download.
 """
 
 from __future__ import annotations
@@ -16,8 +16,7 @@ pytest.importorskip("trl")
 from learning_loop.training.common import TrainingRequestError  # noqa: E402
 from learning_loop.training.modeling import (  # noqa: E402
     FP32_LOGITS_HOOK_ATTR,
-    completion_logps,
-    completion_window,
+    chunked_token_logps,
     ensure_fp32_logits,
     sequence_logps,
 )
@@ -32,31 +31,33 @@ def _reference_fp64(logits, ids, cm):
     return (lp * cm[..., 1:]).sum(dim=1)
 
 
-@pytest.mark.parametrize("device", DEVICES)
-def test_completion_logps_upcasts_bf16_logits_and_sums_in_fp32(device):
-    g = torch.Generator().manual_seed(0)
-    V, T = 4096, 96
-    logits32 = (torch.randn(2, T, V, generator=g) * 4).to(device)
-    logits16 = logits32.to(torch.bfloat16)
-    ids = torch.randint(0, V, (2, T), generator=g).to(device)
-    cm = torch.zeros(2, T, dtype=torch.long)
-    cm[:, 20:] = 1
-    cm = cm.to(device)
+def _gemma_tiny():
+    from transformers import AutoModelForCausalLM, Gemma4UnifiedTextConfig
 
-    out16 = completion_logps(logits16, ids, cm)
-    assert out16.dtype == torch.float32
-    # bf16 input == its exact fp32 upcast: the bf16 weights never change the log-softmax path
-    out_up = completion_logps(logits16.float(), ids, cm)
-    assert torch.equal(out16, out_up)
-    ref = _reference_fp64(logits16.float(), ids, cm).float()
-    assert torch.allclose(out16.cpu(), ref.cpu(), atol=1e-3, rtol=0)
-    # what a bf16 log-softmax + bf16 sum would give is visibly off (the defect this guards against)
-    lp16 = torch.log_softmax(logits16[..., :-1, :], dim=-1).gather(-1, ids[..., 1:].unsqueeze(-1)).squeeze(-1)
-    naive16 = (lp16 * cm[..., 1:]).sum(dim=1)
-    assert (naive16.float().cpu() - ref.cpu()).abs().max() > 1e-2
-    # prompt positions contribute nothing
-    cm0 = torch.zeros_like(cm)
-    assert torch.equal(completion_logps(logits16, ids, cm0), torch.zeros(2, device=device))
+    torch.manual_seed(0)
+    cfg = Gemma4UnifiedTextConfig(vocab_size=512, hidden_size=64, intermediate_size=96, num_hidden_layers=2, num_attention_heads=2,
+                                  num_key_value_heads=1, head_dim=16, global_head_dim=32, sliding_window=8,
+                                  layer_types=["sliding_attention", "full_attention"], final_logit_softcapping=30.0)
+    return AutoModelForCausalLM.from_config(cfg).to(torch.float32)
+
+
+@pytest.mark.parametrize("which", ["llama", "gemma4"])
+def test_chunked_logps_equal_full_logit_log_softmax(which):
+    """chunked_token_logps never holds full-vocabulary logits, yet equals a float64 log-softmax over
+    the model's own logits, including Gemma's final logit soft-capping, and is zero off the completion."""
+    model = _tiny_model(torch.float32, "cpu") if which == "llama" else _gemma_tiny()
+    g = torch.Generator().manual_seed(0)
+    ids = torch.randint(3, 512, (2, 30), generator=g)
+    cm = torch.zeros(2, 30, dtype=torch.long)
+    cm[0, 20:], cm[1, 25:] = 1, 1
+    kw = {"input_ids": ids, "attention_mask": torch.ones_like(ids), "use_cache": False}
+    with torch.no_grad():
+        lp, ent = chunked_token_logps(model, kw, ids, cm)
+        logits = model(**kw).logits  # soft-capped by the model's own forward
+    assert lp.shape == ent.shape == (2, 29) and lp.dtype == torch.float32
+    ref = torch.log_softmax(logits[:, :-1].double(), dim=-1).gather(-1, ids[:, 1:].unsqueeze(-1)).squeeze(-1) * cm[:, 1:]
+    assert torch.allclose(lp.double(), ref, atol=1e-5)
+    assert torch.equal(lp[cm[:, 1:] == 0], torch.zeros(int((cm[:, 1:] == 0).sum())))
 
 
 def _tiny_model(dtype, device):
@@ -97,26 +98,19 @@ def test_sequence_logps_matches_trl_loss_path_on_bf16_model(device):
                         chosen_ids=[30, 31, 32, 33, 2], rejected_ids=[40, 41, 2],
                         prompt_text="", chosen_text="", rejected_text="")
     ours = sequence_logps(model, [pair], device, pad_token_id=0)[0]
+    ensure_fp32_logits(model)
     # TRL DPOTrainer._compute_loss (non-liger): selective_log_softmax_and_entropy on shifted logits, sum(dim=1)
     b = DataCollatorForPreference(pad_token_id=0)([pair.row()])
     ids, am, cm = (b[k].to(device) for k in ("input_ids", "attention_mask", "completion_mask"))
     with torch.no_grad():
         logits = model(input_ids=ids, attention_mask=am, use_cache=False).logits
-        assert logits.dtype == torch.float32  # hook installed by sequence_logps
+        assert logits.dtype == torch.float32
         lp, _ = selective_log_softmax_and_entropy(logits[..., :-1, :], ids[..., 1:], entropy_requires_grad=False,
                                                   row_mask=cm[..., 1:])
         trl = lp.sum(dim=1).cpu()
     assert lp.dtype == torch.float32
-    # ours runs lm_head on the completion window only; same values up to matmul rounding
+    # ours runs lm_head on the completion positions only, in chunks; same values up to bf16 matmul rounding
     assert abs(ours[0] - float(trl[0])) < 1e-3 and abs(ours[1] - float(trl[1])) < 1e-3
-
-
-def test_completion_window_covers_every_completion_token():
-    cm = torch.tensor([[0, 0, 0, 1, 1, 1, 0], [0, 0, 0, 0, 1, 1, 1]])
-    k = completion_window(cm)
-    assert k == 5  # from the last prompt token of row 0 (position 2) to the end
-    assert cm[:, -k:][:, 1:].sum() == cm[:, 1:].sum()  # no completion label lost after the shift
-    assert completion_window(torch.tensor([[0, 1, 1]])) == 3
 
 
 def _pair():
@@ -125,9 +119,11 @@ def _pair():
                         prompt_text="", chosen_text="", rejected_text="")
 
 
-def test_windowed_trainer_loss_equals_trl_full_logits_loss(tmp_path):
-    """The trainer's loss (completion window, `logits_to_keep`) equals TRL's own `_compute_loss`
-    on full logits, gradients included, and lm_head never sees the prompt positions."""
+@pytest.mark.parametrize("split", [False, True])
+def test_chunked_trainer_loss_equals_trl_full_logits_loss(tmp_path, split):
+    """The trainer's loss (TRL's chunked path through chunked_token_logps, with or without
+    dpo.split_pair_backward) equals TRL's own `_compute_loss` on full logits, gradients included,
+    and lm_head never runs as a module (no full-vocabulary logits)."""
     from peft import LoraConfig, get_peft_model
     from tokenizers import Tokenizer, models
     from transformers import PreTrainedTokenizerFast
@@ -146,11 +142,12 @@ def test_windowed_trainer_loss_equals_trl_full_logits_loss(tmp_path):
     row = {**_pair().row(), "ref_chosen_logps": -10.0, "ref_rejected_logps": -12.0}
     args = DPOConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, fp16=False, report_to="none",
                      precompute_ref_log_probs=True, max_length=None, disable_dropout=True)
-    trainer = _make_trainer_class()(model=model, args=args, train_dataset=Dataset.from_list([row]), processing_class=tok)
+    trainer = _make_trainer_class(split)(model=model, args=args, train_dataset=Dataset.from_list([row]), processing_class=tok)
+    assert trainer.use_liger_kernel  # TRL's chunked path
     b = DataCollatorForPreference(pad_token_id=0)([row])
     b["ref_chosen_logps"], b["ref_rejected_logps"] = torch.tensor([-10.0]), torch.tensor([-12.0])
-    seen = []
-    hook = model.get_output_embeddings().register_forward_hook(lambda _m, _i, out: seen.append(out.shape[1]))
+    head_calls = []
+    hook = model.get_output_embeddings().register_forward_hook(lambda _m, _i, out: head_calls.append(out.shape))
 
     def loss_and_grads(fn):
         model.zero_grad()
@@ -159,9 +156,10 @@ def test_windowed_trainer_loss_equals_trl_full_logits_loss(tmp_path):
         return float(loss.detach()), [p.grad.clone() for p in model.parameters() if p.requires_grad]
 
     ours, g_ours = loss_and_grads(type(trainer)._compute_loss)
+    assert head_calls == []
+    trainer.use_liger_kernel = False
     full, g_full = loss_and_grads(DPOTrainer._compute_loss)
     hook.remove()
-    assert seen[0] == completion_window(b["completion_mask"]) < b["input_ids"].shape[1] == seen[1]
     assert abs(ours - full) < 1e-5
     assert all(torch.allclose(a, c, atol=1e-6) for a, c in zip(g_ours, g_full))
 

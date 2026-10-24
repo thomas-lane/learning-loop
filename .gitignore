@@ -11,6 +11,7 @@ runs/
 artifacts/
 .engines/
 evaluation/jobs/
+evaluation/rendered/
 *.safetensors
 *.gguf
 
@@ -20,3 +21,7 @@ configs/machines/local/*
 .env
 *.env
 !.env.example
+.lavish/
+
+# Owner-and-agent working notes (decisions log, plans)
+notes/

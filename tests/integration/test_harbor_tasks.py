@@ -1,7 +1,5 @@
 """Harbor + Docker checks (marker `docker`; run with `uv run pytest -m docker tests/integration`).
 
-- oracle/nop baselines for the original tasks (separate verifier mode)
-- oracle on one generated hard instance per trained/held-out family
 - scripted episode through HarborDockerBackend + ToolAgent; replay of the original
   and an edited branch; timing independence with inserted delays
 - malicious outputs (planted reward files, peeking at /tests) get no reward; a forged
@@ -46,37 +44,6 @@ if not _docker_ok():  # pragma: no cover
 def _leftover_containers(prefix: str) -> list[str]:
     out = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True).stdout.split()
     return [n for n in out if prefix.lower() in n.lower()]
-
-
-async def _baseline(task_dir: Path, agent: str, trials: Path) -> dict | None:
-    from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
-    from harbor.trial.trial import Trial
-
-    cfg = TrialConfig(task=TaskConfig(path=task_dir), trials_dir=trials, agent=AgentConfig(name=agent))
-    r = await (await Trial.create(cfg)).run()
-    assert r.exception_info is None, r.exception_info
-    assert r.verifier_environment_mode.value == "separate"
-    return r.verifier_result.rewards if r.verifier_result else None
-
-
-@pytest.mark.parametrize(
-    "task,agent,expected",
-    [("log-triage", "oracle", 1.0), ("log-triage", "nop", 0.0), ("fix-stats", "oracle", 1.0), ("fix-stats", "nop", 3 / 9)],
-)
-async def test_original_task_baselines(tmp_path, task, agent, expected):
-    rewards = await _baseline(REPO_ROOT / "evaluation" / "tasks" / task, agent, tmp_path)
-    assert rewards is not None and abs(rewards["reward"] - expected) < 1e-6
-
-
-@pytest.mark.parametrize("iid", ["log-triage/hard/s1", "fix-stats/hard/s1", "csv-revenue/hard/s301"])
-async def test_generated_hard_instances_oracle(tmp_path, iid):
-    s = load_splits(REPO_ROOT / "evaluation" / "splits" / "pilot.yaml")
-    inst = materialize(s, tmp_path / "tasks", ids=[iid])[iid]
-    rewards = await _baseline(Path(inst.task_dir), "oracle", tmp_path / "trials")
-    assert rewards == {"reward": 1.0}
-    if iid.startswith("fix-stats"):
-        nop = await _baseline(Path(inst.task_dir), "nop", tmp_path / "trials")
-        assert abs(nop["reward"] - inst.params["nop_reward"]) < 1e-6
 
 
 async def test_scripted_episode_replay_branch_and_timing(tmp_path):
@@ -139,23 +106,20 @@ async def test_malicious_outputs_get_no_reward_on_docker(tmp_path):
     assert _leftover_containers("dk-evil") == []
 
 
-async def test_planted_reward_file_is_ignored_on_log_triage(tmp_path):
-    from learning_loop.core.records import TaskInstance
-    from learning_loop.core.storage import sha256_tree
+def _pilot_instance(tmp_path: Path, iid: str):
+    s = load_splits(REPO_ROOT / "evaluation" / "splits" / "pilot.yaml")
+    return materialize(s, tmp_path / "tasks", ids=[iid])[iid]
 
-    d = REPO_ROOT / "evaluation" / "tasks" / "log-triage"
-    inst = TaskInstance(instance_id="log-triage/static", family="log-triage", task_dir=str(d), content_hash=sha256_tree(d))
+
+async def test_planted_reward_file_is_ignored_on_log_triage(tmp_path):
+    inst = _pilot_instance(tmp_path, "log-triage/easy/s1")
     res = await HarborDockerBackend().run(inst, make_plan(inst, "dk-plant", scripted_spec(FIXTURES / "plant_reward_policy.yaml")), tmp_path / "o")
     assert res.summary.extra["verifier_environment_mode"] == "separate"
     assert res.summary.reward == {"reward": 0.0}
 
 
 async def test_forged_fix_stats_artifact_does_not_score(tmp_path):
-    from learning_loop.core.records import TaskInstance
-    from learning_loop.core.storage import sha256_tree
-
-    d = REPO_ROOT / "evaluation" / "tasks" / "fix-stats"
-    inst = TaskInstance(instance_id="fix-stats/static", family="fix-stats", task_dir=str(d), content_hash=sha256_tree(d))
+    inst = _pilot_instance(tmp_path, "fix-stats/easy/s1")
     res = await HarborDockerBackend().run(inst, make_plan(inst, "dk-forge", scripted_spec(FIXTURES / "fix_stats_forge_policy.yaml")), tmp_path / "o")
     s = res.summary
     assert s.extra["verifier_environment_mode"] == "separate"

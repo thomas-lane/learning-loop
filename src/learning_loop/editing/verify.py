@@ -37,11 +37,12 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .editor import SourceContext, make_edited_message
+from .editor import SourceContext, make_edited_message, tool_calls_of
 from ..episodes.events import first_request_messages, load_turns
 from ..core.interfaces import (
     EpisodeBackend,
@@ -63,6 +64,7 @@ from ..core.records import (
     PolicySpec,
     StopCategory,
     TaskInstance,
+    ToolExecution,
     ToolSchema,
     TurnRecord,
     Usage,
@@ -218,20 +220,34 @@ class Acceptance:
     evidence_label: str | None
 
 
-def intervention_tool_reasons(b: BranchResult, *, require_record: bool = True) -> list[str]:
+def tool_outcome(rec: Mapping[str, Any] | ToolExecution) -> tuple[bool, str | None, bool]:
+    """(executed, error, timed out) of a fixed action's record or of a source turn's execution."""
+    if isinstance(rec, ToolExecution):  # timed out as the episode loop records it for the fixed action
+        return rec.executed, rec.error, bool(rec.timed_out or (rec.error and re.search(r"timed out|TimeoutError", rec.error)))
+    return rec.get("executed") is True, rec.get("error"), bool(rec.get("timed_out"))
+
+
+def intervention_tool_reasons(b: BranchResult, *, require_record: bool = True, source: ToolExecution | None = None) -> list[str]:
     """Reasons from the branch's executed fixed action at turn k.
 
     The episode loop records `episode.extra["intervention_tool"] =
     {"executed", "error", "exit_code", "timed_out"}` after executing the
-    intervention. A fixed action that did not execute, raised a tool error or
+    intervention. An edited action that did not execute, raised a tool error or
     timed out is not a valid comparison point even if the continuation later
-    succeeds. A missing record fails closed (`require_record`), except when
-    replay failed before the intervention was reached (already rejected). A
-    nonzero exit code alone is not a failure (`grep -c` with no match exits 1)."""
+    succeeds. The original branch re-runs the learner's own action, whose tool
+    error or timeout may be the very mistake the edit fixes: it passes when its
+    outcome equals the source turn's (`source`: same executed flag, error text and
+    timeout), and fails like the edited action otherwise, since a failure the source
+    did not have comes from the environment. A missing record fails closed
+    (`require_record`), except when replay failed before the intervention was
+    reached (already rejected). A nonzero exit code alone is not a failure (`grep -c`
+    with no match exits 1)."""
     tag = f"{b.branch}:r{b.repetition}"
     rec = b.episode.extra.get("intervention_tool")
     if not isinstance(rec, Mapping):
         return [f"missing_intervention_record:{tag}"] if require_record and b.replay_ok else []
+    if b.branch == "original" and source is not None and tool_outcome(rec) == tool_outcome(source):
+        return []
     out = []
     if rec.get("timed_out"):
         out.append(f"intervention_timeout:{tag}")
@@ -247,11 +263,13 @@ def evaluate_strict_all_success(
     min_token_saving: float,
     min_relative_saving: float = 0.0,
     require_intervention_record: bool = True,
+    original_source: ToolExecution | None = None,
 ) -> Acceptance:
     """`strict_all_success_v1`; reasons list every failed criterion.
 
     Continuation mode requires each branch's intervention execution record
-    (`intervention_tool_reasons`); it fails closed when the record is missing."""
+    (`intervention_tool_reasons`); it fails closed when the record is missing.
+    `original_source`: the source episode's execution of the original action at turn k."""
     reasons: list[str] = []
     for label in ("original", "edited"):
         reps = sorted(b.repetition for b in branches if b.branch == label)
@@ -275,7 +293,7 @@ def evaluate_strict_all_success(
             reasons.append(f"not_success:{tag}")
         if b.cost.total is None:
             reasons.append(f"missing_cost:{tag}")
-        reasons += intervention_tool_reasons(b, require_record=require_intervention_record)
+        reasons += intervention_tool_reasons(b, require_record=require_intervention_record, source=original_source)
     orig = [b.cost.total for b in branches if b.branch == "original"]
     edit = [b.cost.total for b in branches if b.branch == "edited"]
     mean_o = mean_e = saving = None
@@ -468,7 +486,11 @@ class ContinuationVerifier:
                         cost=compute_branch_cost(spec, cont, self.counter, src.plan.tools),
                     )
                 )
-        acc = evaluate_strict_all_success(branches, reps, min_token_saving=self.min_token_saving, min_relative_saving=self.min_relative_saving)
+        turn = next(t for t in src.turns if t.turn_index == proposal.turn_index)
+        source = next((te for te in turn.tool_executions if te.call_id == tool_calls_of(turn.assistant_message)[0].get("id")), None)
+        acc = evaluate_strict_all_success(
+            branches, reps, min_token_saving=self.min_token_saving, min_relative_saving=self.min_relative_saving, original_source=source
+        )
         rec = VerificationRecord(
             verification_id=vid,
             proposal_id=proposal.proposal_id,

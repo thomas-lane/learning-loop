@@ -9,7 +9,7 @@ A run is defined by three kinds of YAML file:
 | Model profile | identity of a model: pinned revision, chat template, serving backends, training defaults | `configs/models/<name>.yaml` |
 
 Task instances and panels come from split files (`evaluation/splits/*.yaml`), described in
-[../evaluation/README.md](../evaluation/README.md#generators-and-splits). Terms are defined in
+[../evaluation/README.md](../evaluation/README.md#splits). Terms are defined in
 [glossary.md](glossary.md).
 
 ## Loading rules
@@ -51,6 +51,12 @@ exits 2 before anything starts.
   to profiles by file name while checkpoint ids and `checkpoint.json` record the `name`.
 - Each `serving.<key>.backend` in a model profile must equal its key, because machine profiles
   look up `serving.<inference.backend>`.
+- `training.dpo.max_length_margin` requires `episode.max_context_tokens` and `training.dpo.max_length:
+  null`; the limit becomes the cap plus the margin. Otherwise `training.dpo.max_length` is required
+  and, with a cap, at least the cap, so that edits at the end of a full context can be trained.
+  `learner.max_context_tokens`, when set, must be at least `episode.max_context_tokens`.
+- A `sampling` block's `extra_body` must not set `temperature`, `top_p`, `top_k`, `max_tokens` or
+  `seed`, so each setting has one place and is recorded under its own name.
 
 **Across files** (checked by `validate` and `run`)
 
@@ -74,10 +80,16 @@ is any `editor.mode` except `scripted`.
   editor's checkpoint; an `external` `editor_inference` cannot be used with `editor.mode:
   current_learner`, whose checkpoint changes every cycle; a scripted learner needs
   `editor_inference`.
+- `episode.max_context_tokens` needs a learner endpoint with the `hf_transformers` or `vllm`
+  backend (scripted fixtures excepted): `hf_server` enforces the cap per request.
+- In a learning run with `cycles` ≥ 1, a learner whose model profile sets
+  `chat_template_kwargs.enable_thinking: true` needs `editor.assistant_text_policy:
+  keep_reasoning`, because it reasons on every turn and `reject_nonempty` would leave almost no
+  turn editable ([why](experiment.md#editing)).
 - Every named panel exists in the split file; `evaluation.final_panels` are `final` or
   `external` panels; every family in `tasks.exposure_schedule` occurs in the collection panel.
   The split file passes the checks in
-  [../evaluation/README.md](../evaluation/README.md#generators-and-splits).
+  [../evaluation/README.md](../evaluation/README.md#splits).
 
 `loop evaluate` checks the per-file rules and, before it creates the run directory, that
 `--checkpoint` was trained for the learner's model profile, the `unsupported` rule for the
@@ -114,6 +126,7 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `learner.model_profile` | str | **required** | Model profile name (`configs/models/<name>.yaml`). |
 | `learner.initial_checkpoint` | str | `base` | `base` or a published checkpoint directory to start from. |
 | `learner.scripted_policy` | str or null | null | FIXTURE only: scripted learner file; requires `inference.mode: scripted` (and vice versa). |
+| `learner.max_context_tokens` | int or null (>= 1024) | null | Context window of managed servers (learner and editor): the longest request, prompt plus `max_output_tokens`. A longer request is refused (`model_error:...context_length_exceeded` for the learner, `editor_request_error:...` for the editor). Editor requests hold a whole episode, so leave room above the longest episode. null: the engine's default (vLLM 65536; transformers the model's maximum). |
 | `cycles` | int (>= 0) | **required** | Training cycles; the run evaluates cycles+1 checkpoints (the last cycle only evaluates). |
 | `seeds` | mapping | **required** | Root and loop seeds. |
 | `seeds.root` | int | **required** | Root seed. Evaluation seeds depend only on this, instance and attempt, so runs compare pairwise. |
@@ -134,14 +147,16 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `episode.sampling` | mapping | **required** | Learner decoding for evaluation and collection. |
 | `episode.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `episode.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `episode.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `episode.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `episode.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `episode.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `episode.max_turns` | int (>= 1) | **required** | Experimental budget: model turns per episode (a branch's prefix and intervention count). |
 | `episode.max_episode_tokens` | int or null | null | Experimental budget: input+output tokens over all requests; an endpoint without usage then stops the episode (`budget:usage_unavailable`). |
+| `episode.max_context_tokens` | int or null (>= 1024) | null | Experimental budget: context window of every learner request, prompt plus output, enforced like a model's own window. Each request's output limit is lowered to what still fits (at most `sampling.max_output_tokens`); a full context stops the episode (`budget:max_context`). Needs this repository's server (`hf_transformers` or `vllm` backend). null: no cap below the server's window. |
 | `episode.tool_timeout_sec` | int | `60` | Per-command timeout; the model cannot raise it. |
 | `episode.agent_timeout_sec` | float | `600.0` | Safety wall-clock limit per episode (a safety stop, not a budget). |
 | `episode.max_output_chars` | int | `8000` | Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded). |
-| `episode.system_prompt` | str | `evaluation/agents/system_prompt.md` | System prompt file; `{workdir}` is filled in. |
+| `episode.system_prompt` | str | `evaluation/agents/system_prompt.md` | System prompt file; `{workdir}` and `{environment}` (the task image's tools, from its profile) are filled in. |
 | `editor` | mapping | **required** | Editor condition. |
 | `editor.mode` | `initial_policy` or `current_learner` or `external` or `scripted` | **required** | `initial_policy` (the learner's initial checkpoint, fixed for the whole run), `current_learner` (the learner of each cycle, so it changes every cycle), `external` (a fixed separate model) or `scripted` (fixture). |
 | `editor.model_profile` | str or null | null | `external` only: the editor's model profile. |
@@ -150,11 +165,12 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `editor.sampling` | mapping | `{'temperature': 0.0, 'max_output_tokens': 2048}` | Editor decoding. |
 | `editor.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `editor.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `editor.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `editor.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `editor.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `editor.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `editor.include_outcome_metrics` | bool | `True` | Show the editor scalar outcomes of the source episode (success, token totals). |
 | `editor.include_later_observations` | bool | `True` | Show the editor observations after each turn (hindsight is still filtered at validation). |
-| `editor.assistant_text_policy` | `reject_nonempty` | `reject_nonempty` | Strict mode: turns with assistant text or reasoning are not editable. |
+| `editor.assistant_text_policy` | `reject_nonempty` or `keep_reasoning` | `reject_nonempty` | Which turns may be edited given their text: `reject_nonempty` (turns with assistant text or reasoning are not editable; for profiles with thinking off) or `keep_reasoning` (turns with reasoning are editable, and the edit keeps the reasoning and replaces only the tool call; for profiles with thinking on). Turns with assistant text are not editable under either. |
 | `editor.scripted_path` | str or null | null | `scripted` only: fixture proposals file. |
 | `verification` | mapping | `{'mode': 'continuation', 'continuations_per_branch': 1, 'acceptance_rule': 'strict_all_success_v1', 'min_token_saving': 1.0, 'min_relative_saving': 0.0, 'audit': {'fraction': 0.0, 'continuations_per_branch': 2}}` | Branch verification and acceptance. |
 | `verification.mode` | `continuation` | `continuation` | `continuation`: each branch (original and edited turn) is replayed in a fresh environment and continued by the current learner. |
@@ -165,8 +181,9 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `verification.sampling` | mapping or null | null | Continuation decoding; default `episode.sampling`. |
 | `verification.sampling.temperature` | float or null | null | Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy. |
 | `verification.sampling.top_p` | float or null | null | Nucleus sampling threshold; null leaves the server default. |
+| `verification.sampling.top_k` | int or null (>= 0) | null | Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`). |
 | `verification.sampling.max_output_tokens` | int or null | null | Per-request generation limit (sent as `max_tokens`), reasoning included. |
-| `verification.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM). |
+| `verification.sampling.extra_body` | mapping | `{}` | Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply. |
 | `verification.audit` | mapping | `{'fraction': 0.0, 'continuations_per_branch': 2}` | Optional audits. |
 | `verification.audit.fraction` | float (>= 0.0, <= 1.0) | `0.0` | Seeded random fraction of accepted edits to re-verify with fresh seeds. |
 | `verification.audit.continuations_per_branch` | int (>= 1) | `2` | Continuations per branch in an audit. |
@@ -179,16 +196,18 @@ Scientific definition of one run. Files: `experiments/*.yaml`. Keys inside an op
 | `training.data.task_balanced` | bool | `True` | Sample history round-robin over instances. |
 | `training.data.max_examples_per_cycle` | int or null | null | Cap on the training set size per cycle. |
 | `training.fixed_dataset` | str or null | null | `fixed_dataset` condition only: frozen preference export directory used every cycle. |
-| `training.dpo` | mapping | `{'beta': 0.1, 'loss_type': 'sigmoid', 'learning_rate': 5e-06, 'per_device_batch_size': 1, 'gradient_accumulation_steps': 1, 'max_length': 4096, 'warmup_steps': 0, 'max_grad_norm': 1.0, 'gradient_checkpointing': False}` | DPO hyperparameters. |
+| `training.dpo` | mapping | `{'beta': 0.1, 'loss_type': 'sigmoid', 'learning_rate': 5e-06, 'per_device_batch_size': 1, 'gradient_accumulation_steps': 1, 'max_length': 4096, 'warmup_steps': 0, 'max_grad_norm': 1.0, 'gradient_checkpointing': False, 'split_pair_backward': False}` | DPO hyperparameters. |
 | `training.dpo.beta` | float | `0.1` | DPO beta. |
 | `training.dpo.loss_type` | str | `sigmoid` | TRL DPO loss type. |
 | `training.dpo.learning_rate` | float | `5e-06` | Learning rate. |
 | `training.dpo.per_device_batch_size` | int | `1` | Pairs per device step. |
 | `training.dpo.gradient_accumulation_steps` | int | `1` | Micro-batches per optimizer step. |
-| `training.dpo.max_length` | int | `4096` | Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. |
+| `training.dpo.max_length` | int or null | `4096` | Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. null together with `max_length_margin`. |
+| `training.dpo.max_length_margin` | int or null (>= 0) | null | Set the limit to `episode.max_context_tokens` plus this many tokens (with `max_length: null`). A pair's prompt and rejected turn fit the context cap; the margin is room for an edited turn longer than the original. |
 | `training.dpo.warmup_steps` | int | `0` | Learning-rate warmup steps. |
 | `training.dpo.max_grad_norm` | float | `1.0` | Gradient clipping norm. |
 | `training.dpo.gradient_checkpointing` | bool | `False` | Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values. |
+| `training.dpo.split_pair_backward` | bool | `False` | Run each sequence of a pair (chosen, rejected) under its own whole-model checkpoint, so the backward pass recomputes and back-propagates one sequence at a time: about half the activation memory of a pair (each sequence repeats the shared prompt), one extra forward pass per sequence; same loss and gradients. |
 | `training.lora` | mapping | `{'r': 16, 'alpha': 32}` | LoRA shape. |
 | `training.lora.r` | int | `16` | LoRA rank. |
 | `training.lora.alpha` | int | `32` | LoRA alpha. |
@@ -233,7 +252,7 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `inference.device` | `mps` or `cuda` or `cpu` or `auto` | `auto` | Managed mode: accelerator for the server. |
 | `inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`). |
 | `inference.request_timeout_sec` | int | `600` | Per-request client timeout; a timeout is an infrastructure failure. |
-| `inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
+| `inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. The edit stage sends this many proposal requests to the editor's endpoint at once. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
 | `editor_inference` | mapping or null | null | Separate endpoint for the editor; when unset the editor shares the learner's serving slot (servers are swapped sequentially). |
 | `editor_inference.mode` | `managed` or `external` or `scripted` | **required** | `managed` (the run starts/stops its own server per checkpoint), `external` (an existing endpoint serving one declared checkpoint) or `scripted` (fixture policy). |
 | `editor_inference.backend` | `hf_transformers` or `llama_cpp` or `vllm` or `scripted` | **required** | Serving backend. `managed` runs `hf_transformers` or `vllm` (learning_loop.serving.hf_server); `external` names what serves the endpoint (e.g. `llama_cpp`); `scripted` goes with `mode: scripted`. Must be declared in the model profile's `serving` for managed LoRA runs. |
@@ -251,7 +270,7 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `editor_inference.device` | `mps` or `cuda` or `cpu` or `auto` | `auto` | Managed mode: accelerator for the server. |
 | `editor_inference.startup_timeout_sec` | int | `600` | Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`). |
 | `editor_inference.request_timeout_sec` | int | `600` | Per-request client timeout; a timeout is an infrastructure failure. |
-| `editor_inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
+| `editor_inference.request_concurrency` | int | `1` | Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. The edit stage sends this many proposal requests to the editor's endpoint at once. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches). |
 | `training` | mapping | `{'host': {'kind': 'local', 'ssh_alias': None, 'pod_id': None, 'pod': None, 'workdir': None}, 'device': 'auto', 'allow_cpu_fallback': False}` | Training host and device. |
 | `training.host` | mapping | `{'kind': 'local'}` | `local` (subprocess), or an `ssh` host or `runpod` pod (inputs pushed, trainer started detached, checkpoint pulled back). |
 | `training.host.kind` | `local` or `ssh` or `runpod` | `local` | `local`, `ssh` (a fixed host reached by an alias) or `runpod` (a pod the command starts or creates, reaches by its current address, and stops or terminates; see the machine profile's `runpod` block). |
@@ -276,7 +295,7 @@ Deployment: where the coordinator, environments, inference and training run. Fil
 | `runpod.create.<name>.cloud_type` | `SECURE` or `COMMUNITY` | `SECURE` | Runpod cloud to create the pod in. |
 | `runpod.create.<name>.image` | str | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Container image; it must run sshd and install `PUBLIC_KEY` (Runpod's PyTorch images do). The project environment brings its own torch. |
 | `runpod.create.<name>.container_disk_gb` | int (>= 20) | `200` | Ephemeral disk for the environment, model downloads and scratch files (discarded on termination). |
-| `runpod.create.<name>.allowed_cuda_versions` | list of str | `['13.0']` | Host CUDA (driver) versions to accept; the locked torch wheels need CUDA 13. |
+| `runpod.create.<name>.allowed_cuda_versions` | list of str | `[]` | Host CUDA (driver) versions to accept, matched exactly from Runpod's list (which ends at 13.0, while hosts also run newer CUDA 13 drivers); empty accepts any. Either way, preparation refuses a pod whose driver is older than CUDA 13, which the locked torch wheels need. |
 | `runs_dir` | str | `runs` | Directory for run directories (relative to the repository root). |
 | `hardware_notes` | str or null | null | Free text recorded with the run. |
 

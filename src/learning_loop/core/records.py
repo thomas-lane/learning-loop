@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -54,9 +54,9 @@ class TaskInstance(Record):
 
     instance_id: str  # stable, human-readable, e.g. "log-triage/easy/s3"
     family: str
-    difficulty: str | None = None  # easy | medium | hard | None (static task)
+    difficulty: str | None = None  # easy | medium | hard; None for a task directory not rendered from a split
     skills: list[str] = Field(default_factory=list)
-    generator: str | None = None  # generator name/version, None for static tasks
+    generator: str | None = None  # family@vN that rendered the task; None when not rendered from a split
     generator_seed: int | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     task_dir: str  # path of the Harbor task directory
@@ -88,8 +88,16 @@ class SamplingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     temperature: float | None = Field(default=None, description="Sampling temperature; null leaves the server default (OpenAI semantics: 1.0); 0 is greedy.")
     top_p: float | None = Field(default=None, description="Nucleus sampling threshold; null leaves the server default.")
+    top_k: int | None = Field(default=None, ge=0, description="Sample only from the k most likely tokens (sent in the request body as `top_k`); 0 turns the limit off; null leaves the server default (off for `hf_server`).")
     max_output_tokens: int | None = Field(default=None, description="Per-request generation limit (sent as `max_tokens`), reasoning included.")
-    extra_body: dict[str, Any] = Field(default_factory=dict, description="Extra request fields passed through verbatim (e.g. `{top_k: 20}` for llama.cpp/vLLM).")
+    extra_body: dict[str, Any] = Field(default_factory=dict, description="Extra request fields passed through verbatim (e.g. `{min_p: 0.05}` for llama.cpp); `hf_server` rejects sampling fields it does not apply.")
+
+    @model_validator(mode="after")
+    def _no_duplicate_fields(self) -> "SamplingConfig":
+        dup = sorted(set(self.extra_body) & {"temperature", "top_p", "top_k", "max_tokens", "seed"})
+        if dup:
+            raise ValueError(f"extra_body must not set {dup}: use the sampling fields")
+        return self
 
 
 class PolicySpec(Record):
@@ -158,6 +166,7 @@ class EventKind(str, Enum):
     TOOL_CALL = "tool_call"  # requested + actually executed arguments
     TOOL_RESULT = "tool_result"  # stdout/stderr/exit, raw output, truncated observation
     FINGERPRINT = "fingerprint"  # declared task-state fingerprint at a decision point
+    ENV_PROBE = "env_probe"  # the environment probe before turn 0 (tasks/runtime/probe.py)
     REPLAY_ACTION = "replay_action"  # a fixed (non-model) action executed during replay
     REPLAY_CHECK = "replay_check"  # comparison of replayed obs/fingerprint to source
     INTERVENTION = "intervention"  # the fixed original/edited action at the branch point
@@ -236,6 +245,7 @@ class EpisodeBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_turns: int
     max_episode_tokens: int | None = None  # input+output across requests
+    max_context_tokens: int | None = None  # context window of every request (prompt + output)
     tool_timeout_sec: int
     max_output_chars: int
     agent_timeout_sec: float  # safety wall clock

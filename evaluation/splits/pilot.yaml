@@ -25,9 +25,9 @@ instances:
   - {id: fix-stats/easy/s3, family: fix-stats, difficulty: easy, seed: 3, split: train}
   - {id: fix-stats/medium/s1, family: fix-stats, difficulty: medium, seed: 1, split: train}
   - {id: fix-stats/hard/s1, family: fix-stats, difficulty: hard, seed: 1, split: train}
-  # --- dev (seeds 101-109, plus the two original hand-written tasks) ---
-  - {id: log-triage/static, family: log-triage, static: evaluation/tasks/log-triage, difficulty: easy, split: dev}
-  - {id: fix-stats/static, family: fix-stats, static: evaluation/tasks/fix-stats, difficulty: easy, split: dev}
+  # --- dev (seeds 101-109) ---
+  - {id: log-triage/easy/s102, family: log-triage, difficulty: easy, seed: 102, split: dev}
+  - {id: fix-stats/easy/s102, family: fix-stats, difficulty: easy, seed: 102, split: dev}
   - {id: log-triage/easy/s101, family: log-triage, difficulty: easy, seed: 101, split: dev}
   - {id: log-triage/medium/s101, family: log-triage, difficulty: medium, seed: 101, split: dev}
   - {id: log-triage/hard/s101, family: log-triage, difficulty: hard, seed: 101, split: dev}
@@ -60,7 +60,7 @@ panels:
   dev:
     split: dev
     description: Per-cycle monitoring, all difficulties, both trained families.
-    instances: [log-triage/static, fix-stats/static, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101,
+    instances: [log-triage/easy/s102, fix-stats/easy/s102, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101,
                 fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101]
   dev-medium-hard:
     split: dev
@@ -69,10 +69,10 @@ panels:
   # Per-family dev panels: with a family-exposure schedule, keep evaluating earlier families (retention).
   dev-log-triage:
     split: dev
-    instances: [log-triage/static, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101]
+    instances: [log-triage/easy/s102, log-triage/easy/s101, log-triage/medium/s101, log-triage/hard/s101]
   dev-fix-stats:
     split: dev
-    instances: [fix-stats/static, fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101]
+    instances: [fix-stats/easy/s102, fix-stats/easy/s101, fix-stats/medium/s101, fix-stats/hard/s101]
   final-same-family:
     split: final
     description: New instances of trained families.

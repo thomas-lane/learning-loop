@@ -372,3 +372,61 @@ def test_dropped_training_pairs_are_recorded_and_reported(tmp_path, monkeypatch)
     assert "## Training data actually used" in report and "**2 exported pair(s) were dropped before training**" in report
     rows = (ctx.run_dir / "reports" / "training_data.csv").read_text()
     assert "p-a: oversize:90>64" in rows
+
+
+def test_edit_stage_requests_proposals_concurrently_up_to_the_editor_limit(tmp_path, monkeypatch):
+    """Proposals run as many at a time as the editor's endpoint accepts, not one by one."""
+    real = co.build_editor
+    in_flight, peak = 0, 0
+
+    class Tracked:
+        def __init__(self, inner):
+            self.inner, self.editor_id, self.max_concurrency = inner, inner.editor_id, 2
+
+        async def propose_for(self, **kw):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            try:
+                return await self.inner.propose_for(**kw)
+            finally:
+                in_flight -= 1
+
+    monkeypatch.setattr(co, "build_editor", lambda ctx, learner: Tracked(real(ctx, learner)))
+    ctx = run(co.create_run(EXP, MACHINE, run_id="editconc", runs_dir=tmp_path, overrides=["cycles=1"]))
+    assert len(manifest(ctx, 0, "edit").items) >= 2
+    assert peak == 2
+
+
+def test_resume_with_only_training_left_starts_no_server_before_it(tmp_path, monkeypatch):
+    """A cycle whose serving stages are done goes straight to training: the preflight warms no
+    server, which would take the accelerator a still-running trainer needs."""
+    real_train, real_preflight = co.train_checkpoint, co.preflight
+
+    def trainer_died(*a, **k):
+        raise RuntimeError("trainer died")
+
+    monkeypatch.setattr(co, "train_checkpoint", trainer_died)
+    ctx = co.create_run(EXP, MACHINE, run_id="trainleft", runs_dir=tmp_path, overrides=["cycles=1"])
+    with pytest.raises(RuntimeError, match="trainer died"):
+        run(ctx)
+    assert manifest(ctx, 0, "verify").status == "done" and cycle(ctx, 0)["status"] == "running"
+    warmed = []
+
+    async def preflight(ctx, log, first_server=None):
+        warmed.append(first_server)
+        await real_preflight(ctx, log, first_server)
+
+    served = []
+    for name in ("learner_policy", "build_editor", "make_verifier"):
+        real = getattr(co, name)
+        monkeypatch.setattr(co, name, lambda c, ckpt, *a, _real=real, _name=name, **k: served.append((_name, ckpt.checkpoint_id)) or _real(c, ckpt, *a, **k))
+    monkeypatch.setattr(co, "train_checkpoint", real_train)
+    monkeypatch.setattr(co, "preflight", preflight)
+    ctx2 = run(co.open_run(ctx.run_dir))
+    assert warmed == [None] and cycle(ctx2, 0)["update"] == "trained"
+    # The finished stages built no policy (each would start its model server): the only one
+    # served is the trained checkpoint, for the final evaluation.
+    assert served == [("learner_policy", cycle(ctx2, 0)["learner_out"]["checkpoint_id"])]
+    assert co.serving_work_left(ctx2, 1) is False  # the finished final evaluation

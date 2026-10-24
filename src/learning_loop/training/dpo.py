@@ -27,16 +27,20 @@ this module does not rely on its defaults:
 - One numerical path for every log-prob: Trainer mixed precision is never enabled
   (bf16=fp16=False; weights already carry the profile dtype), so accelerate does not
   patch the model forward with autocast + convert_outputs_to_fp32
-  (accelerate/accelerator.py `prepare_model`, only when `native_amp`), and TRL's loss
-  forward is the plain forward our reference, trained and reload log-probs use. A forward
-  hook upcasts lm_head output to float32 (modeling.ensure_fp32_logits), so TRL's
-  selective log-softmax and ours both run on fp32 logits and sum in fp32. The trained
-  log-probs are taken on `accelerator.unwrap_model(..., keep_fp32_wrapper=False)`.
-  CPU, MPS and CUDA (RTX 3090, Qwen3-0.6B) are exercised.
-- Only the completion window goes through lm_head (`logits_to_keep`, see
-  `_compute_loss` and modeling.completion_window), on every log-prob path: the loss
-  equals TRL's full-logits loss (unit-tested) without float32 logits for every prompt
-  token, which is what limits long prompts with a 262k-token vocabulary.
+  (accelerate/accelerator.py `prepare_model`, only when `native_amp`). The loss, the
+  reference, the trained and the reloaded log-probs all come from
+  modeling.chunked_token_logps: TRL's chunked path, which runs lm_head over the completion
+  positions only, in vocabulary chunks accumulated in float32. The loss equals TRL's
+  full-logits loss (unit-tested) without ever holding float32 logits over a 262k-token
+  vocabulary, which is what limits long completions. The trained log-probs are taken on
+  `accelerator.unwrap_model(..., keep_fp32_wrapper=False)`.
+
+- `dpo.split_pair_backward`: TRL runs a pair as one batch [chosen, rejected], each row the full
+  shared prompt plus its completion, so a step holds two long sequences' activations at once.
+  With the flag, `pair_token_logps` runs each row under its own non-reentrant
+  `torch.utils.checkpoint`: the forward keeps only each row's per-token log-probs, and the
+  backward recomputes and back-propagates one row at a time. TRL's loss, gradients and metrics are
+  unchanged (the rows are the same computations, only scheduled apart).
 
 Optimizer/scheduler are fresh every cycle (new Trainer); adapter weights continue.
 Interrupted stages resume from the stage's own Trainer checkpoint (adapter,
@@ -77,13 +81,12 @@ from .fixture import SimulatedInterruption
 from .modeling import (
     ADAPTER_FILES,
     adapter_state_cpu,
-    ensure_fp32_logits,
     free_memory,
     load_adapter,
     load_adapter_file_state,
     load_base_model,
-    completion_window,
     max_abs_diff,
+    chunked_token_logps,
     sequence_logps,
     verify_adapter_dir,
 )
@@ -96,7 +99,7 @@ REFERENCE_IDENTITY_ATOL = 2e-2  # |policy - reference| log-ratio at the first st
 N_CHECK_EXAMPLES = 2
 # Identifies how log-probs are computed; part of the reference cache key so entries made by an
 # older numerical path (e.g. bf16 log-softmax) are never reused.
-LOGP_PATH = "completion_window_fp32_logits_selective_log_softmax_fp32_sum_v2"
+LOGP_PATH = "trl_chunked_logprob_fp32_sum_per_row_v4"
 
 
 class ReferenceMismatch(RuntimeError):
@@ -151,11 +154,67 @@ class ReferenceCache:
         atomic_write_json(self._path(key), {"key": key, "chosen": chosen, "rejected": rejected, "meta": meta})
 
 
-def _make_trainer_class():
+def takes_shared_kv_states(model: Any) -> bool:
+    """Whether the model's decoder layers take a `shared_kv_states` dict (Gemma 4)."""
+    import inspect
+
+    return any("shared_kv_states" in inspect.signature(m.forward).parameters for m in model.modules() if hasattr(m, "forward"))
+
+
+def pair_token_logps(model: Any, model_kwargs: dict[str, Any], input_ids: Any, completion_mask: Any, split: bool,
+                     kv_dicts: list | None = None) -> tuple[Any, Any]:
+    """Per-token log-probs and entropies of one loss step's batch ([chosen, rejected]) through
+    `chunked_token_logps`. With `split`, each row runs under its own whole-model checkpoint, so only
+    one row's activations are alive in the backward pass.
+
+    `kv_dicts` (models whose layers take `shared_kv_states`, i.e. Gemma 4): each row gets its own
+    dict, appended here; the caller must clear them after the backward pass. Gemma's layers store
+    K/V tensors in that dict, and inside the nested checkpoints the dict is also among the saved
+    layer arguments, so dict -> K/V -> graph -> saved arguments -> dict is a cycle that otherwise
+    keeps every layer input and attention mask of the step alive. A row reads only its own dict,
+    also when its layers are recomputed in the backward pass."""
+    if not split:
+        return chunked_token_logps(model, model_kwargs, input_ids, completion_mask)
+    from collections import UserDict
+
+    import torch
+    from torch.utils.checkpoint import checkpoint
+
+    n = input_ids.shape[0]
+    lps, ents = [], []
+    for i in range(n):
+        row = {key: (v[i : i + 1] if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == n else v) for key, v in model_kwargs.items()}
+        if kv_dicts is not None:
+            row["shared_kv_states"] = UserDict()  # UserDict, as Gemma's own default (FSDP2 rebuilds plain dicts)
+            kv_dicts.append(row["shared_kv_states"])
+        lp, ent = checkpoint(lambda kw, ids, cm: chunked_token_logps(model, kw, ids, cm), row, input_ids[i : i + 1],
+                             completion_mask[i : i + 1], use_reentrant=False)
+        lps.append(lp)
+        ents.append(ent)
+    return torch.cat(lps, dim=0), torch.cat(ents, dim=0)
+
+
+def _make_trainer_class(split_pair_backward: bool = False):
     from trl import DPOTrainer
 
     class PrecomputedRefDPOTrainer(DPOTrainer):
         """DPOTrainer fed with our tokenized rows and our reference log-probs."""
+
+        def __init__(self, *args, **kwargs):
+            self._kv_supported: bool | None = None  # model takes shared_kv_states (see pair_token_logps)
+            self._kv_dicts: list = []  # this step's per-row shared_kv_states dicts
+            super().__init__(*args, **kwargs)
+            # TRL's chunked log-prob path (_get_per_token_logps_and_entropies, below): set after
+            # construction, so neither the Liger package nor Trainer's Liger model patching is used.
+            self.use_liger_kernel = True
+
+        def training_step(self, *args, **kwargs):
+            try:
+                return super().training_step(*args, **kwargs)
+            finally:  # after the backward pass: break pair_token_logps's reference cycle
+                for d in self._kv_dicts:
+                    d.clear()
+                self._kv_dicts.clear()
 
         def _prepare_dataset(self, dataset, processing_class, args, dataset_name):
             need = {"prompt_ids", "chosen_ids", "rejected_ids", "ref_chosen_logps", "ref_rejected_logps"}
@@ -167,19 +226,16 @@ def _make_trainer_class():
         def _precompute_ref_logps(self, dataset, name, batch_size):
             return dataset  # already attached by TrlDpoTrainer (incoming learner incl. adapter)
 
-        def _compute_loss(self, model, inputs, return_outputs):
-            # TRL's loss on the completion window only (modeling.completion_window): the model
-            # sees the full sequence but lm_head runs on the last k positions, and TRL's labels
-            # and completion mask are cropped to match. attention_mask stays full (TRL counts
-            # tokens with it). sequence_logps uses the same window for every other log-prob.
-            k = completion_window(inputs["completion_mask"])
-            full_ids = inputs["input_ids"]
-            cropped = {**inputs, "input_ids": full_ids[:, -k:], "completion_mask": inputs["completion_mask"][:, -k:]}
-
-            def forward(**kw):
-                return model(**{**kw, "input_ids": full_ids, "logits_to_keep": k})
-
-            return super()._compute_loss(forward, cropped, return_outputs)
+        def _get_per_token_logps_and_entropies(self, model, model_kwargs, input_ids, completion_mask):
+            # Every training log-prob goes through modeling.chunked_token_logps (see its docstring).
+            model = self.accelerator.unwrap_model(model)
+            kv = None
+            if split_pair_backward:
+                if self._kv_supported is None:
+                    self._kv_supported = takes_shared_kv_states(model)
+                kv = self._kv_dicts if self._kv_supported else None
+            lp, ent = pair_token_logps(model, model_kwargs, input_ids, completion_mask, split_pair_backward, kv)
+            return lp, ent, None  # outputs: only read for MoE aux losses, which these models lack
 
     return PrecomputedRefDPOTrainer
 
@@ -304,7 +360,6 @@ class TrlDpoTrainer:
             )
             model = get_peft_model(base, lcfg)
             init = {"adapter_init": "new_lora_on_base", "initial_adapter_matches_incoming": None}
-        ensure_fp32_logits(model)  # before the reference, TRL's loss forward and the trained log-probs
         phases["adapter_setup"] = time.time() - t0
 
         # ---- reference log-probs: incoming learner incl. adapter, cached ------------------
@@ -383,7 +438,7 @@ class TrlDpoTrainer:
         )
         log_path = work_dir / "train_logs.jsonl"
         t0 = time.time()
-        Trainer = _make_trainer_class()
+        Trainer = _make_trainer_class(cfg.dpo.split_pair_backward)
         trainer = Trainer(
             model=model, args=args, train_dataset=ds, processing_class=tok,
             callbacks=_callbacks(log_path, self._interrupt_after, resumed=resume_ckpt is not None),

@@ -135,6 +135,19 @@ def cmd_evaluate(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate(a: argparse.Namespace) -> int:
+    from .orchestration import coordinator as co
+
+    run_dir = co.calibrate(a.experiment, a.machines, a.checkpoint, families=a.family, difficulties=a.difficulty,
+                           instances_per_difficulty=a.instances, attempts=a.attempts, run_id=a.run_id, overrides=a.set)
+    rows = co.calibration_report(co.open_run(run_dir))
+    for r in rows:
+        rate = "-" if r["success_rate"] is None else f"{r['success_rate']:.0%}"
+        print(f"{r['family']:20s} {r['difficulty']:7s} {r['successes']:>3}/{r['episodes']:<3} {rate:>5}  {r['verdict']}")
+    print(f"calibration run: {run_dir} (table: reports/calibration.csv)")
+    return 0
+
+
 def cmd_edit_replay(a: argparse.Namespace) -> int:
     from .orchestration import coordinator as co
 
@@ -165,6 +178,18 @@ def cmd_preflight(a: argparse.Namespace) -> int:
     from .hosts.preflight import main as preflight_main
 
     return preflight_main(["--profile", a.model_profile, *([] if a.trainable else ["--no-train"])])
+
+
+def cmd_render_tasks(a: argparse.Namespace) -> int:
+    from .tasks.instances import load_splits, materialize, validate_splits
+
+    splits = load_splits(a.splits)
+    instances = materialize(splits, repo_path(a.out), panels=a.panel or None, ids=a.id or None)
+    for note in validate_splits(splits, instances):
+        print(f"note: {note}", file=sys.stderr)
+    for iid, inst in instances.items():
+        print(f"{iid}\t{inst.task_dir}")
+    return 0
 
 
 def cmd_submit(a: argparse.Namespace) -> int:
@@ -225,7 +250,7 @@ SET_HELP = "override an experiment value, e.g. --set cycles=1 (YAML-parsed; repe
 # Exit codes shared by every command (documented in docs/cli.md).
 EXIT_CODES = {
     0: "success",
-    1: "unexpected error (traceback printed), a failed smoke/preflight check, or a failed stage item",
+    1: "unexpected error (traceback printed), a failed smoke or `loop preflight` check, a failed Docker-host preflight at the start of a run, or a failed stage item",
     2: "invalid usage, configuration or plan (message printed as `error: ...`); nothing was started",
 }
 
@@ -290,6 +315,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--panels", nargs="+", required=True, help="panel names from the experiment's split file")
     s.add_argument("--final", action="store_true", help="allow final-test/external panels (use only after method decisions are frozen)")
     s.add_argument("--run-id", help="run directory name (default: <experiment>-eval-<UTC-stamp>)")
+    s.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help=SET_HELP)
+
+    s = _cmd(sub, "calibrate", cmd_calibrate, "Measure a checkpoint's success rate per family and difficulty",
+             "Creates a run of kind `calibration`: the checkpoint (normally the planned learner's base model)\n"
+             "runs on --instances instances per family and difficulty, drawn from the seeds reserved for\n"
+             "calibration (900000-999999, which no split may use), --attempts times each, with the\n"
+             "experiment's episode settings. Prints and writes reports/calibration.csv: each family and\n"
+             "difficulty's success rate against the 20-80% target (episodes that stopped for infrastructure\n"
+             "reasons are counted apart). Nothing else reads calibration runs; `loop resume` continues one.\n"
+             "Side effects: Docker; serving the checkpoint (managed inference).")
+    s.add_argument("--experiment", required=True, help="supplies the learner and episode settings")
+    s.add_argument("--machines", required=True, help="machine profile YAML")
+    s.add_argument("--checkpoint", default="base", help="'base' (default) or a published checkpoint directory")
+    s.add_argument("--family", action="append", help="calibrate only this family (repeatable; default: every family)")
+    s.add_argument("--difficulty", action="append", help="calibrate only this difficulty (repeatable; default: every difficulty)")
+    s.add_argument("--instances", type=int, default=6, help="instances per family and difficulty (default 6)")
+    s.add_argument("--attempts", type=int, default=3, help="attempts per instance (default 3)")
+    s.add_argument("--run-id", help="run directory name (default: calibration-<learner>-<UTC-stamp>)")
     s.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help=SET_HELP)
 
     s = _cmd(sub, "edit-replay", cmd_edit_replay, "Edit and verify saved source trajectories with another editor",
@@ -361,6 +404,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--n-tasks", type=int, help="evaluate only the first N tasks of the dataset")
     s.add_argument("--task", action="append", help="explicit task subset (repeatable)")
     s.add_argument("--execute", action="store_true", help="launch Harbor instead of printing the command")
+
+    s = _cmd(sub, "render-tasks", cmd_render_tasks, "Render a split's task instances into Harbor task directories",
+             "Renders every instance of the split file (or only the given panels and ids) into OUT/<id>, one\n"
+             "Harbor task directory each, exactly as a run materializes them, and validates the split. An\n"
+             "existing instance directory is reused when its family version is current and refused otherwise.\n"
+             "Point `harbor run -p OUT` at the result to run tasks outside the loop.")
+    s.add_argument("splits", help="split file, e.g. evaluation/splits/pilot.yaml")
+    s.add_argument("--out", default="evaluation/rendered", help="output directory (default evaluation/rendered)")
+    s.add_argument("--panel", action="append", help="render only this panel's instances (repeatable)")
+    s.add_argument("--id", action="append", help="render only this instance id (repeatable)")
 
     # --- checks ------------------------------------------------------------- #
     s = _cmd(sub, "smoke", cmd_smoke, "Run a bounded smoke test",
@@ -469,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     from .core.storage import RunLockedError
     from .hosts.pods import RunpodError
     from .orchestration.coordinator import PlanError
+    from .orchestration.preflight import PreflightError
 
     from .core.envfile import load_env
 
@@ -479,6 +533,9 @@ def main(argv: list[str] | None = None) -> int:
     except (PlanError, ValidationError, FileNotFoundError, FileExistsError, ValueError, RunpodError, RunLockedError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except PreflightError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

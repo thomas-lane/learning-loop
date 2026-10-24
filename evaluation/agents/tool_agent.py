@@ -2,8 +2,9 @@
 completions endpoint (llama.cpp's llama-server, vLLM, SGLang, ...).
 
 Run it with:
+    uv run loop render-tasks evaluation/splits/pilot.yaml --panel dev   # tasks -> evaluation/rendered/
     evaluation/run.sh                     # uses configs/local-llama.yaml
-    harbor run -p evaluation/tasks -a evaluation.agents.tool_agent:ToolAgent \
+    harbor run -p evaluation/rendered -a evaluation.agents.tool_agent:ToolAgent \
         -m <model-id> --ak api_base=http://localhost:8080/v1
 
 Where it runs: this class runs in the Harbor process on the *host*. Only tool
@@ -48,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -161,7 +163,7 @@ class ToolAgent(BaseAgent):
                 max_output_chars=opts.max_output_chars,
                 agent_timeout_sec=NO_WALL_CLOCK_LIMIT_SEC,
             ),
-            system_prompt=prompt_path.read_text().format(workdir=opts.workdir),
+            system_prompt=prompt_path.read_text().format(workdir=opts.workdir, environment="").replace("\n\n\n", "\n\n"),
             instruction=instruction,
             tools=tool_schemas(),
             state_spec=StateSpec(),
@@ -228,8 +230,43 @@ class ToolAgent(BaseAgent):
 
         try:
             await run_episode(plan, session, policy, log, on_turn=flush, on_end=finish)
+            unreadable = await self._unreadable_files(environment, plan.workdir)
+            atomic_write_json(record_dir / "post_episode.json", {"unreadable_files": unreadable})
+            context.metadata = (context.metadata or {}) | {"dir_modes_restored": await self._restore_dir_modes(environment, plan.workdir),
+                                                           "unreadable_files": unreadable[:100] if isinstance(unreadable, list) else unreadable}
         finally:
             await asyncio.shield(policy.aclose())
+
+    @staticmethod
+    async def _unreadable_files(environment: BaseEnvironment, workdir: str) -> list[str] | str:
+        """Regular files under the workdir that their owner cannot read, made owner-readable.
+        Harbor copies artifacts through the host, where such a file cannot be read back, so the
+        upload to the verifier would fail and the episode would look like an infrastructure
+        failure. No task's answer is a file its owner cannot read, so the backend scores an
+        episode 0 when such a file is one of the task's artifacts (`unreadable_artifact`); adding
+        the bit only lets the copy (and so the record of what the agent left) complete. Returns
+        the files changed, or "failed: ..."."""
+        cmd = f"find {shlex.quote(workdir)} -type f ! -perm -u=r -print -exec chmod u+r {{}} + 2>/dev/null; true"
+        try:
+            r = await environment.exec(cmd, cwd="/", timeout_sec=60)
+        except Exception as e:
+            return f"failed: {type(e).__name__}: {e}"
+        return [p for p in (r.stdout or "").split("\n") if p]
+
+    @staticmethod
+    async def _restore_dir_modes(environment: BaseEnvironment, workdir: str) -> list[str] | str:
+        """Give the owner rwx on every directory under the workdir that lacks it. Harbor copies
+        directory artifacts out with `docker cp`, which silently drops the files inside a
+        directory without the owner's execute bit (e.g. after `chmod -R 644`), so the verifier
+        would grade an incomplete copy. Graders never read directory modes, and this runs after
+        the episode's last fingerprint, so nothing graded or replayed changes. Returns the
+        directories changed."""
+        cmd = f"find {shlex.quote(workdir)} -type d ! -perm -u=rwx -print -exec chmod u+rwx {{}} + 2>/dev/null; true"
+        try:
+            r = await environment.exec(cmd, cwd="/", timeout_sec=60)
+        except Exception as e:  # recorded; grading then sees whatever Harbor can copy
+            return f"failed: {type(e).__name__}: {e}"
+        return (r.stdout or "").split()[:100]
 
     # -- ATIF ------------------------------------------------------------------ #
 

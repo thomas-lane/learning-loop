@@ -1,0 +1,139 @@
+"""Rendered tasks in real Docker (marker `docker`), on the FIXTURE families.
+
+The shell form of every solution must score what generation predicted from its Python
+model (oracle, each shortcut, doing nothing), with the environment probe passing in the
+verifier. A verifier container that has network access refuses to grade.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "unit"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env_helpers import make_plan  # noqa: E402
+from _task_docker import check_predictions, trial, verifier_stdout  # noqa: E402
+from _task_helpers import fixture_family  # noqa: E402
+
+from learning_loop.core.records import StopCategory, TaskInstance  # noqa: E402
+from learning_loop.core.storage import sha256_tree  # noqa: E402
+from learning_loop.episodes.backends import HarborDockerBackend  # noqa: E402
+
+from learning_loop.tasks.render import render  # noqa: E402
+
+pytestmark = pytest.mark.docker
+
+
+def _docker_ok() -> bool:
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+if not _docker_ok():  # pragma: no cover
+    pytest.skip("Docker daemon not available", allow_module_level=True)
+
+
+@pytest.mark.parametrize("module,difficulty", [("sum_numbers", "hard"), ("fix_add", "easy"), ("copy_private", "easy"), ("upper_tool", "easy")])
+async def test_shell_solutions_score_what_their_models_predicted(tmp_path, module, difficulty):
+    assert await check_predictions(fixture_family(module), difficulty, 1, tmp_path) == []
+
+
+async def test_a_verifier_with_network_refuses_to_grade(tmp_path):
+    task = tmp_path / "sum-numbers__easy__s1__networked-verifier"  # unique: Harbor names the image after the directory
+    render(fixture_family("sum_numbers"), "easy", 1, task)
+    (task / "tests" / "docker-compose.yaml").unlink()
+    r = await trial(task, "oracle", tmp_path / "trials")
+    assert r.exception_info is not None and not (r.verifier_result and r.verifier_result.rewards)
+    assert "environment probe failed; not grading: egress:dns, egress:tcp" in verifier_stdout(r)
+
+
+async def test_a_verifier_built_from_other_files_refuses_to_grade(tmp_path):
+    task = tmp_path / "sum-numbers__easy__s1__stale-key"  # unique: Harbor names the image after the directory
+    render(fixture_family("sum_numbers"), "easy", 1, task)
+    key = task / "tests" / "key.json"
+    key.write_text(key.read_text().replace('"expected": "', '"expected": "9'))  # as if a stale build mixed in another key
+    r = await trial(task, "oracle", tmp_path / "trials")
+    assert r.exception_info is not None and not (r.verifier_result and r.verifier_result.rewards)
+    assert "verifier files differ from the rendered task (stale image build); not grading" in verifier_stdout(r)
+
+
+async def test_an_agent_image_with_other_files_stops_before_turn_0(tmp_path):
+    task = tmp_path / "sum-numbers__easy__s1__stale-data"  # unique: Harbor names the image after the directory
+    render(fixture_family("sum_numbers"), "easy", 1, task)
+    (task / "environment" / "files" / "data" / "part0.txt").write_text("99\n")  # as if a stale build kept another task's file
+    inst = TaskInstance(instance_id="sum-numbers/easy/s1", family="sum-numbers", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "stale-data"), tmp_path / "ep")
+    s = res.summary
+    assert s.stop_reason == "infra:env_probe:app_content" and s.stop_category == StopCategory.INFRA
+    assert s.n_requests == 0
+
+
+async def test_files_under_a_directory_left_without_execute_are_still_graded(tmp_path):
+    import yaml
+
+    from _env_helpers import scripted_spec
+
+    task = tmp_path / "copy-private__easy__s1__dir-mode"  # unique: Harbor names the image after the directory
+    render(fixture_family("copy_private"), "easy", 1, task)
+    rules = [
+        {"name": "solve-then-break-dir", "when": {"turn": 0}, "respond": {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "mkdir -p /app/out/keep && cp /app/in/* /app/out/ && chmod 600 /app/out/*.txt && echo x > /app/out/keep/extra && chmod 644 /app/out/keep /app/out"}}]}},
+        {"name": "done", "when": {"min_turn": 1}, "respond": {"content": "done"}},
+    ]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump({"schema": "scripted_policy/v1", "label": "fixture", "rules": rules}))
+    inst = TaskInstance(instance_id="copy-private/easy/s1", family="copy-private", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "dir-mode", scripted_spec(policy)), tmp_path / "ep")
+    # 3 correct copies + 1 unexpected file. Without restoring the directory's execute bit, Harbor's copy
+    # silently drops keep/extra and the stray file goes unseen (reward 1.0 instead of 0.75).
+    assert res.summary.stop_reason == "model_finished" and res.summary.reward == {"reward": 0.75}, res.summary
+
+
+async def test_a_file_left_unreadable_by_its_owner_is_a_graded_failure_not_infra(tmp_path):
+    """The artifact copy goes through the host, which cannot read such a file back; the episode
+    is scored 0 with the files named, instead of failing the upload as infrastructure."""
+    import yaml
+
+    from _env_helpers import scripted_spec
+
+    task = tmp_path / "copy-private__easy__s1__unreadable"  # unique: Harbor names the image after the directory
+    render(fixture_family("copy_private"), "easy", 1, task)
+    rules = [
+        {"name": "solve-then-lock", "when": {"turn": 0}, "respond": {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "mkdir -p /app/out && cp /app/in/* /app/out/ && chmod 600 /app/out/*.txt && chmod 000 \"$(ls /app/out/*.txt | head -1)\""}}]}},
+        {"name": "done", "when": {"min_turn": 1}, "respond": {"content": "done"}},
+    ]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump({"schema": "scripted_policy/v1", "label": "fixture", "rules": rules}))
+    inst = TaskInstance(instance_id="copy-private/easy/s1", family="copy-private", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "unreadable", scripted_spec(policy)), tmp_path / "ep")
+    assert res.summary.stop_category == StopCategory.MODEL and res.summary.success is False, res.summary
+    assert res.summary.reward == {"reward": 0.0} and res.summary.extra["unreadable_artifact"], res.summary
+
+
+async def test_an_unreadable_file_outside_the_artifacts_does_not_change_the_score(tmp_path):
+    """Only the declared artifacts are copied and graded, so a locked scratch file elsewhere
+    under /app is recorded but leaves a correct answer correct."""
+    import yaml
+
+    from _env_helpers import scripted_spec
+
+    task = tmp_path / "copy-private__easy__s1__scratch"  # unique: Harbor names the image after the directory
+    render(fixture_family("copy_private"), "easy", 1, task)
+    rules = [
+        {"name": "solve-and-lock-scratch", "when": {"turn": 0}, "respond": {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "mkdir -p /app/out && cp /app/in/* /app/out/ && chmod 600 /app/out/* && echo x > /app/scratch && chmod 000 /app/scratch"}}]}},
+        {"name": "done", "when": {"min_turn": 1}, "respond": {"content": "done"}},
+    ]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump({"schema": "scripted_policy/v1", "label": "fixture", "rules": rules}))
+    inst = TaskInstance(instance_id="copy-private/easy/s1", family="copy-private", task_dir=str(task), content_hash=sha256_tree(task))
+    res = await HarborDockerBackend().run(inst, make_plan(inst, "scratch", scripted_spec(policy)), tmp_path / "ep")
+    assert res.summary.success is True and res.summary.reward == {"reward": 1.0}, res.summary
+    assert res.summary.extra["unreadable_artifact"] is None and res.summary.extra["unreadable_files"] == ["/app/scratch"], res.summary

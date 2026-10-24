@@ -79,12 +79,42 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
     return val, None
 
 
-def normalize_message(msg: dict[str, Any], id_prefix: str) -> tuple[Message, dict[str, str], list[dict[str, Any]]]:
-    """Provider message -> (history message, call_errors, repairs)."""
+_CALL_BLOCK = re.compile(r"(?:<\|tool_call>|<tool_call>)(.*?)(?:<tool_call\|>|</tool_call>|$)", re.S)
+# Gemma's `call:NAME{...}` (or a garbled `call{NAME{...}`) at the start of the block, else a JSON
+# `"name": "NAME"` anywhere in it; the word `call` inside a block's arguments names nothing.
+_BLOCK_NAME = (re.compile(r"\s*call\W*([A-Za-z_][\w\-]*)").match, re.compile(r'"name"\s*:\s*"([A-Za-z_][\w\-]*)"').search)
+
+
+def _unparsed_calls(content: Any, errors: list[str], id_prefix: str) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+    """(history call, error, repair) for each tool-call block the server could not parse. The
+    block stays an attempted call that is not run: the model gets an `[error]` observation for
+    it, as for a call with invalid arguments, instead of the episode ending. Its tool name is
+    recovered from the block when possible; its text is kept in the repair record."""
+    blocks = _CALL_BLOCK.findall(content) if isinstance(content, str) else []
+    out = []
+    for i, err in enumerate(errors):
+        block = blocks[i] if i < len(blocks) else ""
+        name = "unparsed_call"
+        for find in _BLOCK_NAME:
+            m = find(block)
+            if m:
+                name = m.group(1)
+                break
+        cid = f"call_{id_prefix}_u{i}"
+        call = {"id": cid, "type": "function", "function": {"name": name, "arguments": "{}"}}
+        repair = {"tool_call_id": cid, "field": "tool_call", "original": block, "replacement": {"name": name, "arguments": "{}"},
+                  "reason": "unparseable tool-call block: not run, answered with an error"}
+        out.append((call, f"could not parse this tool call ({err}), so it was not run", repair))
+    return out
+
+
+def normalize_message(msg: dict[str, Any], id_prefix: str, unparsed: list[str] | None = None) -> tuple[Message, dict[str, str], list[dict[str, Any]]]:
+    """Provider message -> (history message, call_errors, repairs). `unparsed`: the server's
+    parse errors for tool-call blocks it left in the content."""
     content = msg.get("content")
     history: Message = {"role": "assistant", "content": content if isinstance(content, str) else ("" if content is None else content)}
     reasoning = msg.get("reasoning_content")
-    if isinstance(reasoning, str) and reasoning:
+    if isinstance(reasoning, str):  # an empty thought is kept: it is not the same turn as no thought
         history["reasoning_content"] = reasoning
     call_errors: dict[str, str] = {}
     repairs: list[dict[str, Any]] = []
@@ -111,8 +141,19 @@ def normalize_message(msg: dict[str, Any], id_prefix: str) -> tuple[Message, dic
                     {"tool_call_id": cid, "field": "function.arguments", "original": raw_args, "replacement": "{}", "reason": REPAIR_INVALID_ARGS_REASON}
                 )
         calls.append({"id": cid, "type": "function", "function": {"name": name, "arguments": hist_args}})
+    for call, err, repair in _unparsed_calls(content, list(unparsed or []), id_prefix):
+        calls.append(call)
+        call_errors[call["id"]] = err
+        repairs.append(repair)
     if calls:
         history["tool_calls"] = calls
+        text = history["content"]
+        if (isinstance(text, str) and text.strip()) or (isinstance(text, list) and text):
+            # Chat templates render a message's text after its tool results (Gemma 4), so text the
+            # model wrote with its calls would appear in the wrong place in every later prompt.
+            repairs.append({"tool_call_id": None, "field": "content", "original": text, "replacement": "",
+                            "reason": "assistant text alongside tool calls is not kept in the history"})
+            history["content"] = ""
     return history, call_errors, repairs
 
 
@@ -126,11 +167,11 @@ def _decision(
     seed_sent: int | None,
     id_prefix: str,
 ) -> PolicyDecision:
-    history, call_errors, repairs = normalize_message(msg, id_prefix)
     # Servers that fail to parse a native tool-call block (e.g. invalid JSON escapes) may return
     # it as plain content; ours reports that under `learning_loop.parse_errors`. Surface it so the
     # turn is an explicit malformed call, never a silent "finished" reply.
     server_errors = ((raw_response or {}).get("learning_loop") or {}).get("parse_errors") or []
+    history, call_errors, repairs = normalize_message(msg, id_prefix, server_errors)
     return PolicyDecision(
         raw_request=raw_request,
         raw_response=raw_response,
@@ -138,11 +179,25 @@ def _decision(
         finish_reason=finish_reason,
         usage=usage,
         latency_sec=latency,
-        parse_errors=[f"{cid}: {e}" for cid, e in call_errors.items()] + [f"unparsed_tool_call: {e}" for e in server_errors],
+        parse_errors=[f"{cid}: {e}" for cid, e in call_errors.items() if not cid.startswith(f"call_{id_prefix}_u")]
+        + [f"unparsed_tool_call: {e}" for e in server_errors],
         repairs=repairs,
         seed_sent=seed_sent,
         call_errors=call_errors,
+        context_capped=bool(((raw_response or {}).get("learning_loop") or {}).get("context_capped")),
     )
+
+
+CONTEXT_EXHAUSTED_CODE = "context_budget_exhausted"  # hf_server: the prompt fills the request's context cap
+
+
+def _error_code(body: Any) -> str | None:
+    """`code` of an OpenAI-style error body (the SDK passes either the body or its `error` member)."""
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error") if isinstance(body.get("error"), dict) else body
+    code = err.get("code")
+    return code if isinstance(code, str) else None
 
 
 def _error_decision(raw_request: dict[str, Any], seed_sent: int | None, latency: float | None, *, request_error: str | None = None, infra_error: str | None = None, raw: dict[str, Any] | None = None) -> PolicyDecision:
@@ -156,6 +211,7 @@ def _error_decision(raw_request: dict[str, Any], seed_sent: int | None, latency:
         request_error=request_error,
         infra_error=infra_error,
         seed_sent=seed_sent,
+        context_exhausted=request_error is not None and _error_code(((raw or {}).get("error") or {}).get("body")) == CONTEXT_EXHAUSTED_CODE,
     )
 
 
@@ -209,7 +265,7 @@ class OpenAIChatPolicy:
             return self.spec.checkpoint.checkpoint_id
         return "default"
 
-    def build_request(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> tuple[dict[str, Any], int | None]:
+    def build_request(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> tuple[dict[str, Any], int | None]:
         s = self.spec.sampling
         req: dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:  # some servers reject an empty tools array (e.g. editor requests)
@@ -223,12 +279,17 @@ class OpenAIChatPolicy:
         seed_sent = seed if (self.spec.send_seed and seed is not None) else None
         if seed_sent is not None:
             req["seed"] = seed_sent
-        if s.extra_body:
-            req["extra_body"] = dict(s.extra_body)
+        extra = dict(s.extra_body)
+        if s.top_k is not None:  # not an OpenAI parameter, so it travels in the request body
+            extra["top_k"] = s.top_k
+        if max_context_tokens is not None:  # the episode's context cap, enforced by hf_server
+            extra["max_context_tokens"] = max_context_tokens
+        if extra:
+            req["extra_body"] = extra
         return req, seed_sent
 
-    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision:
-        req, seed_sent = self.build_request(messages, tools, seed)
+    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> PolicyDecision:
+        req, seed_sent = self.build_request(messages, tools, seed, max_context_tokens)
         limit = self.spec.max_concurrent_requests
         if limit is not None:
             async with endpoint_semaphore(self.spec.api_base or "", limit):
@@ -396,7 +457,8 @@ class ScriptedPolicy:
             return i, rule, groups
         return None
 
-    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision:
+    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> PolicyDecision:
+        # FIXTURE: scripted replies have no tokens, so the context cap does not apply.
         seed_sent = seed if (self.spec.send_seed and seed is not None) else None
         raw_request = {"model": self.spec.served_model_name or "scripted", "messages": messages, "tools": tools, "seed": seed_sent, "scripted": True}
         t0 = time.monotonic()

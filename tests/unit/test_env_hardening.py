@@ -23,9 +23,9 @@ from learning_loop.core.storage import atomic_write_json
 from learning_loop.episodes.backends import LocalFixtureBackend, _stub_core
 from learning_loop.episodes.envs.harbor_session import HarborSession
 from learning_loop.episodes.envs.local_session import LocalSession, _LocalExec
-from learning_loop.episodes.episode import build_replay_spec, run_episode
+from learning_loop.episodes.episode import QUOTED_CALL_LIMIT, build_replay_spec, run_episode
 from learning_loop.episodes.events import EventLog, load_turns, read_events
-from learning_loop.episodes.policy import OpenAIChatPolicy
+from learning_loop.episodes.policy import OpenAIChatPolicy, normalize_message
 from learning_loop.tasks.instances import NETWORK_CAVEAT, load_state_spec
 
 
@@ -50,7 +50,7 @@ class _ListPolicy:
     def __init__(self, steps):
         self.steps = list(steps)
 
-    async def decide(self, messages, tools, seed):
+    async def decide(self, messages, tools, seed, max_context_tokens=None):
         if self.steps:
             msg, usage, perr = self.steps.pop(0)
         else:
@@ -111,6 +111,30 @@ async def test_turn_with_valid_and_unparsed_call_is_malformed(tmp_path, instance
     assert run.core.n_malformed_turns == 1 and run.core.stop_reason == "model_finished"
 
 
+async def test_unparsed_block_is_quoted_back_in_its_error(tmp_path, instance):
+    block = 'call:bash{command:<|"|>ls \\*<|"|>'
+    long = "call:write_file{content:<|\"|>" + "x" * (QUOTED_CALL_LIMIT + 50)
+    raw = {"role": "assistant", "content": f"<|tool_call>{block}<tool_call|><|tool_call>{long}<tool_call|>"}
+    msg, call_errors, repairs = normalize_message(raw, "0", ["tool_call 0: bad escape", "tool_call 1: bad escape"])
+
+    class _Pol(_ListPolicy):
+        async def decide(self, messages, tools, seed, max_context_tokens=None):
+            if self.steps:
+                self.steps.pop(0)
+                return PolicyDecision(raw_request={}, raw_response={}, history_message=msg, finish_reason="stop", usage=Usage(input_tokens=5, output_tokens=5),
+                                      latency_sec=0.0, parse_errors=["unparsed_tool_call: a", "unparsed_tool_call: b"], repairs=repairs, call_errors=call_errors)
+            return await super().decide(messages, tools, seed)
+
+    log = EventLog(tmp_path / "events.jsonl", "quoted")
+    async with LocalSession(_files(instance), _cfg()) as s:
+        run = await run_episode(make_plan(instance, "quoted"), s, _Pol([None]), log)
+    first, second = load_turns(read_events(tmp_path / "events.jsonl"))[0].tool_executions
+    assert first.observation == f"[error] {call_errors[first.call_id]}\nThe call as you wrote it:\n{block}"
+    assert first.requested_arguments_raw == block and not first.executed
+    assert second.observation.endswith(long[:QUOTED_CALL_LIMIT] + f"\n... ({len(long) - QUOTED_CALL_LIMIT} more characters)")
+    assert run.core.stop_reason == "model_finished"  # the episode went on after the errors
+
+
 # --------------------------------------------------------------------------- #
 # 4. environment transport failures are INFRA
 # --------------------------------------------------------------------------- #
@@ -123,7 +147,7 @@ async def test_environment_transport_failure_is_infra(tmp_path, instance, fail):
     log = EventLog(tmp_path / "events.jsonl", "infra")
     async with LocalSession(_files(instance), _cfg()) as local:
         sess = HarborSession(_FakeHarborEnv(local, fail=fail), _cfg(), measure_cpu=False)
-        plan = make_plan(instance, "infra")
+        plan = make_plan(instance, "infra", env_probe=False)
         plan.record_fingerprints = False
         run = await run_episode(plan, sess, pol, log)
     assert run.core.stop_category == StopCategory.INFRA, run.core.stop_reason
@@ -226,6 +250,36 @@ async def test_bash_timeout_is_clamped_and_recorded(instance):
         assert te.timeout_sec is None and te.timed_out is None
 
 
+async def test_listing_the_temp_dir_is_the_same_in_every_replay(instance):
+    """The bash wrapper's stderr file has a fixed name, so a replayed listing matches exactly."""
+    seen = []
+    for _ in range(2):
+        async with LocalSession(_files(instance), _cfg(5)) as s:
+            te = await s.execute("c", "bash", {"command": 'ls -a "$TMPDIR"; echo oops >&2'}, None)
+            seen.append(te.observation)
+    assert seen[0] == seen[1] == "[exit code 0]\n.\n..\n.ll-stderr\n[stderr]\noops"
+
+
+async def test_read_file_notes_a_line_longer_than_the_output_limit(tmp_path):
+    (tmp_path / "long.json").write_text("x" * 20_000 + "\n")
+    async with LocalSession(tmp_path, _cfg(5)) as s:
+        te = await s.execute("c", "read_file", {"path": "/app/long.json"}, None)
+    assert "x" * 3600 + "\n" in te.observation
+    assert te.observation.endswith("[line 1 is cut at 3600 of its 20000 characters; use bash to read the rest]")
+    (tmp_path / "exact.txt").write_text("y" * 3600 + "\n")
+    async with LocalSession(tmp_path, _cfg(5)) as s:
+        te = await s.execute("c", "read_file", {"path": "/app/exact.txt"}, None)
+    assert "is cut" not in te.observation and "y" * 3600 in te.observation
+
+
+def test_only_unreadable_files_among_the_artifacts_are_graded():
+    from learning_loop.episodes.backends import graded_files
+
+    left = ["/app/out/a.txt", "/app/output.txt", "/app/tmp_input", "/app/out"]
+    assert graded_files(left, ["/app/out/", {"source": "/app/answer.txt"}]) == ["/app/out/a.txt", "/app/out"]
+    assert graded_files(["/app/answer.txt"], [{"source": "/app/answer.txt"}]) == ["/app/answer.txt"]
+
+
 # --------------------------------------------------------------------------- #
 # 8. stub core counts
 # --------------------------------------------------------------------------- #
@@ -250,12 +304,18 @@ async def test_stub_core_counts_from_events_or_unavailable(tmp_path, instance):
 # --------------------------------------------------------------------------- #
 
 
-def test_network_caveat_recorded_for_public_network_replay(instance):
-    spec = load_state_spec(Path(instance.task_dir))
-    assert NETWORK_CAVEAT in spec.caveats
-    toml = Path(instance.task_dir) / "task.toml"
+def test_network_caveat_only_without_network_isolation(instance):
+    d = Path(instance.task_dir)
+    assert load_state_spec(d).caveats == []  # rendered: network_mode none for agent and verifier
+    overlay = d / "tests" / "docker-compose.yaml"
+    text = overlay.read_text()
+    overlay.unlink()
+    assert NETWORK_CAVEAT in load_state_spec(d).caveats
+    overlay.write_text(text.replace('network_mode: "none"', 'network_mode: "bridge"'))
+    assert NETWORK_CAVEAT in load_state_spec(d).caveats
+    toml = d / "task.toml"
     toml.write_text(toml.read_text().replace("memory_mb = 1024", 'memory_mb = 1024\nnetwork_mode = "no-network"', 1))
-    assert load_state_spec(Path(instance.task_dir)).caveats == []
+    assert load_state_spec(d).caveats == []
 
 
 async def test_image_identity_recorded_and_carried_into_replay_spec(tmp_path, instance):
@@ -272,18 +332,15 @@ async def test_image_identity_recorded_and_carried_into_replay_spec(tmp_path, in
 
 
 def test_task_dockerfiles_pin_base_images_by_digest(tmp_path):
-    from evaluation.generators import GENERATORS, generate
-    from learning_loop.core.config import REPO_ROOT
+    from evaluation.families import FAMILIES
     from learning_loop.episodes.envs.base import build_inputs_identity
+    from learning_loop.tasks.render import render
 
-    dirs = [REPO_ROOT / "evaluation/tasks/fix-stats", REPO_ROOT / "evaluation/tasks/log-triage"]
-    for fam in GENERATORS:
-        generate(fam, "easy", 1, tmp_path / fam)
-        dirs.append(tmp_path / fam)
-    for d in dirs:
+    for name, fam in FAMILIES.items():
+        render(fam, "easy", 1, tmp_path / name)
         for sub in ("environment", "tests"):
-            ident = build_inputs_identity("harbor_docker", d / sub)
-            assert ident["base_pinned"] is True and all("@sha256:" in b for b in ident["base_images"]), (d, sub, ident)
+            ident = build_inputs_identity("harbor_docker", tmp_path / name / sub)
+            assert ident["base_pinned"] is True and all("@sha256:" in b for b in ident["base_images"]), (name, sub, ident)
 
 
 # --------------------------------------------------------------------------- #
@@ -375,7 +432,7 @@ class _AgentEnv:
 
 
 async def test_tool_agent_never_writes_through_planted_symlinks(tmp_path, instance):
-    plan = make_plan(instance, "ep-agent")
+    plan = make_plan(instance, "ep-agent", env_probe=False)
     plan_path = tmp_path / "plan.json"
     atomic_write_json(plan_path, plan)
     logs = tmp_path / "trial" / "agent"

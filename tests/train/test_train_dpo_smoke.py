@@ -177,6 +177,36 @@ def test_resume_restores_trainer_state(runs):
     assert worst <= 1e-5, f"resumed run diverged from uninterrupted run by {worst}"
 
 
+def test_split_pair_backward_trains_the_same_adapter(runs):
+    """dpo.split_pair_backward (with gradient checkpointing) only reschedules the backward pass:
+    the same cycle-1 request gives the same losses and, up to kernel noise, the same adapter."""
+    from learning_loop.core.config import TrainingConfig
+    from learning_loop.training.dpo import TrlDpoTrainer
+
+    r1 = runs["r1"]
+    tc = TrainingConfig.model_validate(r1.training_config)
+
+    def train(split):
+        dpo = tc.dpo.model_copy(update={"gradient_checkpointing": True, "split_pair_backward": split})
+        req = r1.model_copy(update={"training_config": tc.model_copy(update={"dpo": dpo}).model_dump(),
+                                    "output_root": str(runs["root"] / f"ckpts-split-{split}")})
+        return TrlDpoTrainer(ref_cache_dir=runs["cache"]).train(req, runs["root"] / f"w-split-{split}")
+
+    batched, split = train(False), train(True)
+
+    def steps(split_):
+        logs = [json.loads(line) for line in (runs["root"] / f"w-split-{split_}" / "train_logs.jsonl").read_text().splitlines()]
+        return [(x["loss"], x["grad_norm"]) for x in logs if "grad_norm" in x]
+
+    # Same loss and gradient norm at every step up to float32 rounding (measured on MPS: 7e-7 relative).
+    for (lb, gb), (ls, gs) in zip(steps(False), steps(True), strict=True):
+        assert math.isclose(ls, lb, rel_tol=1e-5) and math.isclose(gs, gb, rel_tol=1e-5)
+    # Adam's first steps magnify that rounding where gradients are near zero (measured: 1.5e-4).
+    a, b = _adapter(split), _adapter(batched)
+    worst = max(float((a[k] - b[k]).abs().max()) for k in a)
+    assert worst <= 1e-3, f"split-pair run diverged from the batched run by {worst}"
+
+
 def test_reference_cache_hits_and_invalidation(runs):
     assert runs["c1"].metrics["reference_cache"]["misses"] == 3
     assert runs["c2"].metrics["reference_cache"] == {**runs["c2"].metrics["reference_cache"], "hits": 3, "misses": 0}

@@ -22,6 +22,8 @@ CASES = [
     (E / "smoke-mac.yaml", M / "runpod.yaml", ["--set", "learner.model_profile=qwen3-1.7b"]),
     (E / "pilot.yaml", M / "runpod-a100.yaml", []),
     (E / "pilot.yaml", M / "runpod-a100-vllm.yaml", []),
+    (E / "pilot-12b.yaml", M / "runpod-a100-vllm.yaml", []),
+    (E / "pilot-e4b.yaml", M / "runpod-a100-vllm.yaml", []),
     (E / "pilot.yaml", M / "runpod-a100.yaml", ["--set", "learner.model_profile=gemma-4-e2b-it"]),
     *[(p, M / "lab-gpu.yaml", []) for p in sorted((E / "ablations").glob("*.yaml"))],
 ]
@@ -65,3 +67,22 @@ def test_external_eval_dry_run_requires_pinned_version(tmp_path, capsys):
     assert main([*args, "--dataset", "terminal-bench@2.0"]) == 0
     out = capsys.readouterr().out
     assert "dry run" in out and (next(tmp_path.glob("*/protocol.json"))).exists()
+
+
+def test_first_e4b_configs_and_split():
+    # Full `loop validate` of these configs generates all 522 instances (over a minute), so the fast
+    # suite checks what the configs and split declare; `loop validate` runs the content checks.
+    from evaluation.families import FAMILIES
+    from learning_loop.core.config import load_experiment
+    from learning_loop.tasks.instances import load_splits
+
+    exp, _ = load_experiment(E / "first-e4b.yaml")
+    base, _ = load_experiment(E / "first-e4b-frozen-baseline.yaml")
+    assert (base.condition, base.cycles) == ("frozen_baseline", 0)
+    assert base.model_dump(exclude={"name", "condition", "cycles"}) == exp.model_dump(exclude={"name", "condition", "cycles"})
+    splits = load_splits(REPO_ROOT / exp.tasks.splits)  # raises on structural errors (seeds, held-out, duplicates)
+    panels = [exp.tasks.collection_panel, *exp.evaluation.dev_panels, *exp.evaluation.final_panels]
+    assert [splits.panels[p].split.value for p in panels] == ["train", "dev", "final", "final", "final"]
+    assert {i.family for i in splits.instances.values()} == set(FAMILIES)
+    trained = {i.family for i in splits.panels["train"].instances}
+    assert trained.isdisjoint(splits.held_out_families) and trained | set(splits.held_out_families) == set(FAMILIES)

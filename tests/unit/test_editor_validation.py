@@ -76,9 +76,39 @@ def test_ineligible_turns_rejected(tmp_path, overrides, expected):
     assert expected in reasons
 
 
+def test_a_call_the_tool_refused_can_be_edited(tmp_path):
+    # e.g. a wrong argument type or a missing file: a real model action answered with [error]
+    _, turns = source(tmp_path, overrides={0: {"tool_error": "'command' must be a string"}})
+    assert not turns[0].tool_executions[0].executed
+    assert check(prop(), turns) == []
+    _, turns = source(tmp_path / "nores")
+    turns[0].tool_executions.clear()
+    assert "original_without_result" in check(prop(), turns)
+
+
 def test_empty_reasoning_string_is_allowed(tmp_path):
     _, turns = source(tmp_path, overrides={0: {"reasoning": "  "}})
     assert check(prop(), turns) == []
+
+
+def test_keep_reasoning_policy_edits_turns_with_reasoning(tmp_path):
+    _, turns = source(tmp_path, overrides={0: {"reasoning": "I should list the logs first."}})
+    assert check(prop(), turns, assistant_text_policy="keep_reasoning") == []
+    _, turns = source(tmp_path / "content", overrides={0: {"reasoning": "x", "content": "Let me look."}})
+    assert "nonempty_assistant_content" in check(prop(), turns, assistant_text_policy="keep_reasoning")
+    # The chat template drops an empty thought, so such a turn could not be rendered as generated.
+    _, turns = source(tmp_path / "empty", overrides={0: {"reasoning": ""}})
+    assert "empty_reasoning" in check(prop(), turns, assistant_text_policy="keep_reasoning")
+    assert check(prop(), turns) == []
+
+
+def test_edited_message_keeps_reasoning_and_replaces_only_the_call():
+    orig = {"role": "assistant", "content": "", "reasoning_content": "list first",
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]}
+    edited = make_edited_message(orig, ProposedCall(name="bash", arguments={"command": "find /app"}))
+    assert edited["reasoning_content"] == "list first" and edited["tool_calls"][0]["id"] == "call_0"
+    assert json.loads(edited["tool_calls"][0]["function"]["arguments"]) == {"command": "find /app"}
+    assert {k: v for k, v in edited.items() if k != "tool_calls"} == {k: v for k, v in orig.items() if k != "tool_calls"}
 
 
 def test_final_answer_turn_and_missing_turn(tmp_path):
@@ -243,13 +273,47 @@ class FakePolicy:
         self.infra_error = infra_error
         self.calls = []
 
-    async def decide(self, messages, tools, seed):
+    async def decide(self, messages, tools, seed, max_context_tokens=None):
         self.calls.append((messages, tools, seed))
         return PolicyDecision(
             raw_request={}, raw_response={"id": "r"}, history_message=self.answer,
             finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5,
             infra_error=self.infra_error, seed_sent=seed,
         )
+
+
+async def test_unparsed_editor_answer_is_invalid_not_an_abstention(tmp_path):
+    """A block the server could not parse is no answer, whatever tool name it starts with."""
+    from learning_loop.episodes.policy import normalize_message
+
+    summary, turns = source(tmp_path)
+    block = '<|tool_call>call:abstain{edit_justification:<|"|>unsure<|"|> trailing}<tool_call|>'
+    history, call_errors, repairs = normalize_message({"content": block}, "x", ["unterminated value"])
+    pol = FakePolicy(history)
+    pol.decide = lambda *a, **k: _async(PolicyDecision(
+        raw_request={}, raw_response={"id": "r", "learning_loop": {"parse_errors": ["unterminated value"]}}, history_message=history,
+        finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "invalid" and p.rejection_reasons == ["no_tool_call", "unparsed_tool_call:unterminated value"]
+    # A parsed answer next to an unparsed block is two answers, not the parsed one alone.
+    abstain = {"id": "a0", "type": "function", "function": {"name": "abstain", "arguments": json.dumps({"edit_justification": "fine"})}}
+    history, call_errors, repairs = normalize_message({"content": block, "tool_calls": [abstain]}, "x", ["unterminated value"])
+    pol.decide = lambda *a, **k: _async(PolicyDecision(
+        raw_request={}, raw_response={"id": "r", "learning_loop": {"parse_errors": ["unterminated value"]}}, history_message=history,
+        finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "invalid" and p.rejection_reasons == ["multiple_tool_calls:2", "unparsed_tool_call:unterminated value"]
+    # Cut off by the output limit: the reason says so.
+    history, call_errors, repairs = normalize_message({"content": block}, "x", ["unterminated value"])
+    pol.decide = lambda *a, **k: _async(PolicyDecision(
+        raw_request={}, raw_response={"id": "r", "learning_loop": {"parse_errors": ["unterminated value"]}}, history_message=history,
+        finish_reason="length", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.rejection_reasons == ["no_tool_call", "unparsed_tool_call:unterminated value", "editor_output_truncated"]
+
+
+async def _async(value):
+    return value
 
 
 def _editor(policy, **kw):

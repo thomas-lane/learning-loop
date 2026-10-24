@@ -67,7 +67,10 @@ EDIT_TOOL_PREFIX = "replace_with_"
 ABSTAIN_TOOL = "abstain"
 EDIT_TURN = "edit_turn"
 EDIT_JUSTIFICATION = "edit_justification"
-ASSISTANT_TEXT_POLICIES = ("reject_nonempty",)
+# reject_nonempty: turns with assistant text or reasoning are not editable.
+# keep_reasoning: turns with reasoning are editable; the edit keeps the reasoning and replaces only
+# the tool call (assistant text is still not editable).
+ASSISTANT_TEXT_POLICIES = ("reject_nonempty", "keep_reasoning")
 
 # --------------------------------------------------------------------------- #
 # Small helpers shared with verify.py / preferences.py
@@ -99,9 +102,9 @@ def serialize_arguments(arguments: dict[str, Any]) -> str:
 
 def make_edited_message(original: Message, replacement: ProposedCall) -> Message:
     """The fixed edited assistant turn: identical to the original message except
-    its single tool call's name/arguments. Content (empty under the strict policy)
-    and the original tool_call_id are kept, so the tool-result message that
-    follows stays well-formed."""
+    its single tool call's name/arguments. Content (always empty in an eligible turn),
+    reasoning (under `keep_reasoning`) and the original tool_call_id are kept, so the
+    tool-result message that follows stays well-formed."""
     calls = tool_calls_of(original)
     if len(calls) != 1:
         raise ValueError("edited messages are only defined for single-tool-call turns")
@@ -495,15 +498,20 @@ def turn_ineligibility(turn: TurnRecord, assistant_text_policy: str = "reject_no
     if len(calls) == 1:
         if parse_call_arguments(calls[0]) is None:
             reasons.append("malformed_turn:arguments")
-        execs = [te for te in turn.tool_executions if te.call_id == calls[0].get("id")]
-        if not execs or not execs[0].executed:
-            reasons.append("original_not_executed")
+        # A call the tool refused (wrong argument type, missing file, unknown tool) is a real model
+        # action with an [error] observation, so it can be edited; a call with no result cannot.
+        if not any(te.call_id == calls[0].get("id") for te in turn.tool_executions):
+            reasons.append("original_without_result")
     content = turn.assistant_message.get("content")
     if (isinstance(content, str) and content.strip()) or (isinstance(content, list) and len(content) > 0):
         reasons.append("nonempty_assistant_content")
     reasoning = turn.assistant_message.get("reasoning_content")
-    if isinstance(reasoning, str) and reasoning.strip():
+    if assistant_text_policy == "reject_nonempty" and isinstance(reasoning, str) and reasoning.strip():
         reasons.append("nonempty_reasoning")
+    if assistant_text_policy == "keep_reasoning" and reasoning == "":
+        # An empty thought (the model closed the thought channel at once) is dropped by the chat
+        # template, so the turn cannot be rendered as generated for training or token counting.
+        reasons.append("empty_reasoning")
     return reasons
 
 
@@ -742,6 +750,9 @@ def proposal_from_tool_calls(
 class _EditorBase:
     editor_id: str
     assistant_text_policy: str = "reject_nonempty"
+    # How many proposals the edit stage requests at once. Proposals are independent (each has
+    # its own seed), so the order they run in does not change them.
+    max_concurrency: int = 1
 
     async def propose(self, source: EpisodeSummary, turns: list[TurnRecord], instance: TaskInstance, instruction: str, tools: list[ToolSchema], **kw: Any) -> EditProposal:
         raise NotImplementedError
@@ -806,6 +817,9 @@ class LLMEditor(_EditorBase):
         self.include_outcome_metrics = include_outcome_metrics
         self.include_later_observations = include_later_observations
         self.assistant_text_policy = assistant_text_policy
+        # As many requests as the editor's endpoint accepts (its `request_concurrency`), which
+        # vLLM batches; its per-endpoint semaphore still enforces the limit on each request.
+        self.max_concurrency = policy.spec.max_concurrent_requests or 1
         self.decoding = {
             "sampling": policy.spec.sampling.model_dump(),
             "send_seed": policy.spec.send_seed,
@@ -872,6 +886,17 @@ class LLMEditor(_EditorBase):
             err = f"editor_infra_error:{decision.infra_error}" if decision.infra_error else f"editor_request_error:{decision.request_error}"
             return EditProposal(**common, status="invalid", rejection_reasons=[err], raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
         server_errors = ((decision.raw_response or {}).get("learning_loop") or {}).get("parse_errors") or []
+        # A tool-call block the server could not parse stays an attempted call in a learner's
+        # history (answered with an error); for the editor it is no usable answer, so the
+        # proposal is invalid and names the parse error, also when a parsed call comes with it.
+        unparsed = {r["tool_call_id"] for r in decision.repairs if r.get("field") == "tool_call"}
+        if unparsed:
+            parsed = [c for c in tool_calls_of(decision.history_message) if c.get("id") not in unparsed]
+            reasons = ["no_tool_call" if not parsed else f"multiple_tool_calls:{len(parsed) + len(unparsed)}"]
+            reasons += [f"unparsed_tool_call:{e}" for e in server_errors]
+            if decision.finish_reason == "length":  # usually the cause: the call was cut off
+                reasons.append("editor_output_truncated")
+            return EditProposal(**common, status="invalid", rejection_reasons=reasons, raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
         answer, recovered = recover_bare_answer(decision.history_message, answer_tools)
         if recovered:
             raw["answer_recovery"] = "bare_tool_call"  # the reply was the call without the format's markers

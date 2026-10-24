@@ -58,6 +58,15 @@ def test_unsupported_serving_backend_is_refused():
         co.check_compatibility(exp, live, learner, unsupported(learner, "hf_transformers"))
 
 
+def test_thinking_learner_needs_an_editor_that_keeps_reasoning():
+    exp, _, mac, learner, editor = co.load_all(EXP, M / "mac-local.yaml", REAL_LEARNER)
+    thinking = learner.model_copy(update={"chat_template_kwargs": {"enable_thinking": True}})
+    with pytest.raises(co.PlanError, match="use keep_reasoning"):
+        co.check_compatibility(exp, mac, thinking, editor)
+    keep = exp.model_copy(update={"editor": exp.editor.model_copy(update={"assistant_text_policy": "keep_reasoning"})})
+    co.check_compatibility(keep, mac, thinking, editor)
+
+
 def test_managed_lora_runs_need_a_declared_peft_backend():
     exp, _, mac, learner, editor = co.load_all(REPO_ROOT / "experiments" / "smoke-mac.yaml", M / "mac-local.yaml")
     co.check_compatibility(exp, mac, learner, editor)
@@ -103,3 +112,16 @@ def test_edit_replay_checks_endpoints_against_the_source_cycle(source_run, tmp_p
     with pytest.raises(co.PlanError, match="editor endpoint declares"):
         co.edit_replay(src_dir, 1, EXP, editor_at(initial), run_id="er4", runs_dir=runs, overrides=current)
     co.edit_replay(src_dir, 1, EXP, editor_at(learner_c1), run_id="er5", runs_dir=runs, overrides=current)
+
+
+def test_context_window_reaches_every_managed_server(tmp_path):
+    ctx = co.create_run(EXP, M / "fixture.yaml", run_id="ctx", runs_dir=tmp_path, overrides=["learner.max_context_tokens=131072"])
+    assert ctx.manager("learner").max_context == 131072 and ctx.manager("editor").max_context == 131072
+
+
+def test_context_cap_needs_this_repositorys_server():
+    exp, _, mac, learner, editor = co.load_all(EXP, M / "mac-local.yaml", REAL_LEARNER + ["episode.max_context_tokens=4096"])
+    co.check_compatibility(exp, mac, learner, editor)  # hf_transformers: hf_server enforces it
+    llama = mac.model_copy(update={"inference": mac.inference.model_copy(update={"mode": "external", "backend": "llama_cpp"})})
+    with pytest.raises(co.PlanError, match="needs the hf_transformers or vllm backend"):
+        co.check_context_cap(exp, llama)

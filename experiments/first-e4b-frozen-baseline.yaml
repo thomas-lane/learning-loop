@@ -1,0 +1,6 @@
+# Frozen-policy control for first-e4b: evaluate the initial checkpoint on the same panels with the
+# same instance/attempt seed schedule (paired with the learning run via `loop compare`).
+base: first-e4b.yaml
+name: first-e4b-frozen-baseline
+condition: frozen_baseline
+cycles: 0

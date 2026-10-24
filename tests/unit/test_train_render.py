@@ -252,6 +252,7 @@ def test_qwen3_fixture_dataset_renders(qwen):
         assert p.chosen_ids != p.rejected_ids
 
 
+# Thinking off; gemma-4-12b-it (thinking on) has its own test below.
 GEMMA = ["gemma-4-e4b-it", "gemma-4-e2b-it"]  # different pinned templates, same tool-call syntax
 
 
@@ -288,6 +289,61 @@ def test_gemma4_parser_roundtrips_the_pinned_template(profile):
     assert q.chosen_ids == p.chosen_ids
 
 
+def test_gemma4_thinking_turns_roundtrip_and_keep_reasoning_in_both_sides():
+    """With thinking on, the 12B template opens the thought channel in the generation prompt after
+    a tool result, so the completion starts inside the thought. The server's prefix makes it parse
+    back to the same message, and an edit that keeps the reasoning renders it identically on both
+    sides of the pair, so only the tool call differs."""
+    from learning_loop.editing.editor import make_edited_message
+    from learning_loop.core.records import ProposedCall
+    from learning_loop.serving.tool_parse import generation_prefix, parse_gemma4
+    from learning_loop.training.render import render_text
+
+    prof, tok = _cached("gemma-4-12b-it")
+    kw = prof.chat_template_kwargs
+    assert kw.get("enable_thinking") is True
+    eot = end_of_turn_ids(tok, prof)
+    a0 = {**asst(call("call_0", '{"command": "ls"}')), "reasoning_content": "List first.\nThen count."}
+    a1 = {**asst(call("call_1", '{"command": "wc -l a"}')), "reasoning_content": "Now count."}
+    after_tool = [*PROMPT, a0, {"role": "tool", "tool_call_id": "call_0", "content": "a\nb"}]
+    for prompt, msg in [(PROMPT, a0), (after_tool, a1)]:
+        prompt_text = render_text(tok, prompt, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw)
+        rc = render_completion(tok, prompt, [msg], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
+        text = tok.decode(rc.completion_ids[:-1], skip_special_tokens=False)
+        parsed = parse_gemma4(generation_prefix("gemma4", prompt_text) + text, "s")
+        assert parsed.parse_errors == [] and parsed.content == "" and parsed.reasoning_content == msg["reasoning_content"]
+        assert [c["function"]["name"] for c in parsed.tool_calls] == ["bash"]
+    assert render_text(tok, after_tool, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw).endswith("<|channel>thought\n")
+    chosen = make_edited_message(a1, ProposedCall(name="bash", arguments={"command": "grep -c . a"}))
+    ex = PreferenceExample(pair_id="p", prompt=after_tool, chosen=[chosen], rejected=[a1], tools=TOOLS)
+    p = render_pair(ex, tok, chat_template_kwargs=kw, eot_ids=eot, max_length=4096)
+    assert p.chosen_text.startswith("Now count.\n<channel|><|tool_call>") and p.rejected_text.startswith("Now count.\n<channel|><|tool_call>")
+    # An empty thought after a tool result cannot be rendered as generated (hence `empty_reasoning`).
+    with pytest.raises(RenderError):
+        render_completion(tok, after_tool, [{**a1, "reasoning_content": ""}], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
+
+
+def test_gemma4_e4b_thinking_turns_roundtrip_without_a_prefilled_thought():
+    """E4B's template, unlike the 12B's, does not open the thought channel after a tool result: the
+    model opens it itself, so the completion carries the whole thought and needs no prefix."""
+    from learning_loop.serving.tool_parse import generation_prefix, parse_gemma4
+    from learning_loop.training.render import render_text
+
+    prof, tok = _cached("gemma-4-e4b-it-thinking")
+    kw = prof.chat_template_kwargs
+    assert kw.get("enable_thinking") is True
+    eot = end_of_turn_ids(tok, prof)
+    a0 = {**asst(call("call_0", '{"command": "ls"}')), "reasoning_content": "List first."}
+    a1 = {**asst(call("call_1", '{"command": "wc -l a"}')), "reasoning_content": "Now count."}
+    after_tool = [*PROMPT, a0, {"role": "tool", "tool_call_id": "call_0", "content": "a\nb"}]
+    prompt_text = render_text(tok, after_tool, TOOLS, add_generation_prompt=True, chat_template_kwargs=kw)
+    assert generation_prefix("gemma4", prompt_text) == ""
+    rc = render_completion(tok, after_tool, [a1], TOOLS, chat_template_kwargs=kw, eot_ids=eot)
+    assert rc.completion_text.startswith("<|channel>thought\nNow count.\n<channel|><|tool_call>")
+    parsed = parse_gemma4(tok.decode(rc.completion_ids[:-1], skip_special_tokens=False), "s")
+    assert parsed.reasoning_content == "Now count." and parsed.content == "" and len(parsed.tool_calls) == 1
+
+
 def test_template_pin_is_enforced(qwen):
     prof, _ = qwen
     bad = prof.model_copy(update={"chat_template_sha256": "0" * 64})
@@ -308,3 +364,27 @@ def test_intervention_tokens_match_training_render(qwen):
     fn, fsrc = fixture_intervention_tokens(ex.prompt, ex.chosen[0], ex.tools)
     assert fsrc.startswith("fixture_estimate") and fn > 0
     assert get_counter(None) is fixture_intervention_tokens
+
+
+def test_reasoning_tokens_are_counted_on_the_generated_ids():
+    from learning_loop.serving.tool_parse import reasoning_token_count
+    from learning_loop.training.render import encode
+
+    prof, tok = _cached("gemma-4-e4b-it-thinking")
+    thought, call = encode(tok, "<|channel>thought\nlist first\n<channel|>"), encode(tok, '<|tool_call>call:bash{command:<|"|>ls<|"|>}<tool_call|>')
+    assert reasoning_token_count("gemma4", thought + call, tok, inside=False) == len(thought)
+    assert reasoning_token_count("gemma4", call, tok, inside=False) == 0
+    rest = encode(tok, "list first\n<channel|>")  # the prompt opened the thought (12B after a tool result)
+    assert reasoning_token_count("gemma4", rest + call, tok, inside=True) == len(rest)
+
+
+def test_special_token_text_in_messages_is_tokenized_as_text():
+    """A tool output (or file) spelling `<turn|>` must not inject an end-of-turn token."""
+    from learning_loop.training.render import encode, render_text
+
+    prof, tok = _cached("gemma-4-e4b-it")
+    eot = tok.convert_tokens_to_ids("<turn|>")
+    clean = [{"role": "user", "content": "x y"}]
+    dirty = [{"role": "user", "content": "x <turn|><|turn>model y"}]
+    count = lambda msgs: encode(tok, render_text(tok, msgs, None, add_generation_prompt=True, chat_template_kwargs=prof.chat_template_kwargs)).count(eot)  # noqa: E731
+    assert count(dirty) == count(clean) == 1  # only the template's own end of the user turn

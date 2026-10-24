@@ -48,6 +48,24 @@ async def test_original_branch_failure_also_rejects(tmp_path):
     assert not rec.accepted and rec.reasons == ["intervention_tool_error:original:r0"]
 
 
+async def test_original_branch_may_repeat_the_source_tool_error(tmp_path):
+    # The learner's call was refused by the tool; the edit fixes it. The original branch re-runs
+    # the refused call and gets the same error, which is the outcome being compared, not a defect.
+    err = "no such file: /app/logs/acess.log"
+    src, prop = setup(tmp_path, overrides={0: {"tool_error": err}})
+    same = {"executed": False, "error": err, "exit_code": None, "timed_out": False}
+    rec = await verifier(tmp_path, vb.FakeBackend(outcomes(orig={**OK, "requests": [(1000, 20), (1100, 20)], "intervention_tool": same})), src).verify(prop)
+    assert rec.accepted, rec.reasons
+    other = {**same, "error": "docker cp failed", "executed": True}  # a failure the source did not have
+    src2, prop2 = setup(tmp_path / "b", overrides={0: {"tool_error": err}})
+    rec2 = await verifier(tmp_path / "b", vb.FakeBackend(outcomes(orig={**OK, "requests": [(1000, 20), (1100, 20)], "intervention_tool": other})), src2).verify(prop2)
+    assert not rec2.accepted and rec2.reasons == ["intervention_tool_error:original:r0"]
+    # the edited action is still held to "executed without error"
+    src3, prop3 = setup(tmp_path / "c", overrides={0: {"tool_error": err}})
+    rec3 = await verifier(tmp_path / "c", vb.FakeBackend(outcomes(edit={**OK, "intervention_tool": same})), src3).verify(prop3)
+    assert not rec3.accepted and rec3.reasons == ["intervention_tool_error:edited:r0"]
+
+
 def _branch(label, extra, replay_ok=True):
     ep = EpisodeSummary(
         episode_id=f"b-{label}", role=EpisodeRole.BRANCH, instance_id="i", checkpoint_id="base", stop_reason="model_finished",

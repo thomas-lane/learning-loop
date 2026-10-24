@@ -9,7 +9,10 @@ serving host on first use: vLLM pins its own torch), with:
 
 - `--generation-config vllm`: none of the model repository's sampling defaults; every sampling
   parameter is sent explicitly with each request (top_k disabled, as in the HF engine);
-- prefix caching off: a cached prefix takes a different numerical path than a recomputed one;
+- prefix caching on: each turn of an episode re-sends the whole conversation, and caching its
+  already-computed prefix makes a turn's cost the new tokens instead of the full context. A cached
+  prefix is computed in different kernel batches than a recomputed one, so outputs can differ by
+  floating-point noise; results are compared statistically, not bit for bit;
 - the served checkpoint as a LoRA module: a published adapter (hash-checked by hf_server), or for
   base checkpoints an all-zero adapter of the experiment's LoRA shape written by
   `write_zero_adapter` (the same adapter overhead for every checkpoint, base outputs unchanged);
@@ -151,7 +154,7 @@ class VllmServer:
             str(python), "-m", "vllm.entrypoints.openai.api_server",
             "--model", profile.base_model, "--revision", profile.base_revision, "--served-model-name", "base",
             "--host", "127.0.0.1", "--port", str(self.port), "--dtype", profile.training_dtype,
-            "--generation-config", "vllm", "--no-enable-prefix-caching", "--max-num-seqs", str(concurrency),
+            "--generation-config", "vllm", "--enable-prefix-caching", "--max-num-seqs", str(concurrency),
             "--max-model-len", str(max_context), "--seed", "0",
             "--limit-mm-per-prompt", json.dumps({"image": 0, "audio": 0, "video": 0}),
         ]
@@ -238,7 +241,7 @@ class VllmEngine(ServingCore):
             "n": 1,
             "temperature": 0.0 if greedy else req["temperature"],
             "top_p": 1.0 if greedy else req["top_p"],
-            "top_k": 0,
+            "top_k": 0 if greedy else req["top_k"],
             "min_p": 0.0,
             "repetition_penalty": 1.0,
             "presence_penalty": 0.0,

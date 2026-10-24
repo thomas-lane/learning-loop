@@ -1,8 +1,13 @@
 """Render preference examples and conversations with the learner's own chat template.
 
 One rendering path is shared by training (DPO rows), intervention-token
-accounting (`editing/token_count.py`) and the reference HF server, so the tokens the
-learner is trained on are the tokens it is served with.
+accounting (`editing/token_count.py`) and the reference HF server, so prompts are
+tokenized exactly as they are served. A trained turn is the template's rendering of the
+parsed message, which normalizes a few details of what the model generated: tool-call
+arguments are re-serialized (key order, quoting), a thought always ends with one newline
+before its closing marker, and several thoughts in one turn become one. Both sides of a
+preference pair are rendered the same way, and the intervention-token count measures the
+same rendering on both branches.
 
 Conventions (tested in tests/unit/test_train_render.py):
 
@@ -18,6 +23,9 @@ Conventions (tested in tests/unit/test_train_render.py):
 - The prompt token ids must be an exact prefix of both full renders; otherwise
   the template is unusable for DPO and rendering fails loudly.
 - Oversize examples are dropped with a recorded reason, never truncated.
+- Text inside messages that spells one of the tokenizer's special tokens (e.g. a tool output
+  containing `<turn|>`) gets a word joiner (U+2060) after its first character, so it is
+  tokenized as text and can never act as a control token.
 """
 
 from __future__ import annotations
@@ -154,13 +162,34 @@ def parse_arguments(raw: Any, where: str) -> dict[str, Any]:
     return val
 
 
-def to_template_messages(messages: list[Message]) -> list[Message]:
-    """Copy of `messages` with tool-call arguments parsed and `content: None` -> ""."""
+def special_token_texts(tok: Any) -> tuple[str, ...]:
+    """The strings the tokenizer turns into special tokens when they appear in text."""
+    texts = {t.content for t in getattr(tok, "added_tokens_decoder", {}).values() if getattr(t, "special", False)}
+    texts |= set(getattr(tok, "all_special_tokens", []) or [])
+    return tuple(sorted((t for t in texts if len(t) > 1), key=len, reverse=True))
+
+
+def neutralize_special_text(text: str, specials: tuple[str, ...]) -> str:
+    """`text` with every occurrence of a special-token string broken by a word joiner (U+2060)
+    after its first character: it then tokenizes as ordinary text."""
+    for s in specials:
+        if s in text:
+            text = text.replace(s, s[0] + "\u2060" + s[1:])
+    return text
+
+
+def to_template_messages(messages: list[Message], specials: tuple[str, ...] = ()) -> list[Message]:
+    """Copy of `messages` with tool-call arguments parsed, `content: None` -> "", and special-token
+    strings in message text neutralized (`neutralize_special_text`)."""
     out: list[Message] = []
     for i, m in enumerate(messages):
         m = copy.deepcopy(m)
         if m.get("content") is None:
             m["content"] = ""
+        if specials:
+            for key in ("content", "reasoning_content"):
+                if isinstance(m.get(key), str):
+                    m[key] = neutralize_special_text(m[key], specials)
         for j, tc in enumerate(m.get("tool_calls") or []):
             fn = tc.get("function") or {}
             fn["arguments"] = parse_arguments(fn.get("arguments"), f"message {i} tool_call {j}")
@@ -178,7 +207,7 @@ def render_text(
     chat_template_kwargs: dict[str, Any] | None = None,
 ) -> str:
     return tok.apply_chat_template(
-        to_template_messages(messages),
+        to_template_messages(messages, special_token_texts(tok)),
         tools=tools or None,
         add_generation_prompt=add_generation_prompt,
         tokenize=False,

@@ -47,6 +47,7 @@ class StateSpec(BaseModel):
     success_threshold: float = 1.0  # complete success: reward["reward"] >= threshold
     reward_key: str = "reward"
     caveats: list[str] = Field(default_factory=list)  # unmodeled aspects, e.g. "network: public (unmodeled)"
+    env_probe: dict[str, Any] | None = None  # rendered tasks: what the agent container must match before turn 0 (tasks/runtime/probe.py)
 
 
 @dataclass
@@ -166,12 +167,14 @@ class PolicyDecision:
     infra_error: str | None = None  # transport/5xx; not the model's fault
     seed_sent: int | None = None
     call_errors: dict[str, str] = field(default_factory=dict)  # tool_call_id -> parse error (call not executed)
+    context_exhausted: bool = False  # the prompt already fills the request's context cap (no output possible)
+    context_capped: bool = False  # the context cap lowered this request's output limit
 
 
 class Policy(Protocol):
     spec: PolicySpec
 
-    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None) -> PolicyDecision: ...
+    async def decide(self, messages: list[Message], tools: list[ToolSchema], seed: int | None, max_context_tokens: int | None = None) -> PolicyDecision: ...
 
 
 # --------------------------------------------------------------------------- #

@@ -80,12 +80,14 @@ uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
 | [`loop resume`](#loop-resume) | Resume a run from its manifests |
 | [`loop stage`](#loop-stage) | Run one stage of one cycle inside an existing run |
 | [`loop evaluate`](#loop-evaluate) | Evaluate a saved checkpoint on declared panels |
+| [`loop calibrate`](#loop-calibrate) | Measure a checkpoint's success rate per family and difficulty |
 | [`loop edit-replay`](#loop-edit-replay) | Edit and verify saved source trajectories with another editor |
 | [`loop status`](#loop-status) | Print per-cycle stage status |
 | [`loop report`](#loop-report) | Regenerate the run's CSV and markdown reports |
 | [`loop compare`](#loop-compare) | Paired comparison of runs on shared panels |
 | [`loop dashboard`](#loop-dashboard) | Watch runs live in a local web dashboard |
 | [`loop external-eval`](#loop-external-eval) | Evaluate a checkpoint on a version-pinned Harbor dataset |
+| [`loop render-tasks`](#loop-render-tasks) | Render a split's task instances into Harbor task directories |
 | [`loop smoke`](#loop-smoke) | Run a bounded smoke test |
 | [`loop preflight`](#loop-preflight) | Check the local environment for the smoke test |
 | [`loop docs-gen`](#loop-docs-gen) | Regenerate or check the generated documentation |
@@ -101,7 +103,7 @@ uv run loop evaluate --experiment experiments/pilot.yaml --machines $M \
 | Code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | unexpected error (traceback printed), a failed smoke/preflight check, or a failed stage item |
+| 1 | unexpected error (traceback printed), a failed smoke or `loop preflight` check, a failed Docker-host preflight at the start of a run, or a failed stage item |
 | 2 | invalid usage, configuration or plan (message printed as `error: ...`); nothing was started |
 
 ### loop validate
@@ -202,6 +204,34 @@ Side effects: Docker; serving the checkpoint (managed inference).
 | `--panels` `PANELS` ... | yes |  | panel names from the experiment's split file |
 | `--final` |  |  | allow final-test/external panels (use only after method decisions are frozen) |
 | `--run-id` `RUN_ID` |  |  | run directory name (default: `<experiment>-eval-<UTC-stamp>`) |
+| `--set` `KEY=VALUE` ... |  |  | override an experiment value, e.g. --set cycles=1 (YAML-parsed; repeatable; recorded in run.json) |
+
+### loop calibrate
+
+Measure a checkpoint's success rate per family and difficulty.
+
+```text
+loop calibrate [-h] --experiment EXPERIMENT --machines MACHINES [--checkpoint CHECKPOINT] [--family FAMILY] [--difficulty DIFFICULTY] [--instances INSTANCES] [--attempts ATTEMPTS] [--run-id RUN_ID] [--set KEY=VALUE]
+```
+
+Creates a run of kind `calibration`: the checkpoint (normally the planned learner's base model)
+runs on --instances instances per family and difficulty, drawn from the seeds reserved for
+calibration (900000-999999, which no split may use), --attempts times each, with the
+experiment's episode settings. Prints and writes reports/calibration.csv: each family and
+difficulty's success rate against the 20-80% target (episodes that stopped for infrastructure
+reasons are counted apart). Nothing else reads calibration runs; `loop resume` continues one.
+Side effects: Docker; serving the checkpoint (managed inference).
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--experiment` `EXPERIMENT` | yes |  | supplies the learner and episode settings |
+| `--machines` `MACHINES` | yes |  | machine profile YAML |
+| `--checkpoint` `CHECKPOINT` |  | `base` | 'base' (default) or a published checkpoint directory |
+| `--family` `FAMILY` ... |  |  | calibrate only this family (repeatable; default: every family) |
+| `--difficulty` `DIFFICULTY` ... |  |  | calibrate only this difficulty (repeatable; default: every difficulty) |
+| `--instances` `INSTANCES` |  | `6` | instances per family and difficulty (default 6) |
+| `--attempts` `ATTEMPTS` |  | `3` | attempts per instance (default 3) |
+| `--run-id` `RUN_ID` |  |  | run directory name (default: `calibration-<learner>-<UTC-stamp>`) |
 | `--set` `KEY=VALUE` ... |  |  | override an experiment value, e.g. --set cycles=1 (YAML-parsed; repeatable; recorded in run.json) |
 
 ### loop edit-replay
@@ -328,6 +358,26 @@ checkpoint yourself first. Results are never read by the learning loop.
 | `--n-tasks` `N_TASKS` |  |  | evaluate only the first N tasks of the dataset |
 | `--task` `TASK` ... |  |  | explicit task subset (repeatable) |
 | `--execute` |  |  | launch Harbor instead of printing the command |
+
+### loop render-tasks
+
+Render a split's task instances into Harbor task directories.
+
+```text
+loop render-tasks [-h] [--out OUT] [--panel PANEL] [--id ID] splits
+```
+
+Renders every instance of the split file (or only the given panels and ids) into `OUT/<id>`, one
+Harbor task directory each, exactly as a run materializes them, and validates the split. An
+existing instance directory is reused when its family version is current and refused otherwise.
+Point `harbor run -p OUT` at the result to run tasks outside the loop.
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `splits` | yes |  | split file, e.g. evaluation/splits/pilot.yaml |
+| `--out` `OUT` |  | `evaluation/rendered` | output directory (default evaluation/rendered) |
+| `--panel` `PANEL` ... |  |  | render only this panel's instances (repeatable) |
+| `--id` `ID` ... |  |  | render only this instance id (repeatable) |
 
 ### loop smoke
 

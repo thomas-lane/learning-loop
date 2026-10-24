@@ -1,0 +1,551 @@
+"""format-converter: write a script that converts one text format into another.
+
+The seed picks one of two conversions, each specified exactly in the instruction and shown
+by an example pair in /app/examples/:
+
+- `kv-csv`: a key=value log (bare or double-quoted values, `\\"` and `\\\\` escapes inside
+  quotes) becomes a CSV file with a given header, minimally quoted (a field with a comma or a
+  double quote is quoted, inner quotes doubled).
+- `fixed-jsonl`: a fixed-width export (1-based inclusive column ranges, text and integer
+  fields) becomes JSON Lines in exactly the form `json.dumps(obj)` writes by default.
+
+Each conversion has one instruction, the same at every difficulty, that states its whole
+grammar: for kv-csv, bare values (any character but a space or a double quote), quoted
+values with escapes, and skipped blank (empty or spaces-only) and `#` lines; for fixed-jsonl,
+leading zeros and minus signs, spaces-only integers as `null`, lines cut short, and skipped
+blank and `#` lines. It says how lines may end (`\\n` or `\\r\\n`, the last line break optional),
+because the grader compares stdout after Python's text-mode decoding (which turns `\\r\\n`
+into `\\n`) and ignores trailing line breaks. It also says that the converter must read only
+its argument, because the grader runs it in a scratch directory that holds only
+`convert.py` and the input.
+
+The agent writes /app/convert.py; the `Commands` grader runs `python3 convert.py FILE` on
+three hidden inputs plus an empty file and compares stdout and the exit code. Difficulty
+decides which cases of the grammar the data contains; every hidden input and the example
+contain every planted case of their difficulty, so each wrong method fails every non-empty
+check:
+
+- kv-csv: quoted values with spaces and commas, an empty value, and comment and blank lines
+  (one of them spaces-only) at every difficulty. `\\"` and `\\\\` escapes (planted, and in
+  random messages) are drawn per instance with the difficulty's `escape_share`: half of the
+  easy instances have them, every medium and hard instance does. Hard adds bare values with
+  `'`, `\\` or `=` (user names, and paths with a `?id=` query).
+- fixed-jsonl: names with a double quote, spaces-only integer fields (every export has an
+  optional integer field for them), comment lines and a spaces-only blank line at every
+  difficulty; medium adds a name with a backslash and zero-padded integers; hard adds
+  non-ASCII names and cities, an empty text field (a record whose optional text fields are
+  all empty) and lines whose trailing spaces are cut off.
+
+Traps (declared shortcuts; each is a full script an agent might write):
+kv-csv: `hardcode-examples` (prints the example's CSV), `naive-split` (splits on spaces, so
+quoted values with spaces break), `no-csv-quoting` (joins fields with commas) and
+`no-skip-comments`; an instance with escapes adds `keeps-backslashes` (a regex that finds the
+quoted value but does not unescape it); hard adds `shlex-split` (`shlex.split` misreads `'`
+and `\\` in bare values).
+fixed-jsonl: `hardcode-examples`, `off-by-one-columns` (slices [start-1:end-1]),
+`hand-built-json` (no escaping of the planted `"`), `empty-int-as-zero` and
+`no-skip-comments`; hard adds `ensure-ascii-false` (`json.dumps(..., ensure_ascii=False)`).
+"""
+
+import csv
+import io
+import json
+from datetime import datetime, timedelta
+
+from learning_loop.tasks.spec import Commands, Family, Solution, TaskSpec
+
+N_HIDDEN = 3
+
+# --------------------------------------------------------------------------- #
+# kv-csv
+# --------------------------------------------------------------------------- #
+
+KV_INSTRUCTION = """`/app/examples/sample.log` is an example of our services' key=value log format, and `/app/examples/sample.csv` is the CSV it should become.
+
+Write a converter `/app/convert.py` such that `python3 /app/convert.py LOGFILE` prints the CSV for LOGFILE to standard output. It will be run on other log files in this format.
+
+Input format:
+- One record per line: `key=value` pairs separated by one or more spaces. Keys consist of lowercase letters, digits and underscores.
+- A value is either bare or quoted. A bare value runs up to the next space and may contain any character except a space and a double quote. A quoted value starts with `"` and ends at the next unescaped `"`; inside it `\\"` stands for `"` and `\\\\` for `\\`. The enclosing quotes are not part of the value. A value may be empty (`key=` or `key=""`).
+- Blank lines (empty or containing only spaces) and lines starting with `#` are not records; skip them.
+
+Output format:
+- The first line is the header `{header}`. Then comes one row per record, in input order, with the record's values for these keys in this order. A missing key gives an empty field; other keys are ignored.
+- Fields are separated by commas. A field that contains a comma or a double quote is enclosed in double quotes, and each double quote inside it is doubled; other fields are written as they are, without quotes.
+{common}"""
+
+COMMON = """- Lines may end with `\\n` or `\\r\\n`, and the line break after the last line is optional.
+
+The converter must be self-contained: it is run as `python3 convert.py {arg}` from a directory that holds only `convert.py` and {arg}, so it cannot read the examples or any other file. Use only the Python standard library.
+"""
+
+KV_PARSE = r'''def parse(line):
+    """The key=value pairs of one line, as a dict."""
+    record = {}
+    i, n = 0, len(line)
+    while i < n:
+        if line[i] == " ":
+            i += 1
+            continue
+        eq = line.index("=", i)
+        key = line[i:eq]
+        i = eq + 1
+        if i < n and line[i] == '"':
+            i += 1
+            value = []
+            while line[i] != '"':
+                if line[i] == "\\":
+                    i += 1
+                value.append(line[i])
+                i += 1
+            i += 1
+            record[key] = "".join(value)
+        else:
+            end = line.find(" ", i)
+            end = n if end < 0 else end
+            record[key] = line[i:end]
+            i = end
+    return record
+'''
+KV_PARSE_NAIVE = '''def parse(line):
+    record = {}
+    for token in line.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            record[key] = value.strip('"')
+    return record
+'''
+KV_PARSE_REGEX = r'''PAIR = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S*)')
+
+
+def parse(line):
+    record = {}
+    for key, value in PAIR.findall(line):
+        if value.startswith('"'):
+            value = value[1:-1]
+        record[key] = value
+    return record
+'''
+KV_PARSE_SHLEX = '''def parse(line):
+    record = {}
+    for token in shlex.split(line):
+        key, value = token.split("=", 1)
+        record[key] = value
+    return record
+'''
+KV_MAIN = '''
+
+def main(path):
+    out = csv.writer(sys.stdout, lineterminator="\\n")
+    out.writerow(COLUMNS)
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            record = parse(line)
+            out.writerow([record.get(c, "") for c in COLUMNS])
+
+
+main(sys.argv[1])
+'''
+KV_MAIN_NO_SKIP = KV_MAIN.replace('            if not line.strip() or line.startswith("#"):\n                continue\n', "")
+KV_MAIN_JOIN = '''
+
+def main(path):
+    print(",".join(COLUMNS))
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            record = parse(line)
+            print(",".join(record.get(c, "") for c in COLUMNS))
+
+
+main(sys.argv[1])
+'''
+
+USERS = ["ann", "bo", "chen", "dara", "eli", "femi", "gus", "hana", "ivo", "juno"]
+FULL_NAMES = ["Ann Lee", "Bo Diaz", "Lee, Ann", "Chen Wu", "Dara Okafor"]
+ODD_USERS = ["o'neil", "d'arcy", "CORP\\femi", "it's-me"]
+LEVELS = ["INFO", "WARN", "ERROR", "DEBUG"]
+ACTIONS = ["login", "upload", "export", "delete", "sync", "retry"]
+MSG_WORDS = ["disk", "full", "retrying", "upload", "of", "file", "failed", "after", "timeout", "user", "cache", "warm", "queue", "drained"]
+PATHS = ["/api/items", "/api/users", "/login", "/static/app.js", "/export"]
+
+
+def _kv_value(rng, key, p):
+    """(raw text as written in the log, the value) for `key`."""
+    if key == "time":
+        return None
+    if key == "level":
+        v = rng.choice(LEVELS)
+        return v, v
+    if key == "pid":
+        v = str(rng.randint(100, 32000))
+        return v, v
+    if key == "status":
+        v = str(rng.choice([200, 201, 204, 400, 404, 500, 503]))
+        return v, v
+    if key == "action":
+        v = rng.choice(ACTIONS)
+        return v, v
+    if key == "user":
+        r = rng.random()
+        if r < 0.25:
+            v = rng.choice(FULL_NAMES)
+            return f'"{v}"', v
+        v = rng.choice(USERS)
+        return v, v
+    if key == "path":
+        v = rng.choice(PATHS)
+        if p["level"] == "hard" and rng.random() < 0.4:
+            v += f"?id={rng.randint(1, 99)}"
+        return v, v
+    if key == "msg":
+        words = rng.sample(MSG_WORDS, rng.randint(2, 5))
+        if rng.random() < 0.4:
+            words[rng.randrange(len(words))] += ","
+        v = " ".join(words)
+        if p["escapes"] and rng.random() < 0.25:
+            q = rng.choice(MSG_WORDS)
+            v += f' "{q}"'
+        if p["escapes"] and rng.random() < 0.15:
+            v += " C:\\tmp"
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"', v
+    raise KeyError(key)
+
+
+def _kv_line(rng, columns, extras, ts, p, plant=None):
+    """One log line and its expected record. `plant` forces one trap into the line."""
+    pairs, record = [("time", ts)], {"time": ts}
+    keys = [k for k in columns if k != "time"] + extras
+    for k in keys:
+        if k in columns and k != "msg" and rng.random() < 0.12:
+            continue  # a missing key
+        raw, v = _kv_value(rng, k, p)
+        pairs.append((k, raw))
+        record[k] = v
+    if plant == "comma":
+        msg = f"{rng.choice(MSG_WORDS)}, {rng.choice(MSG_WORDS)} {rng.choice(MSG_WORDS)}"
+        pairs = [(k, r) for k, r in pairs if k != "msg"] + [("msg", f'"{msg}"')]
+        record["msg"] = msg
+    elif plant == "escape":
+        q = rng.choice(MSG_WORDS)
+        msg = f'said "{q}" twice'
+        pairs = [(k, r) for k, r in pairs if k != "msg"] + [("msg", '"said \\"' + q + '\\" twice"')]
+        record["msg"] = msg
+    elif plant == "backslash":
+        msg = f"copied to D:\\{rng.choice(MSG_WORDS)}"
+        pairs = [(k, r) for k, r in pairs if k != "msg"] + [("msg", '"' + msg.replace("\\", "\\\\") + '"')]
+        record["msg"] = msg
+    elif plant == "odd_bare":
+        v = rng.choice(ODD_USERS)
+        pairs = [(k, r) for k, r in pairs if k != "user"] + [("user", v)]
+        record["user"] = v
+    elif plant == "empty":
+        pairs = [(k, r) for k, r in pairs if k != "user"] + [("user", rng.choice(["", '""']))]
+        record["user"] = ""
+    first, rest = pairs[0], pairs[1:]
+    rng.shuffle(rest)
+    sep = lambda: " " * rng.choice([1, 1, 1, 2])  # noqa: E731
+    line = first[0] + "=" + first[1]
+    for k, raw in rest:
+        line += sep() + k + "=" + raw
+    return line, {k: v for k, v in record.items() if k in columns}
+
+
+def _kv_file(rng, p, columns, extras, start, plants):
+    lines, records = [], []
+    ts = start
+    n = rng.randint(10, 16)
+    plants = list(plants) + [None] * (n - len(plants))
+    rng.shuffle(plants)
+    for plant in plants:
+        ts += timedelta(seconds=rng.randint(1, 300))
+        line, rec = _kv_line(rng, columns, extras, ts.strftime("%Y-%m-%dT%H:%M:%SZ"), p, plant)
+        lines.append(line)
+        records.append(rec)
+    if p["comments"]:
+        for text in ["# rotated by logrotate", "", "# host=web-2 restarted", "   "]:
+            lines.insert(rng.randint(0, len(lines)), text)
+    return "\n".join(lines) + "\n", records
+
+
+def _csv(columns, records):
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(columns)
+    for r in records:
+        w.writerow([r.get(c, "") for c in columns])
+    return buf.getvalue()
+
+
+def _kv_scripts(p, columns, sample_csv):
+    head = f"COLUMNS = {columns!r}\n\n\n"
+    scripts = {
+        "oracle": "import csv\nimport sys\n\n" + head + KV_PARSE + KV_MAIN,
+        "naive-split": "import csv\nimport sys\n\n" + head + KV_PARSE_NAIVE + KV_MAIN,
+        "no-csv-quoting": "import sys\n\n" + head + KV_PARSE + KV_MAIN_JOIN,
+        "hardcode-examples": f"import sys\n\nSAMPLE = {sample_csv!r}\n\nsys.stdout.write(SAMPLE)\n",
+    }
+    if p["escapes"]:
+        scripts["keeps-backslashes"] = "import csv\nimport re\nimport sys\n\n" + head + KV_PARSE_REGEX + KV_MAIN
+    if p["comments"]:
+        scripts["no-skip-comments"] = "import csv\nimport sys\n\n" + head + KV_PARSE + KV_MAIN_NO_SKIP
+    if p["level"] == "hard":
+        scripts["shlex-split"] = "import csv\nimport shlex\nimport sys\n\n" + head + KV_PARSE_SHLEX + KV_MAIN
+    return scripts
+
+
+def _build_kv(rng, p):
+    p = dict(p, escapes=rng.random() < p["escape_share"])
+    optional = ["level", "status", "action", "path"]
+    chosen = rng.sample(optional, p["n_columns"] - 3)
+    columns = ["time"] + rng.sample(["user", "msg"] + chosen, p["n_columns"] - 1)
+    extras = [k for k in optional if k not in chosen] + ["pid"]
+    start = datetime(2026, 9, 1) + timedelta(days=rng.randint(0, 25), seconds=rng.randint(0, 80000))
+    plants = ["comma", "comma", "empty"] + (["escape", "escape", "backslash"] if p["escapes"] else []) + (["odd_bare", "odd_bare"] if p["level"] == "hard" else [])
+    sample_log, sample_recs = _kv_file(rng, p, columns, extras, start, plants)
+    inputs = [_kv_file(rng, p, columns, extras, start + timedelta(days=i + 1), plants) for i in range(N_HIDDEN)]
+    sample_csv = _csv(columns, sample_recs)
+    return {
+        "instruction": KV_INSTRUCTION.format(header=",".join(columns), common=COMMON.format(arg="LOGFILE")),
+        "examples": {"examples/sample.log": sample_log, "examples/sample.csv": sample_csv},
+        "cases": [(f"input_{i + 1}.log", text, _csv(columns, recs)) for i, (text, recs) in enumerate(inputs)] + [("empty.log", "", _csv(columns, []))],
+        "scripts": _kv_scripts(p, columns, sample_csv),
+        "params": {"conversion": "kv-csv", "columns": columns, "escapes": p["escapes"]},
+    }
+
+
+# --------------------------------------------------------------------------- #
+# fixed-jsonl
+# --------------------------------------------------------------------------- #
+
+FX_INSTRUCTION = """`/app/examples/sample.txt` is an export in a fixed-width format, and `/app/examples/sample.jsonl` is the JSON Lines file it should become.
+
+Write a converter `/app/convert.py` such that `python3 /app/convert.py FILE` prints the JSON Lines for FILE to standard output. It will be run on other files in this format.
+
+Input format: one record per line. Positions count characters from 1, and a range includes both ends.
+
+| field | positions | type |
+|---|---|---|
+{table}
+
+- A text field's value is its content without leading and trailing spaces (possibly the empty string).
+- An integer field is right-aligned and may have a minus sign or leading zeros. An integer field that holds only spaces is `null`.
+- A line may be shorter than the last position in the table (trailing spaces may be cut off); the missing positions count as spaces.
+- Blank lines (empty or containing only spaces) and lines starting with `#` are not records; skip them.
+
+Output format:
+- One JSON object per record, one per line, in input order, with the fields above as keys in the table's order. Write each object exactly as Python's `json.dumps(obj)` writes it with its default settings: `", "` between members, `": "` after each key, and every non-ASCII character as a `\\uXXXX` escape.
+{common}"""
+
+FX_PARSE = '''def parse(line):
+    record = {}
+    for name, start, end, kind in FIELDS:
+        raw = line[start - 1 : end].strip()
+        if kind == "int":
+            record[name] = int(raw) if raw else None
+        else:
+            record[name] = raw
+    return record
+'''
+FX_MAIN = '''
+
+def main(path):
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            print(json.dumps(parse(line)))
+
+
+main(sys.argv[1])
+'''
+FX_DUMP_BY_HAND = '''
+
+def dump(record):
+    parts = []
+    for key, value in record.items():
+        if value is None:
+            text = "null"
+        elif isinstance(value, int):
+            text = str(value)
+        else:
+            text = '"' + value + '"'
+        parts.append('"' + key + '": ' + text)
+    return "{" + ", ".join(parts) + "}"
+'''
+
+NAMES = ["Ada Park", "Ben Ortiz", "Cara Nolan", "Dev Shah", "Eve Moss", "Finn Hale", "Gia Russo", "Hugo Lind", "Iris Bell", "Jon Reyes"]
+QUOTED_NAMES = ['Robert "Bob" Ray', 'Kate "KJ" Jones', 'Li "Lee" Ming', 'Sam "Ace" Cole']
+BACKSLASH_NAMES = ["CORP\\jdoe", "LAB\\mkent", "OPS\\rlee"]
+UNICODE_NAMES = ["José Núñez", "Zoë Brandt", "Søren Holm", "Ana Lúcia", "Chloé Dubois", "Jürgen Weiß"]
+CITIES = ["Oslo", "Lima", "Porto", "Austin", "Leeds", "Kyoto", "Perth", "Quito", "Riga", "Turin"]
+UNICODE_CITIES = ["Malmö", "Zürich", "Bogotá", "Kraków", "Łódź"]
+
+
+def _fx_fields(rng, p):
+    """[(name, start, end, kind)] with 1-based inclusive positions: `id`, `name`, an optional
+    integer field and more optional fields, in a shuffled order after `id`."""
+    ints = [("qty", "int", rng.randint(5, 6)), ("balance", "int", rng.randint(8, 9))]
+    texts = [("city", "text", rng.randint(10, 13)), ("code", "text", 7)]
+    first = rng.choice(ints)  # an integer field that can be empty, for the spaces-only-integer case
+    spec = [("id", "int", 6), ("name", "text", rng.randint(18, 22)), first]
+    spec += rng.sample([f for f in ints + texts if f != first], p["n_fields"] - 3)
+    head, rest = spec[:1], spec[1:]
+    rng.shuffle(rest)
+    fields, pos = [], 1
+    for name, kind, width in head + rest:
+        fields.append((name, pos, pos + width - 1, kind))
+        pos += width
+    return fields
+
+
+def _fx_value(rng, name, p, plant):
+    level = p["level"]
+    if name == "id":
+        return rng.randint(1, 99999)
+    if name == "name":
+        if plant == "quote":
+            return rng.choice(QUOTED_NAMES)
+        if plant == "backslash":
+            return rng.choice(BACKSLASH_NAMES)
+        if plant == "unicode":
+            return rng.choice(UNICODE_NAMES)
+        return rng.choice(NAMES)
+    if name == "city":
+        if plant == "empty_text":
+            return ""
+        if level == "hard" and rng.random() < 0.2:
+            return rng.choice(UNICODE_CITIES)
+        return rng.choice(CITIES)
+    if name == "qty":
+        return None if plant == "empty_int" else rng.randint(0, 500)
+    if name == "balance":
+        return None if plant == "empty_int" else rng.randint(-50000, 90000)
+    if name == "code":
+        return "" if plant == "empty_text" else f"{rng.choice('ABCDEFGH')}{rng.choice('KLMNPRST')}-{rng.randint(10, 99)}"
+    raise KeyError(name)
+
+
+def _fx_cell(rng, value, kind, width, zeros):
+    if kind == "text":
+        return value.ljust(width)
+    if value is None:
+        return " " * width
+    text = str(value)
+    if zeros and value >= 0 and rng.random() < 0.3:
+        text = text.zfill(min(width, len(text) + rng.randint(1, 3)))
+    return text.rjust(width)
+
+
+def _fx_file(rng, p, fields, plants):
+    n = rng.randint(10, 15)
+    plants = list(plants) + [None] * (n - len(plants))
+    rng.shuffle(plants)
+    lines, records = [], []
+    for plant in plants:
+        rec, line = {}, ""
+        for name, start, end, kind in fields:
+            v = _fx_value(rng, name, p, plant)
+            rec[name] = v
+            line += _fx_cell(rng, v, kind, end - start + 1, p["leading_zeros"])
+        if p["short_lines"]:
+            line = line.rstrip(" ")
+        lines.append(line)
+        records.append(rec)
+    if p["comments"]:
+        header = "# " + " ".join(name for name, _, _, _ in fields)
+        lines.insert(0, header)
+        lines.insert(rng.randint(2, len(lines)), "# continued")
+        lines.insert(rng.randint(2, len(lines)), "  ")
+    return "\n".join(lines) + "\n", records
+
+
+def _jsonl(records):
+    return "".join(json.dumps(r) + "\n" for r in records)
+
+
+def _fx_scripts(p, fields, sample_jsonl):
+    head = f"FIELDS = {fields!r}\n\n\n"
+    oracle = "import json\nimport sys\n\n" + head + FX_PARSE + FX_MAIN
+    scripts = {
+        "oracle": oracle,
+        "off-by-one-columns": oracle.replace("line[start - 1 : end]", "line[start - 1 : end - 1]"),
+        "hand-built-json": "import sys\n\n" + head + FX_PARSE + FX_DUMP_BY_HAND + FX_MAIN.replace("json.dumps(parse(line))", "dump(parse(line))"),
+        "hardcode-examples": f"import sys\n\nSAMPLE = {sample_jsonl!r}\n\nsys.stdout.write(SAMPLE)\n",
+    }
+    scripts["empty-int-as-zero"] = oracle.replace("int(raw) if raw else None", "int(raw or 0)")
+    if p["comments"]:
+        scripts["no-skip-comments"] = oracle.replace('            if not line.strip() or line.startswith("#"):\n                continue\n', "")
+    if p["level"] == "hard":
+        scripts["ensure-ascii-false"] = oracle.replace("json.dumps(parse(line))", "json.dumps(parse(line), ensure_ascii=False)")
+    return scripts
+
+
+def _build_fixed(rng, p):
+    fields = _fx_fields(rng, p)
+    plants = ["quote", "quote", "empty_int", "empty_int"]
+    if p["level"] != "easy":
+        plants += ["backslash"]
+    if p["level"] == "hard":
+        plants += ["unicode", "unicode", "empty_text"]
+    sample, sample_recs = _fx_file(rng, p, fields, plants)
+    inputs = [_fx_file(rng, p, fields, plants) for _ in range(N_HIDDEN)]
+    table = "\n".join(f"| `{name}` | {start}-{end} | {'integer' if kind == 'int' else 'text'} |" for name, start, end, kind in fields)
+    sample_jsonl = _jsonl(sample_recs)
+    return {
+        "instruction": FX_INSTRUCTION.format(table=table, common=COMMON.format(arg="FILE")),
+        "examples": {"examples/sample.txt": sample, "examples/sample.jsonl": sample_jsonl},
+        "cases": [(f"input_{i + 1}.txt", text, _jsonl(recs)) for i, (text, recs) in enumerate(inputs)] + [("empty.txt", "", "")],
+        "scripts": _fx_scripts(p, fields, sample_jsonl),
+        "params": {"conversion": "fixed-jsonl", "fields": [list(f) for f in fields]},
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Assembling an instance
+# --------------------------------------------------------------------------- #
+
+
+def _write(source):
+    return f"cat > /app/convert.py <<'PY'\n{source}PY\n"
+
+
+def build(ctx):
+    rng, p = ctx.rng, dict(ctx.params, level=ctx.difficulty)
+    conversion = rng.choice(["kv-csv", "fixed-jsonl"])
+    task = _build_kv(rng, p) if conversion == "kv-csv" else _build_fixed(rng, p)
+    checks = tuple(
+        {"name": name.split(".")[0], "argv": ["python3", "convert.py", name], "inputs": {name: text}, "stdout": expected, "exit": 0}
+        for name, text, expected in task["cases"]
+    )
+    scripts = task["scripts"]
+    oracle = scripts.pop("oracle")
+    return TaskSpec(
+        instruction=task["instruction"],
+        files=task["examples"],
+        grader=Commands(("/app/convert.py",), checks),
+        oracle=Solution(_write(oracle), lambda f, s=oracle: {"/app/convert.py": s}),
+        shortcuts={k: Solution(_write(v), lambda f, s=v: {"/app/convert.py": s}) for k, v in scripts.items()},
+        params=task["params"],
+    )
+
+
+FAMILY = Family(
+    name="format-converter",
+    version=4,
+    cluster="write-code",
+    category="coding",
+    skills=("python", "parsing", "escaping", "file-formats"),
+    difficulties={
+        "easy": {"n_columns": 4, "n_fields": 4, "comments": True, "leading_zeros": False, "short_lines": False, "escape_share": 0.5},
+        "medium": {"n_columns": 5, "n_fields": 5, "comments": True, "leading_zeros": True, "short_lines": False, "escape_share": 1.0},
+        "hard": {"n_columns": 6, "n_fields": 6, "comments": True, "leading_zeros": True, "short_lines": True, "escape_share": 1.0},
+    },
+    build=build,
+)

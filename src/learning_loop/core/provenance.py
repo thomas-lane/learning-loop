@@ -21,7 +21,7 @@ from .config import REPO_ROOT
 from .storage import sha256_file, sha256_tree
 
 PACKAGES = ["harbor", "openai", "pydantic", "transformers", "torch", "peft", "trl", "accelerate", "datasets"]
-SOURCE_DIRS = ["src/learning_loop", "evaluation/agents", "evaluation/generators", "prompts", "configs/models"]
+SOURCE_DIRS = ["src/learning_loop", "evaluation/agents", "evaluation/families", "prompts", "configs/models"]
 
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 10) -> str | None:

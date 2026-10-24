@@ -26,7 +26,7 @@ rendered, with working links and diagrams, with `uv run loop docs --open`.
 
 | I want to... | Read |
 |---|---|
-| add or change a task, generator or split; see what the learner sees and how grading is kept hidden from it | [Tasks and agent](../evaluation/README.md) |
+| add or change a task family or split; see what the learner sees, what every task environment guarantees and how grading is kept hidden from it | [Tasks and agent](../evaluation/README.md) |
 
 ## Developing
 

@@ -26,6 +26,28 @@ terminates pods recorded in the created-pod ledger.
 Credentials live in the git-ignored `.env` (template: `.env.example`), loaded automatically by
 `loop`; configs refer to them by variable name only, and they are never synced to remote hosts.
 
+## Working agreement
+
+How agents work in this repository with its owner. The rules above still apply in full. The
+plans and the decisions log live in `notes/`, which git ignores: they are working notes between
+the owner and agents, not documentation of the system.
+
+- Proceed through the phases planned in `notes/plans/` and commit on the working branch without
+  asking. Each phase ends at its acceptance check. Pushing to the Docker host's own remote to run
+  code there is allowed; pushing anywhere else is not.
+- Read-only work needs no approval: reading code, runs and logs, and SSH commands that change
+  nothing. Neither does fixing a regression your own change caused.
+- Pod spend up to $5 per run needs no approval, within the pod rules above. A larger run needs
+  the owner's approval of its estimated cost first.
+- Stop for the owner only for:
+  - an acceptance check that fails or needs the owner's sign-off;
+  - a blocker you cannot resolve;
+  - a decision that changes the experiment's science, such as models, editor, acceptance rule,
+    metrics, splits and held-out families, or what task instructions say.
+  
+  Log such a decision in `notes/decisions.md` with the default you would take, marked
+  **default**, so work that does not depend on it can continue.
+
 ## Where things live
 
 Architecture, the module map and data flow are in `docs/architecture.md`; the contents of a run
@@ -41,7 +63,8 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 | Episode loop, replay, stop reasons | `episodes/episode.py`, `episodes/events.py` |
 | Policies (OpenAI-compatible, scripted fixture) | `episodes/policy.py` |
 | Environments, fingerprints, backends | `episodes/envs/`, `episodes/fingerprint.py`, `episodes/backends.py` |
-| Tasks, generators, splits | `tasks/instances.py`, `evaluation/generators/`, `evaluation/splits/` |
+| Task families, splits | `evaluation/families/`, `evaluation/splits/`, `tasks/instances.py` |
+| Task specs, generation checks, rendering, shared grader, probe | `tasks/spec.py`, `tasks/generate.py`, `tasks/render.py`, `tasks/runtime/` |
 | Editor, verification, preferences | `editing/editor.py`, `editing/verify.py`, `editing/preferences.py` |
 | Training, rendering, token counts | `training/`, `editing/token_count.py` |
 | Serving, vLLM engine, lifecycle | `serving/` (`hf_server.py`, `vllm_engine.py`, `equivalence.py`, `tool_parse.py`, `managed.py`, `lifecycle.py`) |
@@ -56,7 +79,9 @@ directory are in `docs/run-layout.md`; terms are defined in `docs/glossary.md`. 
 tests/unit/          default suite (`uv run pytest`): no Docker, no model downloads, seconds
   test_core_*        contracts: seeds, config validation, storage, usage arithmetic
   test_env_*         episode loop, policies, sessions, replay, timing, grading, hardening
-  test_tasks_*       generators and split validation
+  test_tasks_*       families (determinism, lint; traps per cluster in test_tasks_family_<cluster>.py), split
+                     validation, generation checks, rendering, shared grader, environment probe (fixture
+                     families in tests/fixtures/tasks/)
   test_editor_*      editor view, answer tools, validation, grounding
   test_verify_*      branch specs, costs, acceptance, end-to-end on the local fixture environment
   test_prefs_*       preference construction, exports, buffer
@@ -72,9 +97,13 @@ tests/unit/          default suite (`uv run pytest`): no Docker, no model downlo
   test_core_envfile  .env loading precedence, template has no values, secrets never synced
   test_docs_generated generated docs are current; every config field and CLI argument is described
   test_docs_server   doc viewer rendering, path safety, and that every doc is in the index and navigation
-tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading)
+tests/integration/   `-m docker`: real Harbor containers (oracle/nop, replay, timing, forged grading; rendered
+                     tasks: shell solutions score what their models predicted, a networked verifier or stale
+                     files refuse to grade or run; every family's models against Docker; rendering identical
+                     on the host and in the profile image; the Docker-host preflight)
 tests/train/         `-m train`: real LoRA DPO on Qwen3-0.6B + serving the adapter
-tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/)
+tests/fixtures/      scripted policies (env/), scripted edits (loop/, verify/), fixture preferences (train/),
+                     fixture task families (tasks/)
 ```
 
 Name new test files with the area prefix above. A behavior change comes with a test that would
@@ -90,15 +119,25 @@ have failed before it.
   held-out families; prompts contain only messages before the intervened turn; editor
   justifications and verification evidence live in companion records, never in `prompt/chosen/rejected`.
 - **Hidden grading stays hidden**: tasks use Harbor's separate verifier with explicit artifact
-  transfer; graders that execute agent code (fix-stats) run it as an unprivileged child that
+  transfer; the `checks` and `commands` graders, the only ones that execute agent code, run it as an unprivileged child that
   cannot read `/tests` or write `/logs/verifier`, and the parent judges its raw outputs. The host
   agent never writes through the container-writable `/logs/agent` mount except via a
   symlink-refusing copy. The editor sees only the instruction, the learner's system prompt and tool
   schemas, the learner's turns with their tool outputs, and scalar outcomes.
+- **Task environments are rendered and checked**: task directories are written only by
+  `tasks/render.py` from a family's spec (pinned base, no `RUN`, fixed `ENV`, hostname and file
+  times, `network_mode: none` for agent and verifier, answer key only in `tests/`); generation
+  grades each instance's oracle, shortcut and no-op models with the shared grader and redraws
+  until the oracle passes and the rest fail; the verifier grades only after its probe and its
+  `LL_TESTS_SHA256` digest check pass; every episode first probes the agent container (network,
+  env, tools, processes, `/app` content against the rendered digest) and stops as
+  `infra:env_probe:*` on a mismatch; every run starts with the Docker-host preflight (one oracle
+  per family must score its predicted reward); families draw randomness only from `ctx.rng`;
+  the per-family Docker test checks every model against the real scripts.
 - **Replay fails closed**: fresh environment + re-executed prefix; observation and fingerprint
   mismatches stop the branch before the intervention. Normalizers are task-declared and recorded.
-- **Acceptance** (`strict_all_success_v1`): valid replay, the fixed action ran without tool error or
-  timeout, complete success on both branches for every repetition, every branch ended by the model
+- **Acceptance** (`strict_all_success_v1`): valid replay, the edited action ran without tool error or
+  timeout (the original action may only fail exactly as in the source episode), complete success on both branches for every repetition, every branch ended by the model
   (stop category `model`), all costs present, a positive mean saving that meets both thresholds.
 - **Cost accounting**: counterfactual episode cost = shared prefix + intervention request input +
   learner-tokenizer length of the fixed turn + continuation usage; verification spend is separate.
@@ -148,8 +187,10 @@ update that file instead of repeating the information elsewhere:
 | components, module responsibilities, process/machine roles, data flow, isolation boundaries, identities, extension points, repository folders | `docs/architecture.md` |
 | files or directories a run writes, their names, formats or mutability, run kinds | `docs/run-layout.md` |
 | the method: cycle protocol, controls, editing rules, acceptance, cost accounting, training semantics, metrics | `docs/experiment.md` |
-| tasks, generators, splits, the agent, grading, the replay contract | `evaluation/README.md` |
+| task families, the task spec and renderer, environment guarantees, splits, the agent, grading, the replay contract | `evaluation/README.md` |
 | development commands, test layout, integrity invariants, this policy | `AGENTS.md` |
+| a standing decision or preference, or a default taken under the working agreement | `notes/decisions.md` (untracked) |
+| the plan to the next experiment, its phases or their acceptance checks | `notes/plans/` (untracked) |
 
 Rules:
 

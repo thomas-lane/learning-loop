@@ -10,12 +10,20 @@
 - Prompts are rendered with training/render.py (the profile's pinned template and
   `chat_template_kwargs`), i.e. exactly the rendering used for DPO training.
 - Native tool calls are parsed into OpenAI `tool_calls` (JSON-string arguments);
-  reasoning goes to `reasoning_content` only when the model produced it.
+  reasoning goes to `reasoning_content` only when the model produced it. Output syntax the
+  prompt already opened (Gemma's thought channel after a tool result) is prepended before
+  parsing (`tool_parse.generation_prefix`).
 - Sampling follows OpenAI semantics with an explicit GenerationConfig (model
   generation defaults such as top_k are NOT applied): temperature default 1.0,
-  0 = greedy; top_p default 1.0. `seed` seeds torch before generation.
+  0 = greedy; top_p default 1.0; top_k default 0 (off). Any other sampling parameter
+  (min_p, penalties, logit_bias, ...) is rejected rather than ignored. `seed` seeds torch
+  before generation.
+- `max_context_tokens` (optional, not OpenAI): the request's context window. The output limit
+  is lowered to what fits (`learning_loop.context_capped` then true); a prompt that already fills
+  it is refused with code `context_budget_exhausted`.
 - Usage is exact from the tokenizer: prompt tokens as rendered; completion tokens
-  as generated, including the end-of-turn token when one was produced.
+  as generated, including the end-of-turn token when one was produced; reasoning tokens
+  (a subset of completion tokens) from the opening through the closing reasoning marker.
 - Serial: one request at a time (single-threaded HTTPServer).
 - GET /health, GET /v1/models, POST /v1/chat/completions. Extra diagnostics are in
   the response's `learning_loop` field (raw completion text, parse errors, sampling).
@@ -37,7 +45,7 @@ from typing import Any, Protocol
 from ..core.config import ModelProfile, load_model_profile
 from ..core.records import CheckpointRecord
 from ..core.storage import read_json
-from .tool_parse import PARSERS, parse_completion
+from .tool_parse import PARSERS, generation_prefix, parse_completion, reasoning_token_count
 
 
 class ApiError(Exception):
@@ -56,6 +64,11 @@ class Engine(Protocol):
     def close(self) -> None: ...
 
 
+# Sampling parameters other OpenAI-compatible servers accept but neither engine applies here.
+# Rejecting them keeps a config from silently decoding differently than it says.
+UNSUPPORTED_SAMPLING = ("min_p", "typical_p", "repetition_penalty", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs", "top_logprobs")
+
+
 def validate_request(body: dict[str, Any], served_model: str) -> dict[str, Any]:
     """Normalize an OpenAI chat request; raise ApiError for anything unsupported."""
     if not isinstance(body, dict):
@@ -72,13 +85,21 @@ def validate_request(body: dict[str, Any], served_model: str) -> dict[str, Any]:
         raise ApiError(400, "n > 1 is not supported")
     if body.get("tool_choice") not in (None, "auto"):
         raise ApiError(400, "only tool_choice=auto is supported")
+    unsupported = sorted(k for k in UNSUPPORTED_SAMPLING if body.get(k) is not None)
+    if unsupported:
+        raise ApiError(400, f"sampling parameters {unsupported} are not supported")
     temperature = body.get("temperature")
     temperature = 1.0 if temperature is None else float(temperature)
     top_p = body.get("top_p")
     top_p = 1.0 if top_p is None else float(top_p)
-    if temperature < 0 or not (0 < top_p <= 1):
-        raise ApiError(400, "invalid temperature/top_p")
+    top_k = body.get("top_k")
+    top_k = 0 if top_k is None else top_k
+    if temperature < 0 or not (0 < top_p <= 1) or not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 0:
+        raise ApiError(400, "invalid temperature/top_p/top_k")
     max_tokens = body.get("max_completion_tokens", body.get("max_tokens"))
+    cap = body.get("max_context_tokens")
+    if cap is not None and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 1):
+        raise ApiError(400, "max_context_tokens must be a positive integer")
     seed = body.get("seed")
     if seed is not None and not isinstance(seed, int):
         raise ApiError(400, "seed must be an integer")
@@ -87,7 +108,9 @@ def validate_request(body: dict[str, Any], served_model: str) -> dict[str, Any]:
         "tools": body.get("tools") or None,
         "temperature": temperature,
         "top_p": top_p,
+        "top_k": top_k,
         "max_tokens": None if max_tokens is None else int(max_tokens),
+        "max_context_tokens": cap,
         "seed": seed,
     }
 
@@ -172,6 +195,13 @@ class ServingCore:
         except RenderError as e:
             raise ApiError(400, f"cannot render messages: {e}") from e
         max_new = req["max_tokens"] or self.default_max_tokens
+        cap = req["max_context_tokens"]
+        capped = False
+        if cap is not None:  # the request's own context window (an episode budget), as a model's window
+            if len(ids) >= cap:
+                raise ApiError(400, f"the prompt ({len(ids)} tokens) fills the context cap ({cap} tokens)", "context_budget_exhausted")
+            capped = len(ids) + max_new > cap
+            max_new = min(max_new, cap - len(ids))
         if len(ids) + max_new > self.max_context:
             raise ApiError(
                 400,
@@ -186,7 +216,8 @@ class ServingCore:
         with self._tok_lock:
             text = self.tok.decode(text_ids, skip_special_tokens=False)
         rid = "chatcmpl-" + uuid.uuid4().hex[:24]
-        parsed = parse_completion(self.profile.tool_call_format, text, rid)
+        prefix = generation_prefix(self.profile.tool_call_format, prompt_text)
+        parsed = parse_completion(self.profile.tool_call_format, prefix + text, rid)
         if not stopped and len(new) >= max_new:
             finish = "length"
         elif parsed.tool_calls:
@@ -200,9 +231,13 @@ class ServingCore:
             "model": self.served_model,
             "system_fingerprint": f"{self.engine_name}:{self.profile.name}:{self.served_model}",
             "choices": [{"index": 0, "message": parsed.message(), "finish_reason": finish, "logprobs": None}],
-            "usage": {"prompt_tokens": len(ids), "completion_tokens": len(new), "total_tokens": len(ids) + len(new)},
+            "usage": {"prompt_tokens": len(ids), "completion_tokens": len(new), "total_tokens": len(ids) + len(new),
+                      "completion_tokens_details": {"reasoning_tokens": reasoning_token_count(self.profile.tool_call_format, new, self.tok, bool(prefix))}},
             "learning_loop": {
                 "raw_completion_text": text,
+                "generation_prefix": prefix,
+                "max_tokens_applied": max_new,
+                "context_capped": capped,
                 "parse_errors": parsed.parse_errors,
                 "seed": req["seed"],
                 "seed_applied": req["seed"] is not None,
@@ -268,7 +303,7 @@ class HFEngine(ServingCore):
             "pad_token_id": self.pad_id,
         }
         if not greedy:
-            gen_kwargs.update(temperature=req["temperature"], top_p=req["top_p"], top_k=0)
+            gen_kwargs.update(temperature=req["temperature"], top_p=req["top_p"], top_k=req["top_k"])
         gcfg = GenerationConfig(**gen_kwargs)
         if req["seed"] is not None:
             torch.manual_seed(req["seed"])
@@ -407,4 +442,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Run the importable module, not this `__main__` copy: the vLLM engine imports
+    # learning_loop.serving.hf_server, and a second copy would define a second ApiError that the
+    # handler's `except ApiError` does not catch (deliberate 4xx errors would reach clients as 500).
+    from learning_loop.serving import hf_server as _canonical
+
+    sys.exit(_canonical.main())

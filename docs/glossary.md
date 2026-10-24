@@ -5,15 +5,22 @@
 | Term | Meaning |
 |---|---|
 | **Harbor** | The external framework that runs a task: it starts the task's container, lets an agent act in it, then grades the declared artifacts in a separate verifier container ([evaluation/README.md](../evaluation/README.md)). |
-| **Family** | A kind of task with its own generator in `evaluation/generators/`, e.g. `log-triage`. |
-| **Difficulty** | One of a generator's parameter sets: `easy`, `medium` or `hard`. |
-| **Task instance** | One concrete Harbor task, id `family/difficulty/sSEED` (generated) or `family/static` (hand-written). |
+| **Family** | A kind of task whose instances are drawn from a seed, defined by one module in `evaluation/families/` (`FAMILY = Family(...)` with `build(ctx) -> TaskSpec`), e.g. `log-triage`. Families are grouped into clusters of similar skills (`Family.cluster`). |
+| **Difficulty** | One of a family's parameter sets: `easy`, `medium` or `hard`. |
+| **Task instance** | One concrete Harbor task, id `family/difficulty/sSEED`: the directory the renderer writes for that family, difficulty and seed. |
+| **Task spec** | What a family's `build` returns (`TaskSpec` in `src/learning_loop/tasks/spec.py`): instruction, learner-visible files, grader with its hidden answer key, oracle and shortcuts. The renderer turns it into the task directory. |
+| **Oracle / shortcut** | The reference solution of a task / a declared wrong method that must fail on every instance. Each is a `Solution` with a `shell` form that runs in the container and a `model` that predicts, in Python, the artifacts the shell form writes. |
+| **Profile** | The container environment of a family (`PROFILES` in `spec.py`): pinned base image, environment variables, hostname, required tools, resources and allowed processes. |
+| **Environment probe** | `src/learning_loop/tasks/runtime/probe.py`: checks that a running container matches its profile (no network, environment variables, hostname, tools, processes) and, in the agent container, that `/app` holds exactly the rendered files. The verifier writes no reward when it fails; an episode stops as `infra:env_probe:<checks>` before turn 0. |
+| **Calibration seed** | A seed in 900000-999999 (`CALIBRATION_SEEDS` in `tasks/instances.py`). Calibration runs a model on instances from these seeds to tune a family's difficulty; split validation rejects them, so no trained or evaluated instance was looked at while tuning. |
+| **Docker-host preflight** | The check at the start of every run (`orchestration/preflight.py`): the oracle of one instance per family runs on the run's Docker host and must score its predicted reward. Not the same as `loop preflight`, which checks a machine's Python, model cache and accelerator for the smoke test. |
 | **Skill** | A family tag (e.g. `gzip`) used only to group reports. |
 | **Split** | An instance's single purpose, set in its split file: `train` (training data), `dev` (evaluated every cycle), or `final`/`external` (evaluated only with `loop evaluate --final`, once method choices are frozen). |
 | **Panel** | A named list of same-split instances in a split file (`evaluation/splits/*.yaml`). Experiments name panels (`tasks.collection_panel`, `evaluation.dev_panels`, `evaluation.final_panels`), not splits. |
 | **Held-out family** | A family in a split file's `held_out_families`: it may have no train-split instance, so it measures transfer to families never trained on. |
 | **Exposure schedule** | `tasks.exposure_schedule`: which families collection uses from which cycle on, for studying retention of earlier families. |
 | **Artifact** | A file listed in `task.toml` `artifacts` (e.g. `/app/answer.txt`); the only thing copied from the learner's container to the verifier container. |
+| **Context cap** | `episode.max_context_tokens`: the context window of every learner request, prompt plus output. The server lowers each request's output limit to what fits; a full context stops the episode as `budget:max_context`. It is a budget, not the server's window (`learner.max_context_tokens`), which can be larger, e.g. for editor requests ([why](experiment.md#episodes)). |
 | **Complete success** | `reward >= success_threshold` (in `task.toml`; 1.0 for all shipped tasks). Only this counts as success, makes an episode editable, or passes acceptance. |
 | **Partial reward** | The verifier's `reward` value from 0 to 1, e.g. 0.33 when a third of fix-stats' hidden checks pass. Reported next to success; a value below the threshold is not success. |
 | **Oracle / nop** | Harbor agents that run the reference solution (must score 1.0) / do nothing (the baseline score). |
@@ -48,7 +55,7 @@
 | **Source (trajectory)** | A collected episode with complete success, given to the editor. |
 | **Editor** | The model that reviews a source and answers with one tool call: `replace_with_<tool>` proposes a replacement for one turn's tool call, `abstain` declines ([details](experiment.md#editing)). By default the fixed initial checkpoint (`editor.mode: initial_policy`). |
 | **Proposal** | The editor's output for one source: `proposed`, `abstained` (the editor called `abstain`, or the source had no eligible turn and was not sent: `skipped:no_editable_turns`) or `invalid` (unusable response or failed the code checks, with rejection reasons). |
-| **Eligible (editable) turn** | A turn the editor may replace: generated by the learner (not replayed), with exactly one tool call that parsed cleanly, entered the history unchanged (no recorded repair) and ran, and no assistant text or reasoning ([why](experiment.md#editing)). |
+| **Eligible (editable) turn** | A turn the editor may replace: generated by the learner (not replayed), with exactly one tool call that parsed cleanly, entered the history unchanged (no recorded repair) and has a tool result (a call the tool refused with an `[error]` counts), and no assistant text. Reasoning makes a turn ineligible under `editor.assistant_text_policy: reject_nonempty`; under `keep_reasoning` the edit keeps it, and only an empty thought makes the turn ineligible ([why](experiment.md#editing)). |
 | **Hindsight constant** | A value in a replacement (IP address, number of 3+ digits, quoted string, file path, or any number it writes or prints) that appears in the episode after the edited turn but not before it. The grounding check rejects it as `ungrounded_constant:<value>` ([details](experiment.md#editing)). |
 | **Intervention** | The fixed action at the edited turn of a branch: the original call (`original` branch) or the replacement (`edited` branch). |
 | **Replay** | Rebuilding the state before the edited turn in a fresh environment by re-running the source's earlier tool calls without a model; any observation or fingerprint mismatch stops the branch (it *fails closed*). |

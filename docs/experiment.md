@@ -64,6 +64,17 @@ loop compare runs/baseline --vs runs/learning-seed1 runs/learning-seed2 runs/lea
 Smoke runs and runs with *fixtures* (scripted stand-ins for the learner, editor or trainer, used
 to test the plumbing without a model) never support statistical claims.
 
+**Task difficulty is calibrated before families are used.** A family on which the base learner
+always fails or always succeeds cannot show an effect in either direction. So before a family
+version is used in an experiment, `loop calibrate` runs the planned learner's base checkpoint on
+instances of every family and difficulty, and each difficulty's success rate should fall in
+20-80%. Families outside that range get their difficulty settings adjusted and their `version`
+bumped, which renders new instances. Calibration uses only the seeds reserved for it
+(900000-999999), which split validation rejects. That way, tuning difficulty never looks at an
+instance that is later trained on or evaluated, which would bias those results toward whatever
+the tuning happened to see. Calibration runs are their own run kind, and nothing reads them
+except whoever adjusts the families.
+
 ## One cycle
 
 Cycle *c* starts with learner checkpoint *L_c*, which stays fixed for the whole cycle.
@@ -128,14 +139,26 @@ The learner acts only through `bash`, `read_file` and `write_file` in a task con
 tests run in a separate verifier container ([evaluation/README.md](../evaluation/README.md)).
 Each episode has two kinds of limits, recorded as different stop categories:
 
-- **Budgets**, part of the experiment: `episode.max_turns` and `episode.max_episode_tokens`. An
-  endpoint that reports no usage under a token budget stops the episode
-  (`budget:usage_unavailable`). Per-command timeouts are capped at `episode.tool_timeout_sec`.
+- **Budgets**, part of the experiment: `episode.max_turns`, `episode.max_episode_tokens` and
+  `episode.max_context_tokens`. An endpoint that reports no usage under a token budget stops the
+  episode (`budget:usage_unavailable`). Per-command timeouts are capped at
+  `episode.tool_timeout_sec`.
+
+**The context cap** (`episode.max_context_tokens`) works like a model's own context window:
+every learner request's prompt plus output must fit it. The server (`hf_server`) knows each
+rendered prompt's exact length, so it lowers that request's output limit to what still fits, at
+most `episode.sampling.max_output_tokens`. A reply cut off by the lowered limit, or a prompt that
+already fills the cap, stops the episode as `budget:max_context`. The cap applies to every
+episode role (evaluation, collection, verification branches, calibration), so all of them run in
+the same context regime. Why cap the context instead of letting episodes grow to the server's
+window? Training can only fit pairs up to `training.dpo.max_length`. Without the cap, edits late
+in long episodes would be too long to train, so the learner would be evaluated on decisions it is
+never trained on. With the cap, every turn of every episode fits it, so every edit can be trained.
 - **Safety limit:** the wall-clock timeout `episode.agent_timeout_sec`.
 
 An episode ends normally when the learner replies without a tool call; then it is graded. A
-reply whose only tool calls the server could not parse also has no tool call, so it stops as an
-error instead (`model_error:unparsed_tool_call`).
+tool call the server could not parse is not a reply without a tool call: it is answered with an
+`[error]` observation and the episode goes on ([evaluation/README.md](../evaluation/README.md#the-agent-agentstool_agentpy)).
 
 An *infrastructure failure* is an error outside the learner's control: the container or a Harbor
 command fails, or the model endpoint is unreachable, times out or returns a server error. The
@@ -175,8 +198,13 @@ contain several tool calls, or none.
 
 Proposals are checked by code before anything runs. An edit is rejected unless:
 
-- the original turn has exactly one tool call, which parsed cleanly and ran, and no assistant text
-  or reasoning (`editor.assistant_text_policy: reject_nonempty`, see below);
+- the original turn has exactly one tool call, which parsed cleanly and has a tool result, and no
+  assistant text. A call the tool refused with an `[error]` (a wrong argument type, a missing
+  file, an unknown tool) is eligible: it is a real action of the learner, and fixing it is a
+  saving like any other. A malformed call is not, because the history holds a repaired version
+  of it (see [the agent's malformed-call handling](../evaluation/README.md#the-agent-agentstool_agentpy)), so the
+  rejected side of the pair would not be what the learner generated. Under `editor.assistant_text_policy: reject_nonempty` it also has no reasoning; under
+  `keep_reasoning` its reasoning, if any, is not empty (see below);
 - the replacement is a different, schema-valid call to an existing tool;
 - no argument mentions a grader location: `/tests`, `/solution`, `/oracle`, `/logs/verifier`,
   `/logs/agent` or `reward.txt`/`reward.json` (a pattern match on every string argument). These
@@ -199,14 +227,33 @@ there as a whole line (like the output of `wc -l`), because small numbers turn u
 inside log lines. It is a heuristic: it can reject an innocent small number and misses hindsight
 that is paraphrased or computed at runtime. Rejected proposals are kept with their reasons.
 
-**Why turns with reasoning are not editable.** The chosen and rejected sides of a training
-example are whole assistant turns, reasoning included. Keeping the original reasoning in front
-of a new call would train the learner to make a call its own reasoning did not lead to; writing
-new reasoning would train it on the editor's thoughts. So turns with reasoning are skipped.
-Models in thinking mode reason on every turn, so the committed model profiles turn thinking off
-(`chat_template_kwargs: {enable_thinking: false}` in `configs/models/*.yaml`). The model then
-generates no reasoning at all (it is not generated and hidden); it answers with tool calls
-directly.
+**Edits and reasoning.** Each side of a training example is a whole assistant turn: reasoning (if
+any) and tool call. The two policies cover the two ways a model can run.
+
+- `reject_nonempty`, for models with thinking turned off in their model profile
+  (`chat_template_kwargs: {enable_thinking: false}`, e.g. `gemma-4-e4b-it`): the model generates no
+  reasoning at all and answers with tool calls directly, and a turn with reasoning is not editable.
+- `keep_reasoning`, for models that reason before every turn (`gemma-4-12b-it`): the edited turn
+  keeps the learner's original reasoning and replaces only the tool call. The plan check refuses a
+  learning run whose learner has `enable_thinking: true` under `reject_nonempty`, since almost no
+  turn would be editable.
+
+Under `keep_reasoning`, chosen and rejected start with the same reasoning tokens. DPO's loss
+depends only on the difference between the two sides' log-probabilities (each relative to the
+reference model), and the shared reasoning contributes the same amount to both, so it cancels:
+what is trained is which tool call to make after that reasoning. The reasoning itself is never
+trained, so no editor-written text reaches the learner. The cost is that the reasoning may have
+argued for the original action; the editor prompt asks for replacements that still follow from
+it. Why not let the editor rewrite the reasoning, or drop it? Rewritten reasoning would train the
+learner on the editor's thoughts, and a turn without reasoning is a shape the model never
+generates in thinking mode. `reject_nonempty` avoids the mismatch altogether, at the price of
+running the model without its thinking. A thinking model with thinking turned off still reasons,
+only in worse places (long code comments, repeated commands), which is why the primary learner
+keeps thinking on.
+
+A turn whose thought is present but empty (the model closed the thought channel at once) is not
+editable under `keep_reasoning` (`empty_reasoning`): Gemma's chat template drops an empty thought,
+so the turn could not be rendered as it was generated for training or token counting.
 
 The editor makes one proposal per source episode: picking the best of several verified edits
 from one episode would favor edits whose continuations happened to go well.
@@ -245,7 +292,10 @@ counted twice. Tokens spent on verification itself are tracked separately.
 **Acceptance rule `strict_all_success_v1`.** An edit is accepted only if all of these hold:
 
 - replay is valid on every branch;
-- the fixed action ran without a tool error or timeout on every branch;
+- the edited action ran without a tool error or timeout on every branch. The original action
+  may fail, because its failure can be the mistake the edit fixes, but only in exactly the way it
+  failed in the source episode (same error text, same timeout); any other failure comes from the
+  environment and rejects;
 - both branches fully succeed in every repetition (`verification.continuations_per_branch`);
 - no branch stopped for infrastructure, budget, safety, replay or model-error reasons;
 - every cost was measured;
@@ -273,7 +323,10 @@ families, or fixture pairs mixed with verified ones.
 Rendering uses the learner's pinned tokenizer and chat template. The rendered prompt must be an
 exact token prefix of both full renders. Only the completion tokens (through end-of-turn) carry
 loss, and chosen and rejected must differ there. Examples longer than `training.dpo.max_length`
-are dropped with a recorded reason, never truncated.
+are dropped with a recorded reason, never truncated. With a context cap, the limit is set as
+the cap plus `training.dpo.max_length_margin`: a pair's prompt and its rejected turn (the
+original) fit the cap, and the margin is room for an edited turn longer than the original, such as
+one command that replaces several steps.
 
 **The DPO reference.** For each example, let log π(turn) be the summed log-probability of the
 turn's tokens given the prompt. DPO minimizes
@@ -316,7 +369,7 @@ Each run saves what is needed to reproduce it: resolved configuration, code and 
 versions, hardware, task hashes, seeds and checkpoint lineage
 ([run-layout.md](run-layout.md) lists the files).
 
-Results are not bitwise reproducible across hardware, batching or serving versions, nor across
+Results are not bitwise reproducible across hardware, batching, vLLM's prefix cache or serving versions, nor across
 repeated CUDA training runs (on an A100, identical inputs gave adapters differing by up to about
 1e-4 after two steps, from nondeterministic GPU kernels). A resumed training stage matches an
 uninterrupted one only up to that noise.

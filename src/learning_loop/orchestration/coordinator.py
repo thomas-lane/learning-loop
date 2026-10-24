@@ -116,7 +116,8 @@ class RunContext:
             prof = self.machine.inference if role == "learner" else (self.machine.editor_inference or self.machine.inference)
             model = self.learner_profile if role == "learner" else self.editor_profile
             zero = zero_lora_spec(self.exp, self.learner_profile) if model.name == self.learner_profile.name else None
-            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role, zero_lora=zero)
+            self.managers[role] = InferenceManager(prof, model, self.run_dir / "logs", role=role, zero_lora=zero,
+                                                   max_context=self.exp.learner.max_context_tokens)
         return self.managers[role]
 
     def pods(self, log: Callable[[str], None] | None = None):
@@ -187,6 +188,10 @@ def check_compatibility(exp: ExperimentConfig, machine: MachineProfile, learner:
     if uses_model_editor and exp.editor.mode == "current_learner" and ed_inf is not None and ed_inf.mode == "external":
         raise PlanError("editor=current_learner changes every cycle; a fixed external editor endpoint cannot serve it")
     check_endpoints(machine, learner, editor, initial_id, editor_checkpoint_id(exp, editor, initial_id, initial_id) if uses_model_editor else None)
+    check_context_cap(exp, machine)
+    if exp.condition == "learning" and exp.cycles >= 1 and learner.chat_template_kwargs.get("enable_thinking") and exp.editor.assistant_text_policy == "reject_nonempty":
+        raise PlanError(f"{learner.name} reasons on every turn (enable_thinking), so editor.assistant_text_policy reject_nonempty would leave "
+                        "almost no editable turns; use keep_reasoning")
     if trains and inf.mode == "external":
         raise PlanError("learning runs need managed (or scripted) inference: an external endpoint cannot serve new checkpoints")
     if trains and exp.training.trainer == "trl_dpo" and inf.mode == "managed":
@@ -238,6 +243,15 @@ def check_serving_backend(inf: InferenceProfile, model: ModelProfile, role: str)
     sb = model.serving.get(inf.backend) if inf.mode != "scripted" else None
     if sb is not None and sb.status == "unsupported":
         raise PlanError(f"configs/models/{model.name}.yaml marks serving backend {inf.backend!r} unsupported; the {role} cannot be served with it")
+
+
+def check_context_cap(exp: ExperimentConfig, machine: MachineProfile) -> None:
+    """`episode.max_context_tokens` is enforced by this repository's server (hf_server), which
+    lowers each request's output limit; another server would ignore the request field."""
+    inf = machine.inference
+    if exp.episode.max_context_tokens is not None and inf.mode != "scripted" and inf.backend not in ("hf_transformers", "vllm"):
+        raise PlanError(f"episode.max_context_tokens needs the hf_transformers or vllm backend (learning_loop.serving.hf_server); "
+                        f"the learner's endpoint is {inf.backend!r}")
 
 
 def check_endpoints(machine: MachineProfile, learner: ModelProfile, editor: ModelProfile, learner_id: str, editor_id: str | None) -> None:
@@ -599,6 +613,7 @@ def episode_budgets(exp: ExperimentConfig) -> EpisodeBudgets:
     return EpisodeBudgets(
         max_turns=e.max_turns,
         max_episode_tokens=e.max_episode_tokens,
+        max_context_tokens=e.max_context_tokens,
         tool_timeout_sec=e.tool_timeout_sec,
         max_output_chars=e.max_output_chars,
         agent_timeout_sec=e.agent_timeout_sec,
@@ -610,7 +625,8 @@ def make_plan(ctx: RunContext, inst: TaskInstance, role: EpisodeRole, episode_id
 
     state = load_state_spec(Path(inst.task_dir))
     workdir = "/app"
-    system_prompt = repo_path(ctx.exp.episode.system_prompt).read_text().format(workdir=workdir)
+    environment = (state.env_probe or {}).get("agent_environment") or ""
+    system_prompt = repo_path(ctx.exp.episode.system_prompt).read_text().format(workdir=workdir, environment=environment).replace("\n\n\n", "\n\n")
     instruction = (Path(inst.task_dir) / "instruction.md").read_text()
     return EpisodePlan(
         episode_id=episode_id,
@@ -661,6 +677,21 @@ def load_summary(ctx: RunContext, item: WorkItem) -> EpisodeSummary | None:
     return EpisodeSummary.model_validate(read_json(p)) if p.exists() else None
 
 
+def finished_stage(ctx: RunContext, cycle: int, stage: str, covers: Callable[[StageManifest], bool], stage_root: Path | None = None) -> StageManifest | None:
+    """The stage's manifest when it is done and `covers` it (it holds every item the stage would
+    run), so a resumed run builds no policy for the stage: building one starts its model server,
+    which would take the accelerator from training that is all a resumed cycle may have left."""
+    mpath = (stage_root or ctx.stage_dir(cycle, stage)) / "manifest.json"
+    if not mpath.exists():
+        return None
+    m = StageManifest.model_validate(read_json(mpath))
+    return m if m.status == "done" and not m.pending() and covers(m) else None
+
+
+def _holds(ids: list[str]) -> Callable[[StageManifest], bool]:
+    return lambda m: set(ids) <= set(m.items)
+
+
 async def stage_eval(ctx: RunContext, cycle: int, ckpt: CheckpointRef, panels: list[str], stage: str = "eval", stage_root: Path | None = None) -> StageManifest:
     exp = ctx.exp
     items: list[tuple[str, dict[str, Any]]] = []
@@ -669,6 +700,8 @@ async def stage_eval(ctx: RunContext, cycle: int, ckpt: CheckpointRef, panels: l
             for a in range(exp.evaluation.attempts_per_instance):
                 eid = seeds.stable_id("ep", ctx.run_id, stage, cycle, ckpt.checkpoint_id, p, iid, a)
                 items.append((eid, {"panel": p, "instance_id": iid, "attempt": a, "checkpoint_id": ckpt.checkpoint_id}))
+    if done := finished_stage(ctx, cycle, stage, _holds([i for i, _ in items]), stage_root):
+        return done
     policy = learner_policy(ctx, ckpt) if items else None
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -687,6 +720,8 @@ async def stage_collect(ctx: RunContext, cycle: int, ckpt: CheckpointRef) -> Sta
         for a in range(exp.tasks.attempts_per_instance):
             eid = seeds.stable_id("ep", ctx.run_id, "collect", cycle, ckpt.checkpoint_id, iid, a)
             items.append((eid, {"instance_id": iid, "attempt": a, "checkpoint_id": ckpt.checkpoint_id}))
+    if done := finished_stage(ctx, cycle, "collect", _holds([i for i, _ in items])):
+        return done
     policy = learner_policy(ctx, ckpt) if items else None
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -779,6 +814,11 @@ def successful_sources(ctx: RunContext, collect: StageManifest) -> list[tuple[Pa
 
 
 async def stage_edit(ctx: RunContext, cycle: int, learner: CheckpointRef, sources: list[tuple[Path, EpisodeSummary]]) -> StageManifest:
+    # Proposal ids include the editor's identity, which building the editor (and its server)
+    # gives; a finished stage is recognized by its sources instead.
+    want = {s.episode_id for _, s in sources}
+    if done := finished_stage(ctx, cycle, "edit", lambda m: want <= {w.meta.get("source_episode_id") for w in m.items.values()}):
+        return done
     editor = build_editor(ctx, learner) if sources else None
     items = []
     for src_dir, s in sources:
@@ -802,7 +842,7 @@ async def stage_edit(ctx: RunContext, cycle: int, learner: CheckpointRef, source
         infra = next((r for r in proposal.rejection_reasons if r.startswith("editor_infra_error")), None)
         return {"status": proposal.status, "infra_error": infra}
 
-    return await run_stage(ctx, cycle, "edit", items, fn, concurrency=1)
+    return await run_stage(ctx, cycle, "edit", items, fn, concurrency=editor.max_concurrency if editor else 1)
 
 
 def load_proposals(ctx: RunContext, edit: StageManifest) -> list[tuple[EditProposal, Path]]:
@@ -836,11 +876,13 @@ def make_verifier(ctx: RunContext, learner: CheckpointRef, purpose: str = "accep
 
 async def stage_verify(ctx: RunContext, cycle: int, learner: CheckpointRef, proposals: list[tuple[EditProposal, Path]], purpose: str = "acceptance", stage: str = "verify") -> StageManifest:
     valid = [(p, src) for p, src in proposals if p.status == "proposed"]
-    verifier = make_verifier(ctx, learner, purpose) if valid else None
     items = [
         (seeds.stable_id("ver", p.proposal_id, purpose), {"proposal_id": p.proposal_id, "source_dir": ref_path(ctx, src), "purpose": purpose})
         for p, src in valid
     ]
+    if done := finished_stage(ctx, cycle, stage, _holds([i for i, _ in items])):
+        return done
+    verifier = make_verifier(ctx, learner, purpose) if valid else None
     by_id = {p.proposal_id: p for p, _ in valid}
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -1220,6 +1262,8 @@ async def run_single_stage(ctx: RunContext, cycle: int, stage: str) -> None:
     `loop resume` skips whatever was completed here.
     """
     learner = learner_for_cycle(ctx, cycle)
+    if stage in ("eval", "collect", "verify"):  # the stages that run episodes
+        await preflight(ctx, print, learner if stage != "verify" else None)
     if stage == "eval":
         await stage_eval(ctx, cycle, learner, ctx.exp.evaluation.dev_panels)
     elif stage == "collect":
@@ -1265,6 +1309,7 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
     if ckpt.model_profile != learner.name:
         raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
     check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
+    check_context_cap(exp, machine)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-eval-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
@@ -1301,10 +1346,109 @@ def evaluate_checkpoint(exp_path: str | Path, machine_path: str | Path, checkpoi
     return run_dir
 
 
+CALIBRATION_TARGET = (0.2, 0.8)  # base-model success rate a family's difficulty is tuned into
+
+
+def calibrate(exp_path: str | Path, machine_path: str | Path, checkpoint: str, families: list[str] | None = None, difficulties: list[str] | None = None,
+              instances_per_difficulty: int = 6, attempts: int = 3, run_id: str | None = None, overrides: list[str] | None = None, runs_dir: Path | None = None) -> Path:
+    """Run a checkpoint on calibration instances (reserved seeds, never in a split) of every
+    family and difficulty, and report each one's success rate against CALIBRATION_TARGET. The
+    output is its own run of kind `calibration`, which nothing else reads."""
+    from evaluation.families import FAMILIES
+
+    from ..tasks import instances as task_mod
+
+    overrides = [*(overrides or []), f"evaluation.attempts_per_instance={attempts}"]
+    exp, raw, machine, learner, editor = load_all(exp_path, machine_path, overrides)
+    if machine.inference.mode == "scripted" and not exp.learner.scripted_policy:
+        raise PlanError("scripted inference requires learner.scripted_policy")
+    ckpt = checkpoint_ref(checkpoint, learner)
+    if ckpt.model_profile != learner.name:
+        raise PlanError(f"checkpoint {ckpt.checkpoint_id} belongs to {ckpt.model_profile}, experiment learner is {learner.name}")
+    check_endpoints(machine, learner, editor, ckpt.checkpoint_id, None)
+    check_context_cap(exp, machine)
+    defs = task_mod.calibration_ids(families or sorted(FAMILIES), difficulties, instances_per_difficulty)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = run_id or f"calibration-{learner.name}-{stamp}"
+    run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    instances = task_mod.materialize_calibration(defs, run_dir / "tasks")
+    panels = {"calibration": [d.instance_id for d in defs]}
+    ctx = RunContext(run_dir, run_id, exp, raw, machine, learner, editor, instances, panels, {"calibration": Split.DEV}, {i: Split.DEV for i in instances}, [])
+    write_once_json(
+        run_dir / "run.json",
+        {
+            "run_id": run_id,
+            "kind": "calibration",
+            "experiment_path": str(exp_path),
+            "experiment": exp.model_dump(mode="json"),
+            "machine": machine.model_dump(mode="json"),
+            "model_profiles": {"learner": learner.model_dump(mode="json"), "editor": editor.model_dump(mode="json")},
+            "initial_checkpoint": ckpt.model_dump(mode="json"),
+            "evaluated_checkpoint": ckpt.model_dump(mode="json"),
+            "evaluated_panels": ["calibration"],
+            "panels": panels,
+            "panel_split": {"calibration": Split.DEV.value},
+            "held_out_families": [],
+            "instances": {k: v.model_dump(mode="json") for k, v in instances.items()},
+            "calibration": {"instances_per_difficulty": instances_per_difficulty, "attempts": attempts, "target": list(CALIBRATION_TARGET)},
+        },
+    )
+    with run_lock(run_dir):
+        record_provenance(run_dir, run_id)
+    asyncio.run(_run_calibration(ctx, ckpt))
+    return run_dir
+
+
+async def _run_calibration(ctx: RunContext, ckpt: CheckpointRef) -> None:
+    await _run_evaluation(ctx, ckpt, ["calibration"])
+    calibration_report(ctx)
+
+
+def calibration_report(ctx: RunContext) -> list[dict[str, Any]]:
+    """Success rate per (family, difficulty) over the calibration episodes, written to
+    reports/calibration.csv. Episodes that stopped for infrastructure reasons are counted
+    apart and left out of the rate, so a flaky host does not read as a hard task."""
+    import csv
+
+    from evaluation.families import FAMILIES
+
+    cells: dict[tuple[str, str], dict[str, int]] = {}
+    # Each item's final output only: attempts preserved as `<id>.interrupted-N` were retried.
+    manifest = StageManifest.model_validate(read_json(ctx.stage_dir(0, "eval") / "manifest.json"))
+    for item in sorted(manifest.items.values(), key=lambda w: w.item_id):
+        s = load_summary(ctx, item)
+        if s is None:
+            continue
+        inst = ctx.instances[s.instance_id]
+        c = cells.setdefault((inst.family, inst.difficulty or ""), {"episodes": 0, "successes": 0, "infra": 0})
+        if s.stop_category == StopCategory.INFRA:
+            c["infra"] += 1
+            continue
+        c["episodes"] += 1
+        c["successes"] += bool(s.success)
+    lo, hi = CALIBRATION_TARGET
+    rows = []
+    for (family, difficulty), c in sorted(cells.items()):
+        rate = c["successes"] / c["episodes"] if c["episodes"] else None
+        verdict = "no episodes" if rate is None else "too hard" if rate < lo else "too easy" if rate > hi else "in range"
+        rows.append({"family": family, "cluster": FAMILIES[family].cluster if family in FAMILIES else "", "difficulty": difficulty,
+                     "episodes": c["episodes"], "successes": c["successes"], "success_rate": None if rate is None else round(rate, 3),
+                     "infra_excluded": c["infra"], "verdict": verdict})
+    out = ctx.run_dir / "reports" / "calibration.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["family", "cluster", "difficulty", "episodes", "successes", "success_rate", "infra_excluded", "verdict"])
+        w.writeheader()
+        w.writerows(rows)
+    return rows
+
+
 async def _run_evaluation(ctx: RunContext, ckpt: CheckpointRef, panels: list[str]) -> None:
     with run_lock(ctx.run_dir):
         with ctx.pods():
             try:
+                await preflight(ctx, print, ckpt)
                 await stage_eval(ctx, 0, ckpt, panels)
             finally:
                 ctx.stop_serving()
@@ -1329,6 +1473,7 @@ def edit_replay(source_run: Path, cycle: int, exp_path: str | Path, machine_path
     src_initial_id = read_json(src.run_dir / "run.json")["initial_checkpoint"]["checkpoint_id"]
     editor_id = None if exp.editor.mode == "scripted" else editor_checkpoint_id(exp, editor, src_learner.checkpoint_id, src_initial_id)
     check_endpoints(machine, learner, editor, src_learner.checkpoint_id, editor_id)
+    check_context_cap(exp, machine)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = run_id or f"{exp.name}-editreplay-{stamp}"
     run_dir = (runs_dir or repo_path(machine.runs_dir)) / run_id
@@ -1364,6 +1509,7 @@ async def _run_edit_replay(ctx: RunContext, src: RunContext, cycle: int, src_lea
     with run_lock(ctx.run_dir):
         with ctx.pods():
             try:
+                await preflight(ctx, print)
                 edit = await stage_edit(ctx, 0, src_learner, sources)
                 proposals = load_proposals(ctx, edit)
                 ver = await stage_verify(ctx, 0, src_learner, proposals)
@@ -1388,12 +1534,52 @@ def resume_run(run_dir: Path, machine_path: str | Path | None = None) -> None:
     elif kind == "evaluation":
         ckpt = CheckpointRef.model_validate(meta["evaluated_checkpoint"])
         asyncio.run(_run_evaluation(ctx, ckpt, meta["evaluated_panels"]))
+    elif kind == "calibration":
+        asyncio.run(_run_calibration(ctx, CheckpointRef.model_validate(meta["evaluated_checkpoint"])))
     elif kind == "edit_replay":
         imp = meta["imported_sources"]
         src = open_run(Path(imp["run"]))
         asyncio.run(_run_edit_replay(ctx, src, imp["cycle"], CheckpointRef.model_validate(imp["learner"])))
     else:
         raise PlanError(f"unknown run kind {kind!r}")
+
+
+def first_open_cycle(ctx: RunContext) -> int | None:
+    for c in range(ctx.exp.cycles + 1):
+        p = cycle_state_path(ctx, c)
+        if not p.exists() or read_json(p).get("status") != "done":
+            return c
+    return None
+
+
+def serving_work_left(ctx: RunContext, cycle: int) -> bool:
+    """Whether `cycle` still has a stage that needs a served model: its evaluation or, in a
+    learning cycle, collection, editing, verification or an audit. A cycle left with only export
+    and training must not start a server, which would take the accelerator the trainer (possibly
+    a detached remote one still running) needs."""
+    exp = ctx.exp
+    stages = ["eval"] if eval_due(exp, cycle) else []
+    if exp.condition == "learning" and not (cycle == exp.cycles or exp.condition == "frozen_baseline"):
+        stages += ["collect", "edit", "verify"]
+        if (ctx.stage_dir(cycle, "audit") / "manifest.json").exists():
+            stages.append("audit")  # an audit that selected nothing writes no manifest
+
+    def done(stage: str) -> bool:
+        m = ctx.stage_dir(cycle, stage) / "manifest.json"
+        return m.exists() and read_json(m).get("status") == "done"
+
+    # Warming a server here only overlaps its start with the preflight: a stage that needs one
+    # and finds it stopped starts it itself.
+    return any(not done(st) for st in stages)
+
+
+async def preflight(ctx: RunContext, log: Callable[[str], None], first_server: CheckpointRef | None = None) -> None:
+    """The Docker-host preflight (orchestration/preflight.py), while the learner's server for
+    `first_server` starts; raises PreflightError before any episode when the host fails it."""
+    from .preflight import preflight_while_serving
+
+    warm = (lambda: ctx.manager("learner").ensure(first_server)) if first_server is not None else None
+    await preflight_while_serving(ctx, log, warm)
 
 
 async def run_all(ctx: RunContext, log: Callable[[str], None] | None = None) -> None:
@@ -1404,6 +1590,9 @@ async def run_all(ctx: RunContext, log: Callable[[str], None] | None = None) -> 
     with run_lock(ctx.run_dir):
         with ctx.pods(log):
             try:
+                first = first_open_cycle(ctx)
+                if first is not None:
+                    await preflight(ctx, log, learner_for_cycle(ctx, first) if serving_work_left(ctx, first) else None)
                 for c in range(ctx.exp.cycles + 1):
                     await run_cycle(ctx, c, log)
             finally:

@@ -12,13 +12,20 @@ Loop: [fingerprint] -> request -> response -> execute each tool call in order
     budget:max_turns              BUDGET       assistant turns (incl. replayed prefix + intervention)
     budget:max_episode_tokens     BUDGET       input+output across requests (incl. prefix accounting)
     budget:usage_unavailable      BUDGET       max_episode_tokens is set but a response reported no usage
-    budget:output_truncated       BUDGET       finish_reason=length and no valid tool call
+    budget:output_truncated       BUDGET       finish_reason=length and no valid tool call (including
+                                               a tool-call block the limit cut off)
+    budget:max_context            BUDGET       the conversation fills the context cap
+                                               (budgets.max_context_tokens): the prompt alone fills
+                                               it, or a reply cut off as above ran into it
     safety:agent_timeout          SAFETY       wall-clock limit (budgets.agent_timeout_sec)
     safety:cancelled              SAFETY       cancelled from outside (e.g. Harbor's agent timeout)
     model_error:<msg>             MODEL_ERROR  endpoint rejected the request (4xx, e.g. context overflow)
     infra:<msg>                   INFRA        endpoint transport/5xx/timeouts, or the environment
                                                transport (EnvInfraError: exec/upload failures,
                                                backstop timeouts); retried by the coordinator
+    infra:env_probe:<checks>      INFRA        before turn 0, the container does not match the task's
+                                               `env_probe` expectation (network, env, tools, processes,
+                                               /app content); nothing has been executed or requested
     replay:<mismatch>             REPLAY       restored state differs from the source (fail closed),
                                                incl. replay:image_mismatch (different environment image)
 
@@ -32,6 +39,12 @@ image identity differs from the source's stops as `replay:image_mismatch`;
 when the source recorded none, the check is skipped and that is recorded in
 `extra["image_identity_check"]`. After the intervention executes,
 `extra["intervention_tool"] = {executed, error, exit_code, timed_out}`.
+
+Environment probe (`plan.state_spec.env_probe`, declared by rendered tasks): before the
+replay or the first request, sessions that can probe (`session.probe`, Harbor) run
+tasks/runtime/probe.py in the container; the result is an `env_probe` event and
+`extra["env_probe"]`. Sessions that cannot (the local fixture backend runs on the host)
+record that the probe was skipped.
 
 Replay (`plan.replay`): no model calls for the prefix. The conversation starts
 from the exact historical `history_prefix`; each prefix turn's *executed*
@@ -79,6 +92,7 @@ from .events import EventLog, first_request_messages, load_turns, read_events
 from .policy import parse_arguments
 
 CORE_SCHEMA_VERSION = 1
+QUOTED_CALL_LIMIT = 2000  # characters of a malformed call quoted back in its [error] observation
 
 
 class EpisodeCore(BaseModel):
@@ -201,6 +215,23 @@ class _StopEpisode(Exception):
         self.category = category
 
 
+def _length_stop(d: Any) -> tuple[str, StopCategory]:
+    """A reply cut off by its output limit: the context cap when that is what lowered the limit."""
+    return ("budget:max_context" if d.context_capped else "budget:output_truncated"), StopCategory.BUDGET
+
+
+def _quote_call(call: dict[str, Any], original_raw: Any) -> str:
+    """The model's own text for a call that could not be parsed, for its [error] observation. The
+    history keeps the call with arguments `{}` (the chat template renders past calls from parsed
+    arguments), so without the quote the model would not see what it wrote."""
+    if not isinstance(original_raw, str) or not original_raw.strip() or original_raw == call["function"]["arguments"]:
+        return ""
+    text = original_raw.strip()
+    if len(text) > QUOTED_CALL_LIMIT:
+        text = text[:QUOTED_CALL_LIMIT] + f"\n... ({len(text) - QUOTED_CALL_LIMIT} more characters)"
+    return f"\nThe call as you wrote it:\n{text}"
+
+
 class _Episode:
     def __init__(self, plan: EpisodePlan, session: Any, policy: Policy, log: EventLog, on_turn: Callback | None):
         self.plan = plan
@@ -230,6 +261,20 @@ class _Episode:
         self.image_identity: dict[str, Any] | None = None
 
     # -- helpers ------------------------------------------------------------ #
+
+    async def check_environment(self) -> None:
+        expect = self.plan.state_spec.env_probe
+        if expect is None:
+            return
+        probe = getattr(self.session, "probe", None)
+        if probe is None:
+            self.extra["env_probe"] = "skipped: this environment cannot be probed"
+            return
+        result = await probe(expect)
+        self.extra["env_probe"] = {"ok": result["ok"], "violations": result["violations"]}
+        self.emit(EventKind.ENV_PROBE, result)
+        if not result["ok"]:
+            raise _StopEpisode("infra:env_probe:" + ",".join(result["violations"]), StopCategory.INFRA)
 
     def emit(self, kind: EventKind, data: dict[str, Any], turn: int | None = None) -> None:
         self.log.emit(kind, data, turn_index=turn)
@@ -273,18 +318,19 @@ class _Episode:
         if te.executed:
             self.cpu.append(te.cpu_time_sec)
 
-    async def run_call(self, turn: int, order: int, call: dict[str, Any], error: str | None, original_raw: str | None, finish_reason: str | None) -> ToolExecution:
+    async def run_call(self, turn: int, order: int, call: dict[str, Any], error: str | None, original_raw: str | None, finish_reason: str | None,
+                       applied_limit: int | None = None) -> ToolExecution:
         cid = call["id"]
         name = call["function"]["name"]
         if error is not None:
             if finish_reason == "length":
-                limit = self.plan.policy.sampling.max_output_tokens
+                limit = applied_limit or self.plan.policy.sampling.max_output_tokens
                 obs = (
                     f"[error] your response hit the max_tokens limit ({limit}) and this tool call was cut off, "
                     "so it was not run. Keep reasoning shorter or split large writes into smaller pieces."
                 )
             else:
-                obs = f"[error] {error}"
+                obs = f"[error] {error}" + _quote_call(call, original_raw)
             te = ToolExecution(call_id=cid, name=name, requested_arguments_raw=original_raw, executed_arguments=None, executed=False, raw_output=obs, observation=obs, error=error)
         else:
             args, _ = parse_arguments(call["function"]["arguments"])
@@ -464,7 +510,7 @@ class _Episode:
                 t,
             )
             self.n_requests += 1
-            d = await self.policy.decide(list(self.messages), plan.tools, seed)
+            d = await self.policy.decide(list(self.messages), plan.tools, seed, plan.budgets.max_context_tokens)
             self.seed_flags.append(d.seed_sent is not None)
             if d.latency_sec is not None:
                 self.endpoint_sec += d.latency_sec
@@ -480,6 +526,8 @@ class _Episode:
                     {"request_index": req_idx, "raw": d.raw_response, "history_message": None, "finish_reason": None, "usage": None, "latency_sec": d.latency_sec, "seed_sent": d.seed_sent, "error": d.request_error},
                     t,
                 )
+                if d.context_exhausted:  # the conversation fills the episode's context cap
+                    raise _StopEpisode("budget:max_context", StopCategory.BUDGET)
                 raise _StopEpisode(f"model_error:{d.request_error}", StopCategory.MODEL_ERROR)
             self.emit(
                 EventKind.RESPONSE,
@@ -499,7 +547,7 @@ class _Episode:
             original_raw: dict[str, Any] = {}
             for rep in d.repairs:
                 self.emit(EventKind.REPAIR, {"request_index": req_idx, **rep}, t)
-                if rep.get("field") == "function.arguments":
+                if rep.get("field") in ("function.arguments", "tool_call"):
                     original_raw[rep["tool_call_id"]] = rep["original"]
             self.usages.append(d.usage)
             if self.tokens_used is not None:
@@ -516,20 +564,25 @@ class _Episode:
             if d.call_errors or unparsed:
                 self.n_malformed += 1
             if not calls and unparsed:
-                # Only unparseable attempts: an explicit error, not a successful action and not a normal finish.
+                # Only unparseable attempts: an explicit error, not a successful action and not a normal
+                # finish. A block cut off by the output limit (finish_reason=length) is a budget stop:
+                # the model ran out of tokens rather than writing a malformed call.
                 await self.turn_done()
+                if d.finish_reason == "length":
+                    raise _StopEpisode(*_length_stop(d))
                 raise _StopEpisode("model_error:unparsed_tool_call", StopCategory.MODEL_ERROR)
             if not calls:
                 await self.turn_done()
                 if d.finish_reason == "length":
-                    raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
+                    raise _StopEpisode(*_length_stop(d))
                 raise _StopEpisode("model_finished", StopCategory.MODEL)
             for j, c in enumerate(calls):
                 raw = original_raw.get(c["id"], c["function"]["arguments"])
-                await self.run_call(t, j, c, d.call_errors.get(c["id"]), raw, d.finish_reason)
+                applied = ((d.raw_response or {}).get("learning_loop") or {}).get("max_tokens_applied")
+                await self.run_call(t, j, c, d.call_errors.get(c["id"]), raw, d.finish_reason, applied)
             await self.turn_done()
             if d.finish_reason == "length" and all(c["id"] in d.call_errors for c in calls):
-                raise _StopEpisode("budget:output_truncated", StopCategory.BUDGET)
+                raise _StopEpisode(*_length_stop(d))
 
     # -- result ------------------------------------------------------------- #
 
@@ -596,6 +649,7 @@ async def run_episode(
     try:
         async with asyncio.timeout(plan.budgets.agent_timeout_sec) as cm:
             try:
+                await ep.check_environment()
                 if plan.replay is not None:
                     await ep.replay()
                 await ep.loop()

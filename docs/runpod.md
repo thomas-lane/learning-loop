@@ -35,7 +35,8 @@ laptop (coordinator)                                  Runpod pod (GPU host)
 
 - **The coordinator runs on your laptop** (or another Linux machine with Docker), because the
   tasks run in Docker containers and a standard Runpod pod has no Docker daemon. The pod only
-  serves models and trains.
+  serves models and trains. The run directory must be on a case-sensitive filesystem, which on
+  a Mac means a case-sensitive APFS volume ([operations](operations.md#troubleshooting)).
 - **The server is reached only through the run's SSH tunnel.** Never expose its port through
   Runpod's public HTTP proxy, which has no authentication.
 
@@ -54,14 +55,17 @@ Runpod's *PyTorch* templates provide all of this; so does any Ubuntu-based image
 
 **GPU driver: CUDA 13.** The pod's NVIDIA driver must support CUDA 13.x (driver branch R580 or
 newer). If Runpod's deploy page has a CUDA version filter, pick 13.x. The setup script prints the
-driver's CUDA version and warns if it is below 13. Created pods get this automatically
-(`allowed_cuda_versions`).
+driver's CUDA version and warns if it is below 13; a pod the run prepares with such a driver is
+refused (and a created one terminated). Runpod's CUDA filter (`allowed_cuda_versions`) can name
+versions only up to 13.0 and matches them exactly, so created pods leave it empty by default to
+include hosts with newer CUDA 13 drivers.
 
 **GPU memory (estimates).**
 
 | Learner | Suggested GPU memory | Notes |
 |---|---|---|
 | Qwen3-0.6B, Qwen3-1.7B | 24 GB (e.g. RTX 3090/4090, A5000, L4) | serving and training take turns, so only one model is on the GPU at a time |
+| Gemma-4-12B (`pilot-12b.yaml`) | 80 GB (A100/H100) for a 32768-token context cap and `max_length` 34816 | serving (vLLM, 131072-token window) leaves a KV cache of about 1.8M tokens; training (gradient checkpointing, `dpo.split_pair_backward`, chunked log-probs) peaks at 60 GB for a 33.6k-token pair with a 2.2k-token completion and 61 GB for a 34.6k-token pair with a 16k-token completion |
 | Gemma-4-E4B (`pilot.yaml`) | 80 GB (A100/H100) for `max_length: 32768` | serving uses 15 GB; training with gradient checkpointing peaks at 24 GB for a 7.3k-token pair and 54 GB for a 28.9k-token pair (about 1.3 GB per 1k tokens on top of the weights) |
 | Gemma-4-E2B | 24–48 GB depending on `max_length` | bf16 weights are about 10 GB |
 
@@ -257,14 +261,22 @@ learner sees and what is counted therefore stay the same as with the transformer
   digits, `.`, `_` and `-` replaced by `_` (`vllm==0.30.0` → `.engines/vllm__0.30.0/`). The
   install takes a few minutes on a new pod and counts against `inference.startup_timeout_sec`.
 - Every sampling parameter is sent explicitly with each request (`--generation-config vllm`), so
-  the model repository's own sampling defaults never apply. Prefix caching is off, because a
-  cached prefix is computed differently from a recomputed one and would change outputs.
+  the model repository's own sampling defaults never apply: `temperature`, `top_p` and `top_k`
+  come from the experiment's `sampling` blocks (an unset `top_k` is off), and `hf_server`
+  rejects sampling parameters it does not apply (`min_p`, penalties, `logit_bias`) instead of
+  ignoring them.
+- Prefix caching is on. Every turn of an episode re-sends the whole conversation, so without it
+  each turn would recompute the full context and an episode's compute would grow with the square
+  of its length. A cached prefix is computed in different kernel batches than a recomputed one,
+  so outputs can differ by floating-point noise; batching already does the same, and results are
+  compared statistically across episodes, never bit for bit.
 - In experiments that train LoRA adapters, base checkpoints are served through a
   [zero LoRA](glossary.md) (as with the transformers engine), so every checkpoint pays the same
   adapter overhead.
 - `inference.request_concurrency` sets how many requests vLLM batches together.
   Set `docker_concurrency` at least as large; otherwise too few episodes run at once to fill a
-  batch.
+  batch. The edit stage needs no containers and sends up to `request_concurrency` proposal
+  requests at once, so editing is batched too.
 
 Gemma-4-E4B on an A100 with the zero LoRA, 768-token generations:
 

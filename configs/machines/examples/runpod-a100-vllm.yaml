@@ -13,6 +13,7 @@ inference:
   device: cuda
   startup_timeout_sec: 1800          # every new pod downloads the model first
   request_concurrency: 4             # requests vLLM batches (vLLM --max-num-seqs)
+  request_timeout_sec: 3600         # a reasoning reply of up to max_output_tokens can take many minutes
 training:
   host: {kind: runpod, pod: a100, workdir: /workspace/learning-loop}
   device: cuda

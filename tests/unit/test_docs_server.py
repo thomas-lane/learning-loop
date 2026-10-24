@@ -40,13 +40,13 @@ def test_serves_markdown_and_repository_text_files():
 
 
 def test_every_document_is_in_the_index_and_navigation():
-    docs = {p.relative_to(REPO_ROOT).as_posix() for p in (REPO_ROOT / "docs").glob("*.md")}
+    docs = {p.relative_to(REPO_ROOT).as_posix() for p in (REPO_ROOT / "docs").rglob("*.md")}
     maintained = docs | {"README.md", "AGENTS.md", "evaluation/README.md"}
     nav = {rel for rel, _ in docserver.NAV}
     assert maintained == nav, f"update NAV in docs_tools/docserver.py: {maintained ^ nav}"
     index = (REPO_ROOT / "docs" / "index.md").read_text()
     for rel in maintained - {"docs/index.md"}:
-        link = Path(rel).name if rel.startswith("docs/") else f"../{rel}"
+        link = Path(rel).relative_to("docs").as_posix() if rel.startswith("docs/") else f"../{rel}"
         assert f"]({link})" in index, f"docs/index.md does not link {rel}"
 
 

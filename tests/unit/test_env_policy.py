@@ -30,7 +30,7 @@ def _policy(handler, **spec_kw) -> tuple[OpenAIChatPolicy, list[dict]]:
         return handler(request)
 
     client = AsyncOpenAI(base_url="http://test/v1", api_key="k", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(_h)))
-    spec = PolicySpec(kind="openai", api_base="http://test/v1", served_model_name="m", sampling=SamplingConfig(temperature=0.5, max_output_tokens=64, extra_body={"top_k": 20}), **spec_kw)
+    spec = PolicySpec(kind="openai", api_base="http://test/v1", served_model_name="m", sampling=SamplingConfig(temperature=0.5, top_k=20, max_output_tokens=64, extra_body={"min_p": 0.05}), **spec_kw)
     return OpenAIChatPolicy(spec, client=client), seen
 
 
@@ -40,6 +40,7 @@ async def test_request_seed_reasoning_usage():
     pol, seen = _policy(lambda r: httpx.Response(200, json=_completion(msg, usage)))
     d = await pol.decide(MSGS, TOOLS, seed=42)
     assert seen[0]["seed"] == 42 and seen[0]["temperature"] == 0.5 and seen[0]["max_tokens"] == 64 and seen[0]["top_k"] == 20
+    assert seen[0]["min_p"] == 0.05
     assert d.seed_sent == 42 and d.raw_request["seed"] == 42
     assert d.history_message == {"role": "assistant", "content": "", "reasoning_content": "think  verbatim\n", "tool_calls": [{"id": "abc", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]}
     assert (d.usage.input_tokens, d.usage.output_tokens, d.usage.cached_input_tokens, d.usage.reasoning_tokens, d.usage.source) == (100, 20, 64, 5, "provider")
@@ -137,5 +138,58 @@ async def test_server_reported_unparsed_tool_call_is_a_parse_error():
     body["learning_loop"] = {"parse_errors": ["invalid JSON in <tool_call> block"]}
     pol, _ = _policy(lambda r: httpx.Response(200, json=body))
     d = await pol.decide(MSGS, TOOLS, None)
-    assert "tool_calls" not in d.history_message
     assert d.parse_errors == ["unparsed_tool_call: invalid JSON in <tool_call> block"]
+    # The block becomes an attempted call that is not run: the model gets an [error] observation
+    # for it and the episode goes on, as for a call with invalid arguments.
+    (call,) = d.history_message["tool_calls"]
+    assert call["function"] == {"name": "bash", "arguments": "{}"} and call["id"] in d.call_errors
+    assert "could not parse this tool call" in d.call_errors[call["id"]]
+    assert d.history_message["content"] == ""  # text with calls is not kept (templates render it after the results)
+    assert {r["field"] for r in d.repairs} == {"tool_call", "content"}
+
+
+async def test_json_block_name_is_not_taken_from_the_word_call_in_its_arguments():
+    msg = {"role": "assistant", "content": '<tool_call>{"name": "bash", "arguments": {"command": "recall \\* x"}}</tool_call>'}
+    body = _completion(msg, {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, "stop")
+    body["learning_loop"] = {"parse_errors": ["invalid JSON in <tool_call> block"]}
+    pol, _ = _policy(lambda r: httpx.Response(200, json=body))
+    d = await pol.decide(MSGS, TOOLS, None)
+    assert d.history_message["tool_calls"][0]["function"]["name"] == "bash"
+
+
+async def test_gemma_block_name_is_recovered_and_an_empty_thought_is_kept():
+    msg = {"role": "assistant", "content": "<|tool_call>call{write_file{path:<|\"|>a<|\"|>}<tool_call|>", "reasoning_content": ""}
+    body = _completion(msg, {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}, "stop")
+    body["learning_loop"] = {"parse_errors": ["tool_call 0: tool call must start with 'call:'"]}
+    pol, _ = _policy(lambda r: httpx.Response(200, json=body))
+    d = await pol.decide(MSGS, TOOLS, None)
+    assert d.history_message["tool_calls"][0]["function"]["name"] == "write_file"
+    assert d.history_message["reasoning_content"] == ""  # so the editor's empty_reasoning rule can see it
+
+
+def test_sampling_fields_cannot_be_duplicated_in_extra_body():
+    with pytest.raises(ValueError, match="top_k"):
+        SamplingConfig(top_k=64, extra_body={"top_k": 20})
+    with pytest.raises(ValueError, match="temperature"):
+        SamplingConfig(extra_body={"temperature": 1.0})
+
+
+async def test_context_cap_is_sent_and_its_exhaustion_recognized():
+    body = {"error": {"message": "the prompt (40 tokens) fills the context cap (32 tokens)", "type": "context_budget_exhausted",
+                      "code": "context_budget_exhausted"}}
+    pol, seen = _policy(lambda r: httpx.Response(400, json=body))
+    d = await pol.decide(MSGS, TOOLS, 1, max_context_tokens=32)
+    assert seen[0]["max_context_tokens"] == 32
+    assert d.request_error is not None and d.context_exhausted
+    other, _ = _policy(lambda r: httpx.Response(400, json={"error": {"message": "x", "code": "context_length_exceeded"}}))
+    d = await other.decide(MSGS, TOOLS, 1)
+    assert d.request_error is not None and not d.context_exhausted
+
+
+async def test_a_capped_reply_is_flagged():
+    msg = {"role": "assistant", "content": "partial"}
+    raw = {**_completion(msg, {"prompt_tokens": 30, "completion_tokens": 2, "total_tokens": 32}), "learning_loop": {"context_capped": True}}
+    raw["choices"][0]["finish_reason"] = "length"
+    pol, _ = _policy(lambda r: httpx.Response(200, json=raw))
+    d = await pol.decide(MSGS, TOOLS, 1, max_context_tokens=32)
+    assert d.context_capped and d.finish_reason == "length"

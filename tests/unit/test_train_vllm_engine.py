@@ -82,21 +82,22 @@ def test_vllm_engine_round_trip_uses_our_rendering_parser_and_counts(qwen, fake_
     try:
         msgs = [{"role": "user", "content": "list files"}]
         tools = [{"type": "function", "function": {"name": "bash", "description": "run", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}}]
-        r = eng.complete({"model": "base:x", "messages": msgs, "tools": tools, "temperature": 0.7, "top_p": 0.9, "max_tokens": 64, "seed": 9})
+        r = eng.complete({"model": "base:x", "messages": msgs, "tools": tools, "temperature": 0.7, "top_p": 0.9, "top_k": 64, "max_tokens": 64, "seed": 9})
         (req,) = _requests(fake_vllm)
         want = encode(tok, render_text(tok, msgs, tools, add_generation_prompt=True, chat_template_kwargs=prof.chat_template_kwargs))
         body = req["request"]
         assert body["prompt"] == want and body["model"] == "base:x"  # token ids in; the served LoRA module
         assert {k: body[k] for k in ("temperature", "top_p", "top_k", "min_p", "repetition_penalty", "seed", "max_tokens")} == {
-            "temperature": 0.7, "top_p": 0.9, "top_k": 0, "min_p": 0.0, "repetition_penalty": 1.0, "seed": 9, "max_tokens": 64}
+            "temperature": 0.7, "top_p": 0.9, "top_k": 64, "min_p": 0.0, "repetition_penalty": 1.0, "seed": 9, "max_tokens": 64}
         assert body["skip_special_tokens"] is False and body["return_token_ids"] is True and eos in body["stop_token_ids"]
         argv = req["argv"]
         assert "--generation-config" in argv and argv[argv.index("--generation-config") + 1] == "vllm"
-        assert "--no-enable-prefix-caching" in argv and argv[argv.index("--max-num-seqs") + 1] == "1"
+        assert "--enable-prefix-caching" in argv and argv[argv.index("--max-num-seqs") + 1] == "1"
         assert any(a.startswith("base:x=") for a in argv)  # the zero adapter is served as a LoRA module
         ch = r["choices"][0]
         assert ch["finish_reason"] == "tool_calls" and json.loads(ch["message"]["tool_calls"][0]["function"]["arguments"]) == {"command": "ls -la"}
-        assert r["usage"] == {"prompt_tokens": len(want), "completion_tokens": len(gen) + 1, "total_tokens": len(want) + len(gen) + 1}
+        assert r["usage"] == {"prompt_tokens": len(want), "completion_tokens": len(gen) + 1, "total_tokens": len(want) + len(gen) + 1,
+                              "completion_tokens_details": {"reasoning_tokens": 0}}
         assert eng.info()["engine"] == "vllm" and r["learning_loop"]["engine"] == "vllm"
     finally:
         eng.close()
@@ -137,6 +138,10 @@ def test_lifecycle_launches_hf_server_with_the_vllm_engine(tmp_path):
     assert argv[:2] == ["-m", "learning_loop.serving.hf_server"]
     assert argv[argv.index("--engine") + 1] == "vllm" and argv[argv.index("--engine-package") + 1] == "vllm==0.30.0"
     assert argv[argv.index("--concurrency") + 1] == "4" and json.loads(argv[argv.index("--zero-lora") + 1]) == spec
+    assert "--max-context" not in argv  # the engine's default
+    mgr = lifecycle.InferenceManager(prof, load_model_profile("gemma-4-e4b-it"), tmp_path, zero_lora=spec, max_context=131072)
+    argv = mgr._server_argv(ckpt)
+    assert argv[argv.index("--max-context") + 1] == "131072"
 
 
 def test_equivalence_comparisons():
@@ -179,3 +184,26 @@ def test_concurrent_requests_share_the_engine_safely(qwen, fake_vllm):
     assert {r["choices"][0]["message"]["content"] for r in results} == {"done"}
     assert len({tuple(r["request"]["prompt"]) for r in _requests(fake_vllm)}) == 8  # each request rendered its own prompt
     assert "--max-num-seqs" in _requests(fake_vllm)[0]["argv"] and _requests(fake_vllm)[0]["argv"][_requests(fake_vllm)[0]["argv"].index("--max-num-seqs") + 1] == "8"
+
+
+def test_context_cap_lowers_the_output_limit_and_refuses_a_full_prompt(qwen, fake_vllm):
+    from learning_loop.serving.hf_server import ApiError
+    from learning_loop.training.render import encode, render_text
+
+    prof, tok = qwen
+    eos = tok.convert_tokens_to_ids("<|im_end|>")
+    (fake_vllm / "script.json").write_text(json.dumps({"token_ids": encode(tok, "hi"), "stop": eos}))
+    eng = vllm_engine.VllmEngine(prof, None, "vllm==0.30.0", base_checkpoint_id="base:x", start_timeout_sec=30)
+    try:
+        msgs = [{"role": "user", "content": "list files"}]
+        n = len(encode(tok, render_text(tok, msgs, None, add_generation_prompt=True, chat_template_kwargs=prof.chat_template_kwargs)))
+        r = eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n + 10})
+        assert _requests(fake_vllm)[-1]["request"]["max_tokens"] == 10  # what still fits the request's window
+        assert r["learning_loop"]["context_capped"] is True and r["learning_loop"]["max_tokens_applied"] == 10
+        r = eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n + 100})
+        assert _requests(fake_vllm)[-1]["request"]["max_tokens"] == 64 and r["learning_loop"]["context_capped"] is False
+        with pytest.raises(ApiError) as e:
+            eng.complete({"model": "base:x", "messages": msgs, "max_tokens": 64, "max_context_tokens": n})
+        assert e.value.status == 400 and e.value.code == "context_budget_exhausted"
+    finally:
+        eng.close()

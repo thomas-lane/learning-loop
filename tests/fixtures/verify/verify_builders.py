@@ -148,7 +148,8 @@ def write_source_episode(
     fingerprints: list[str] | None = None,
 ) -> tuple[EpisodeSummary, Path]:
     """Write events.jsonl for a successful source episode. `overrides[i]` may set
-    content / reasoning / extra_calls / malformed / repaired for turn i."""
+    content / reasoning / extra_calls / malformed / repaired for turn i, and `tool_error` (an error
+    text: the tool refused the call, as for a wrong argument type)."""
     turns = DEFAULT_TURNS if turns is None else turns
     overrides = overrides or {}
     plan = make_plan(episode_id, spec)
@@ -182,14 +183,17 @@ def write_source_episode(
         if final:
             break
         for j, call in enumerate(msg["tool_calls"]):
+            refused = o.get("malformed") or o.get("tool_error")
+            out = f"[error] {o['tool_error']}" if o.get("tool_error") and j == 0 else (obs if j == 0 else "")
             te = ToolExecution(
                 call_id=call["id"],
                 name=call["function"]["name"],
                 requested_arguments_raw=call["function"]["arguments"],
-                executed_arguments=json.loads(call["function"]["arguments"]) if not o.get("malformed") else None,
-                executed=not o.get("malformed"),
-                raw_output=obs if j == 0 else "",
-                observation=obs if j == 0 else "",
+                executed_arguments=json.loads(call["function"]["arguments"]) if not refused else None,
+                executed=not refused,
+                raw_output=out,
+                observation=out,
+                error=o.get("tool_error") if j == 0 else None,
             )
             log.emit(EventKind.TOOL_CALL, {"tool_call_id": te.call_id, "name": te.name, "requested_arguments_raw": te.requested_arguments_raw, "executed_arguments": te.executed_arguments, "executed": te.executed, "order": j}, turn_index=i)
             log.emit(EventKind.TOOL_RESULT, te.model_dump(), turn_index=i)

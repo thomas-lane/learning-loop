@@ -142,7 +142,7 @@ class PodSpec(Strict):
     cloud_type: Literal["SECURE", "COMMUNITY"] = Field(default="SECURE", description="Runpod cloud to create the pod in.")
     image: str = Field(default="runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404", description="Container image; it must run sshd and install `PUBLIC_KEY` (Runpod's PyTorch images do). The project environment brings its own torch.")
     container_disk_gb: int = Field(default=200, ge=20, description="Ephemeral disk for the environment, model downloads and scratch files (discarded on termination).")
-    allowed_cuda_versions: list[str] = Field(default_factory=lambda: ["13.0"], description="Host CUDA (driver) versions to accept; the locked torch wheels need CUDA 13.")
+    allowed_cuda_versions: list[str] = Field(default_factory=list, description="Host CUDA (driver) versions to accept, matched exactly from Runpod's list (which ends at 13.0, while hosts also run newer CUDA 13 drivers); empty accepts any. Either way, preparation refuses a pod whose driver is older than CUDA 13, which the locked torch wheels need.")
 
 
 class RunpodConfig(Strict):
@@ -182,7 +182,7 @@ class InferenceProfile(Strict):
     device: Literal["mps", "cuda", "cpu", "auto"] = Field(default="auto", description="Managed mode: accelerator for the server.")
     startup_timeout_sec: int = Field(default=600, description="Managed mode: how long to wait for a server to load and list the checkpoint. With `vllm` this also bounds installing and starting the vLLM engine (hf_server's `--engine-start-timeout`).")
     request_timeout_sec: int = Field(default=600, description="Per-request client timeout; a timeout is an infrastructure failure.")
-    request_concurrency: int = Field(default=1, description="Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches).")
+    request_concurrency: int = Field(default=1, description="Maximum concurrent requests to this endpoint (enforced per endpoint), independent of Docker concurrency. The edit stage sends this many proposal requests to the editor's endpoint at once. With managed `vllm` it is also vLLM's `--max-num-seqs` (how many requests it batches).")
 
     @model_validator(mode="after")
     def _check(self) -> "InferenceProfile":
@@ -256,6 +256,7 @@ class LearnerConfig(Strict):
     model_profile: str = Field(description="Model profile name (configs/models/<name>.yaml).")
     initial_checkpoint: str = Field(default="base", description="`base` or a published checkpoint directory to start from.")
     scripted_policy: str | None = Field(default=None, description="FIXTURE only: scripted learner file; requires `inference.mode: scripted` (and vice versa).")
+    max_context_tokens: int | None = Field(default=None, ge=1024, description="Context window of managed servers (learner and editor): the longest request, prompt plus `max_output_tokens`. A longer request is refused (`model_error:...context_length_exceeded` for the learner, `editor_request_error:...` for the editor). Editor requests hold a whole episode, so leave room above the longest episode. null: the engine's default (vLLM 65536; transformers the model's maximum).")
 
 
 class SeedConfig(Strict):
@@ -296,10 +297,11 @@ class EpisodeConfig(Strict):
     sampling: SamplingConfig = Field(description="Learner decoding for evaluation and collection.")
     max_turns: int = Field(ge=1, description="Experimental budget: model turns per episode (a branch's prefix and intervention count).")
     max_episode_tokens: int | None = Field(default=None, description="Experimental budget: input+output tokens over all requests; an endpoint without usage then stops the episode (`budget:usage_unavailable`).")
+    max_context_tokens: int | None = Field(default=None, ge=1024, description="Experimental budget: context window of every learner request, prompt plus output, enforced like a model's own window. Each request's output limit is lowered to what still fits (at most `sampling.max_output_tokens`); a full context stops the episode (`budget:max_context`). Needs this repository's server (`hf_transformers` or `vllm` backend). null: no cap below the server's window.")
     tool_timeout_sec: int = Field(default=60, description="Per-command timeout; the model cannot raise it.")
     agent_timeout_sec: float = Field(default=600.0, description="Safety wall-clock limit per episode (a safety stop, not a budget).")
     max_output_chars: int = Field(default=8000, description="Tool output shown to the learner is truncated head+tail to this many characters (the full output is recorded).")
-    system_prompt: str = Field(default="evaluation/agents/system_prompt.md", description="System prompt file; `{workdir}` is filled in.")
+    system_prompt: str = Field(default="evaluation/agents/system_prompt.md", description="System prompt file; `{workdir}` and `{environment}` (the task image's tools, from its profile) are filled in.")
 
 
 class EditorConfig(Strict):
@@ -312,7 +314,7 @@ class EditorConfig(Strict):
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig(temperature=0.0, max_output_tokens=2048), description="Editor decoding.")
     include_outcome_metrics: bool = Field(default=True, description="Show the editor scalar outcomes of the source episode (success, token totals).")
     include_later_observations: bool = Field(default=True, description="Show the editor observations after each turn (hindsight is still filtered at validation).")
-    assistant_text_policy: Literal["reject_nonempty"] = Field(default="reject_nonempty", description="Strict mode: turns with assistant text or reasoning are not editable.")
+    assistant_text_policy: Literal["reject_nonempty", "keep_reasoning"] = Field(default="reject_nonempty", description="Which turns may be edited given their text: `reject_nonempty` (turns with assistant text or reasoning are not editable; for profiles with thinking off) or `keep_reasoning` (turns with reasoning are editable, and the edit keeps the reasoning and replaces only the tool call; for profiles with thinking on). Turns with assistant text are not editable under either.")
     scripted_path: str | None = Field(default=None, description="`scripted` only: fixture proposals file.")
 
     @model_validator(mode="after")
@@ -363,10 +365,12 @@ class DpoConfig(Strict):
     learning_rate: float = Field(default=5e-6, description="Learning rate.")
     per_device_batch_size: int = Field(default=1, description="Pairs per device step.")
     gradient_accumulation_steps: int = Field(default=1, description="Micro-batches per optimizer step.")
-    max_length: int = Field(default=4096, description="Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated.")
+    max_length: int | None = Field(default=4096, description="Prompt+completion token limit; longer examples are dropped with a recorded reason, never truncated. null together with `max_length_margin`.")
+    max_length_margin: int | None = Field(default=None, ge=0, description="Set the limit to `episode.max_context_tokens` plus this many tokens (with `max_length: null`). A pair's prompt and rejected turn fit the context cap; the margin is room for an edited turn longer than the original.")
     warmup_steps: int = Field(default=0, description="Learning-rate warmup steps.")
     max_grad_norm: float = Field(default=1.0, description="Gradient clipping norm.")
     gradient_checkpointing: bool = Field(default=False, description="Recompute activations in the backward pass: much less memory for long prompts, roughly a third slower; same values.")
+    split_pair_backward: bool = Field(default=False, description="Run each sequence of a pair (chosen, rejected) under its own whole-model checkpoint, so the backward pass recomputes and back-propagates one sequence at a time: about half the activation memory of a pair (each sequence repeats the shared prompt), one extra forward pass per sequence; same loss and gradients.")
 
 
 class LoraConfig(Strict):
@@ -430,6 +434,22 @@ class ExperimentConfig(Strict):
             raise ValueError("condition=fixed_dataset requires training.fixed_dataset")
         if self.condition != "fixed_dataset" and self.training.fixed_dataset:
             raise ValueError("training.fixed_dataset is only valid with condition=fixed_dataset")
+        dpo, cap = self.training.dpo, self.episode.max_context_tokens
+        if dpo.max_length_margin is not None:
+            if cap is None:
+                raise ValueError("training.dpo.max_length_margin requires episode.max_context_tokens")
+            # A resolved config (run.json) already holds cap + margin; anything else is a conflict.
+            if dpo.max_length is not None and dpo.max_length != cap + dpo.max_length_margin:
+                raise ValueError("set training.dpo.max_length: null when using training.dpo.max_length_margin")
+            dpo.max_length = cap + dpo.max_length_margin
+        elif dpo.max_length is None:
+            raise ValueError("training.dpo.max_length is required unless training.dpo.max_length_margin is set")
+        elif cap is not None and dpo.max_length < cap:
+            raise ValueError(f"training.dpo.max_length ({dpo.max_length}) is below episode.max_context_tokens ({cap}): "
+                             "edits late in long episodes could never be trained")
+        window = self.learner.max_context_tokens
+        if cap is not None and window is not None and window < cap:
+            raise ValueError(f"learner.max_context_tokens ({window}) is below episode.max_context_tokens ({cap})")
         return self
 
 

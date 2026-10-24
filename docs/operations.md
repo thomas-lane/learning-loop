@@ -16,12 +16,19 @@ How to run a real experiment, watch it, and recover when something goes wrong. C
    from `configs/models/`, without `.yaml`) on the training machine, and `uv run pytest` and
    `uv run pytest -m docker tests/integration` on the coordinator. On a new GPU host, run
    `uv run pytest -m train tests/train` once: it trains and serves a small LoRA adapter in about
-   a minute, catching driver and library problems early.
+   a minute, catching driver and library problems early. Every run also checks its own Docker host
+   when it starts (the [Docker-host preflight](../evaluation/README.md#checks-every-instance-and-every-family));
+   that needs no action.
 3. **Validate every configuration**, controls included: `uv run loop validate <experiment> --machines <profile>`.
    Read the notes it prints (untested backends, fixture components).
-4. **Calibrate.** Run the frozen baseline (`experiments/frozen-baseline.yaml`, adjusted to your
-   learner) to see which dev instances are easy, intermittent or never solved. Tune on dev panels
-   only, so the final panels stay unseen until step 8.
+4. **Calibrate.** After adding or changing families, run `uv run loop calibrate --experiment
+   <experiment> --machines <profile>` with the planned learner. It runs the base model on
+   reserved-seed instances of every family and difficulty ([why](experiment.md#how-results-are-measured)),
+   prints each one's success rate, and writes `reports/calibration.csv`. For a family outside
+   20-80%, adjust its difficulty settings, bump its `version`, and rerun just that family
+   (`--family <name>`). Then run the frozen baseline (`experiments/frozen-baseline.yaml`, adjusted
+   to your learner) to see which dev instances are easy, intermittent or never solved. Tune on
+   dev panels only, so the final panels stay unseen until step 8.
 5. **Run each condition with several loop seeds**, keeping `seeds.root` fixed so evaluations pair up:
    ```bash
    for s in 0 1 2; do
@@ -105,16 +112,26 @@ such as *no-update*, *infra* and *fixture* are in [glossary.md](glossary.md).
 | `infra:` stops with `vLLM returned HTTP ...` | the vLLM engine rejected or failed a request | read the server log; check that the model profile's `serving.vllm.launch_args` suit its `engine_package` version |
 | `remote server group ... did not stop; not starting another` | a remote server ignored TERM and KILL | stop that process group on the host, then resume |
 | many `infra:` stops (connection errors, timeouts) | the endpoint or tunnel went away, or `inference.request_timeout_sec` is too short | check the server log and tunnel; attempts are retried `runtime.infra_retries` times |
-| `model_error:...context_length_exceeded` | the conversation outgrew the context | lower `episode.max_output_chars` or `episode.max_turns`, or serve a longer context |
+| `model_error:...context_length_exceeded` | the conversation outgrew the server's context window | raise `learner.max_context_tokens` (within the GPU's KV-cache capacity, which vLLM logs at startup), or lower `episode.max_output_chars` or `episode.max_turns` |
+| `episode.max_context_tokens needs the hf_transformers or vllm backend` | the cap is enforced by this repository's server, which another server would ignore | serve the learner with `hf_transformers` or `vllm`, or remove the cap |
+| `model_error:...sampling parameters [...] are not supported` | a `sampling.extra_body` sets a parameter `hf_server` does not apply (e.g. `min_p`, `repetition_penalty`) | remove it; `hf_server` applies `temperature`, `top_p`, `top_k` and `max_output_tokens` only |
 | Hugging Face warning about unauthenticated requests | a model load contacted the hub | harmless |
 
 ### Episodes and stages
 
 | Symptom | Cause | Action |
 |---|---|---|
-| frequent `budget:output_truncated` | replies hit `max_output_tokens` mid tool call | raise `episode.sampling.max_output_tokens` |
-| `model_error:unparsed_tool_call` | the reply's only tool calls were unparseable | none: model behavior, counted as a malformed turn |
+| frequent `budget:output_truncated` | replies hit `max_output_tokens` mid tool call or mid thought | raise `episode.sampling.max_output_tokens` |
+| frequent `budget:max_context` | episodes fill `episode.max_context_tokens` | expected for long tasks; it is a budget like `max_turns`. Raising it needs room in training memory too (`training.dpo.max_length` follows it), see [runpod.md](runpod.md) |
+| many `unparsed_tool_call` parse errors in `events.jsonl` | the model wrote tool calls the server could not parse; each was answered with an `[error]` observation and the episode went on | none: model behavior, counted as malformed turns |
+| an episode scored 0 with `unreadable_artifact` in its summary | the agent left files among the task's artifacts that their owner cannot read (e.g. `chmod 000`); the summary names them | none: a file its owner cannot read is never a valid answer |
 | `budget:usage_unavailable` | `max_episode_tokens` is set but the endpoint reports no usage | use an endpoint that reports usage, or drop the token budget |
+| `infra:RewardFileNotFoundError` and the trial's `verifier/test-stdout.txt` says `environment probe failed; not grading: <checks>` | the verifier container does not match the task's profile: `egress:dns`/`egress:tcp` (it has network), `env:<NAME>`, `tool:<name>`, `hostname` or `process:<name>` | for egress, check that the task directory was rendered by the current renderer (its `tests/docker-compose.yaml` sets `network_mode: "none"`) and that nothing overrides it; otherwise compare the image with the profile in `src/learning_loop/tasks/spec.py` |
+| `infra:RewardFileNotFoundError` and `verifier files differ from the rendered task (stale image build); not grading` | the verifier image was built from files other than the task's `tests/` (its digest differs from `LL_TESTS_SHA256` in `task.toml`): BuildKit reused a stale copy of a build-context file ([evaluation/README.md](../evaluation/README.md#environment-guarantees)) | run `docker buildx prune -f --filter type=source.local`, which drops only BuildKit's copies of earlier build contexts, then [reopen](#reopening-failed-items) or rerun the items. Rebuilding or removing the image does not help: the stale copy is in BuildKit's context cache, not in the image, and retries fail the same way until it is pruned |
+| `infra:RewardFileNotFoundError` and `grader error; no reward written: ...` | the grader could not grade safely, e.g. a grader that runs agent code (`checks` or `commands`) is not running as root | read the message; families graded by `checks` or `commands` run only in Docker |
+| `loop run`/`resume`/`evaluate`/`edit-replay`/`stage` exits 1 with `the Docker host failed the preflight; no episode was started` | the oracle of the listed family did not score its predicted reward on this Docker host (the message names the instance, the problem and the trial directory under `<run>/preflight/`) | read the trial's `verifier/test-stdout.txt`; a probe or digest failure there has a row below. Fix the host and run `loop resume` (the preflight runs again) |
+| `... is on a case-insensitive filesystem; agent files that differ only in letter case would merge ...` and exit 1 | the run directory is on a case-insensitive filesystem (the macOS default): Harbor copies each episode's files out through it, so `URGENT/` and `urgent/` would merge and grades would depend on the host | run on a case-sensitive filesystem, e.g. the Linux Docker host, or a case-sensitive APFS volume |
+| `infra:env_probe:<checks>` | before turn 0 the agent container did not match the task: `egress:dns`/`egress:tcp` (network), `env:<NAME>`, `tool:<name>` (a required tool is missing), `present:<name>` (a tool the profile lists as absent is installed, which would make the agent's environment description false), `hostname`, `process:<name>`, or `app_content` (`/app` differs from the rendered files: a stale image build) | for `app_content`, run `docker buildx prune -f --filter type=source.local` and [reopen](#reopening-failed-items) the items; for the others, see the probe rows below. The episode's `env_probe` event in `events.jsonl` has what the probe observed |
 | a stage item is `infra_failed` | it exceeded `runtime.infra_retries` | [reopen it](#reopening-failed-items) once fixed |
 | a stage item is `failed` and the command exits 1 | an unexpected error (traceback on the console, message in the item's `error`) | fix the cause, [reopen the item](#reopening-failed-items), `loop resume` |
 | every cycle is a no-update | no fully successful collection episodes, or no accepted proposals | a valid result: check the report's proposal and verification reasons; never substitute fixture data |
@@ -127,18 +144,20 @@ Common rejection reasons, as shown in the report, `proposals.csv` and `verificat
 
 | Reason | Meaning | Action |
 |---|---|---|
-| `nonempty_reasoning`, `nonempty_assistant_content` | the learner writes text or reasoning with its tool calls | disable reasoning in the model profile (`chat_template_kwargs: {enable_thinking: false}`) |
+| `nonempty_reasoning` | the learner reasons before its tool calls while `editor.assistant_text_policy` is `reject_nonempty` | set `editor.assistant_text_policy: keep_reasoning`, or disable thinking in the model profile (`chat_template_kwargs: {enable_thinking: false}`) |
+| `nonempty_assistant_content` | the learner writes visible text with its tool calls | none; such turns are never editable ([why](experiment.md#editing)) |
+| `empty_reasoning` | under `keep_reasoning`, the turn's thought is empty, which the chat template cannot render as generated | none; expected to be rare |
 | `skipped:no_editable_turns` (status `abstained`) | no turn of the source is editable, so no editor request was made | none if expected; which turns are editable is defined in [experiment.md](experiment.md#editing) |
 | `no_tool_call`, `multiple_tool_calls:N`, `unknown_editor_tool:...`, `unparsed_tool_call:...`, `response_schema:...`, `identical_replacement` | the editor did not answer with exactly one valid answer-tool call (`unparsed_tool_call` gives the parse error of a malformed call) | try `editor.mode: external` via `edit-replay` |
 | `editor_output_truncated` (with the reasons above) | the editor's reply hit `editor.sampling.max_output_tokens` before a complete answer call | raise `editor.sampling.max_output_tokens` |
 | `editor_infra_error:...` | the editor endpoint failed (connection error, timeout, HTTP 408, 429 or 5xx); the edit item is retried `runtime.infra_retries` times, then becomes `infra_failed`, and the report counts it apart from invalid proposals | check the editor server log and tunnel |
-| `editor_request_error:...` | the editor endpoint rejected the request with another 4xx, e.g. `context_length_exceeded` | read the message; for context errors, serve the editor with a longer context |
+| `editor_request_error:...` | the editor endpoint rejected the request with another 4xx, e.g. `context_length_exceeded` | read the message; for context errors, raise `learner.max_context_tokens` (the editor's request holds the whole episode) |
 | `ungrounded_constant:<value>` | the replacement uses a value seen only later (possible hindsight) | check `proposals.csv` if legitimate edits are rejected |
 | `replay_failed:<branch>:rN` with `replay:observation:...` | a replayed command printed something different | make the task deterministic, or declare a narrow normalizer in the task |
 | `replay:fingerprint:...` | the restored state differs from the source | fix the task's undeclared state |
 | `replay:image_mismatch` | the task image changed since the source episode | collect again with the current image |
 | `not_success:<branch>:rN`, `tie`, `no_saving:...`, `saving_below_min:...`, `relative_saving_below_min:...` | a branch failed, or the edit saved too few tokens | none: rejected by design |
-| `intervention_timeout:...`, `intervention_tool_error:...` | the fixed action itself timed out or raised a tool error | none: rejected by design |
+| `intervention_timeout:...`, `intervention_tool_error:...` | the edited action timed out or raised a tool error, or the original action failed differently from the source episode | none: rejected by design; on `original`, check the environment if it repeats |
 | `bad_stop:<branch>:rN:<stop reason>`, `not_graded:...`, `missing_cost:...` | a branch hit a budget, infra or safety stop, went ungraded, or had no usage | look up the stop reason above |
 
 ### Training
@@ -176,7 +195,8 @@ name by `pod_id`; `loop` only starts and stops it. A *created pod* is made by `l
 | `pod ... cannot start: its host machine has had no free GPU for Ns ...` | existing pod: still no GPU at the timeout | retry later, raise `runpod.start_timeout_sec`, or deploy a new pod and update `pod_id` |
 | `pod ... is terminated; create a new pod and update the machine profile` | the existing pod was terminated (`loop` never terminates existing pods) | deploy a new pod; update `pod_id` |
 | `new-<spec>: no ... available yet; retrying until the start timeout` | created pod: no free GPU of the listed types | wait |
-| `no ... GPU became available in ... cloud within Ns; ...` | created pod: still none at the timeout | retry later, add `gpu_types`, or try `cloud_type: COMMUNITY` |
+| `no ... GPU became available in ... cloud within Ns; ...` | created pod: still none at the timeout | if the spec sets `allowed_cuda_versions`, remove it (Runpod matches it exactly, so it skips hosts on newer CUDA 13 drivers); otherwise retry later, add `gpu_types`, or try `cloud_type: COMMUNITY` |
+| `pod ...: WARNING: this project's torch wheels need CUDA 13 ...` | the pod's NVIDIA driver is older than CUDA 13; the run stops before using it and terminates a created pod | run again (a created pod usually lands on another host), or set `allowed_cuda_versions: ["13.0"]` in the spec |
 | `created pod ... costs $X/hr, above runpod.create.<spec>.max_cost_per_hr=...; terminated` | the price is above your limit (pod already terminated) | raise `max_cost_per_hr` or change `gpu_types` |
 | `pod ... did not report a public IP and SSH port within Ns (...); its GPU may be taken` | no TCP port 22 exposed, or no free GPU | check the template's ports |
 | `pod ... at IP:PORT does not accept SSH: ...` / `Permission denied (publickey)` | existing pod started with no account SSH key (`authorized_keys` contains `null`), or wrong `identity_file` | save the key (Settings → SSH Public Keys), stop and start the pod; check `runpod.identity_file` |

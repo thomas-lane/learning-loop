@@ -13,7 +13,7 @@ from learning_loop.tasks import instances
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "env"
 COUNT_POLICY = FIXTURES / "count_errors_policy.yaml"
-SYSTEM_PROMPT = (REPO_ROOT / "evaluation" / "agents" / "system_prompt.md").read_text().format(workdir="/app")
+SYSTEM_PROMPT = (REPO_ROOT / "evaluation" / "agents" / "system_prompt.md").read_text().format(workdir="/app", environment="").replace("\n\n\n", "\n\n")
 
 
 def count_errors_instance(dest: Path, instance_id: str = "count-errors/easy/s1") -> TaskInstance:
@@ -33,8 +33,11 @@ def make_plan(
     seed: int | None = 7,
     replay: ReplaySpec | None = None,
     role: EpisodeRole = EpisodeRole.COLLECT,
+    env_probe: bool = True,
     **budget_overrides: Any,
 ) -> EpisodePlan:
+    """`env_probe=False` drops the task's environment probe, for fake Harbor environments that
+    run commands on the host (there is no container to probe)."""
     budgets = dict(max_turns=12, max_episode_tokens=None, tool_timeout_sec=20, max_output_chars=8000, agent_timeout_sec=60.0)
     budgets.update(budget_overrides)
     return EpisodePlan(
@@ -48,7 +51,7 @@ def make_plan(
         system_prompt=SYSTEM_PROMPT,
         instruction=instances.read_instruction(Path(instance.task_dir)),
         tools=tool_schemas(),
-        state_spec=instances.load_state_spec(Path(instance.task_dir)),
+        state_spec=instances.load_state_spec(Path(instance.task_dir)).model_copy(update={} if env_probe else {"env_probe": None}),
         replay=replay,
     )
 

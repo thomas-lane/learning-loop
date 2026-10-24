@@ -189,8 +189,11 @@ def _gemma_call(block: str) -> tuple[str, dict[str, Any]]:
 
 def parse_gemma4(text: str, id_seed: str) -> ParsedCompletion:
     thoughts = [m.group(1) for m in _GEMMA_THOUGHT.finditer(text)]
-    reasoning = "\n".join(t.removeprefix("thought").strip("\n") for t in thoughts) if thoughts else None
     body = _GEMMA_THOUGHT.sub("", text)
+    if "<|channel>" in body:  # a thought the output limit cut off is still reasoning, not content
+        body, _, cut = body.partition("<|channel>")
+        thoughts.append(cut)
+    reasoning = "\n".join(t.removeprefix("thought").strip("\n") for t in thoughts) if thoughts else None
     calls: list[dict[str, Any]] = []
     errors: list[str] = []
     kept: list[str] = []
@@ -220,6 +223,28 @@ def parse_gemma4(text: str, id_seed: str) -> ParsedCompletion:
 
 PARSERS = {"qwen3_xml": parse_qwen3, "gemma4": parse_gemma4}
 
+# The tokens that open and close a reasoning block in each format.
+REASONING_MARKERS = {"qwen3_xml": ("<think>", "</think>"), "gemma4": ("<|channel>", "<channel|>")}
+
+
+def reasoning_token_count(tool_call_format: str, ids: list[int], tok: Any, inside: bool) -> int:
+    """Generated tokens that belong to reasoning: from each opening marker through its closing
+    marker, both included. `inside`: the prompt already opened a reasoning block
+    (`generation_prefix`), so the completion starts inside it."""
+    markers = REASONING_MARKERS.get(tool_call_format)
+    if markers is None:
+        return 0
+    open_id, close_id = (tok.convert_tokens_to_ids(m) for m in markers)
+    n = 0
+    for i in ids:
+        if not inside and i == open_id:
+            inside = True
+        if inside:
+            n += 1
+            if i == close_id:
+                inside = False
+    return n
+
 
 def parse_bare_call(text: str, names: set[str]) -> tuple[str, dict[str, Any]] | None:
     """A reply that is exactly one tool call written without the format's call markers, to one of
@@ -242,6 +267,18 @@ def parse_bare_call(text: str, names: set[str]) -> tuple[str, dict[str, Any]] | 
     except json.JSONDecodeError:
         return None
     return (name, args) if isinstance(args, dict) else None
+
+
+def generation_prefix(tool_call_format: str, prompt_text: str) -> str:
+    """Output syntax the rendered prompt already opened for the model. With thinking enabled,
+    Gemma's generation prompt after a tool result ends with "<|channel>thought\\n", so the model's
+    completion starts inside the thought; the server parses prefix + completion so such a turn parses
+    the same as one that opened the thought itself."""
+    if tool_call_format == "gemma4":
+        i = prompt_text.rfind("<|channel>")
+        if i >= 0 and "<channel|>" not in prompt_text[i:]:
+            return prompt_text[i:]
+    return ""
 
 
 def parse_completion(tool_call_format: str, text: str, id_seed: str) -> ParsedCompletion:

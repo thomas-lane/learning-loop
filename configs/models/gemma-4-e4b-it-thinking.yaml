@@ -1,0 +1,46 @@
+# gemma-4-e4b-it with thinking enabled: the same pinned weights, tokenizer and template; the model
+# reasons before every turn. A separate profile (not a setting changed in gemma-4-e4b-it) so that
+# checkpoints and runs of the two modes never share an identity.
+schema_version: 1
+name: gemma-4-e4b-it-thinking
+base_model: google/gemma-4-E4B-it            # trainable source checkpoint (safetensors, bf16)
+base_revision: fee6332c1abaafb77f6f9624236c63aa2f1d0187
+chat_template_sha256: 2f1b4d75d067bae3fe44e676721c7f077d243bc007156cb9c2f8b5836613d082
+chat_template_kwargs:
+  enable_thinking: true            # reasons before every turn, as the model is meant to run
+tool_call_format: gemma4           # <|tool_call>call:name{key:<|"|>value<|"|>}<tool_call|><|tool_response>
+training_dtype: bfloat16
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+# The checkpoint is multimodal: its audio/vision towers also have q_proj/... modules (clipped
+# wrappers PEFT cannot adapt). Only the language model is trained.
+lora_exclude_modules: '.*\.(audio_tower|vision_tower|embed_audio|embed_vision)\..*'
+supported_train_devices: [cuda]
+seed_supported: true               # llama.cpp accepts `seed`; not reproducible across batching/hardware
+serving:
+  hf_transformers:
+    backend: hf_transformers
+    adapter_formats: [peft_lora]
+    status: untested
+    notes: >-
+      learning_loop.serving.hf_server with the gemma4 tool-call parser (round-trip tested against
+      the pinned template). The base model served a three-turn tool-calling exchange on an A100
+      (15 GB, ~15.6 tokens/s single sequence); serving a trained adapter is untested.
+  vllm:
+    backend: vllm
+    adapter_formats: [peft_lora]
+    status: untested
+    engine_package: vllm==0.30.0
+    # Full CUDA graphs for decoding without torch.compile: measured on an A100 (E4B), 88 s to start
+    # and 76 tok/s unbatched, against 210 s and 81 tok/s for the default (-O2).
+    launch_args: ['--compilation-config', '{"mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY"}']
+    notes: >-
+      hf_server --engine vllm: our renderer, parser and token counts around vLLM generation from
+      token ids. Passed learning_loop.serving.equivalence on an A100 (base, trained adapter, random
+      adapter); measured 76 tok/s unbatched, 505 tok/s with 8 concurrent requests. Not yet used in
+      a learning run.
+notes: >-
+  Multimodal checkpoint (Gemma4ForConditionalGeneration); LoRA DPO trains the language model only
+  (lora_exclude_modules), verified on an A100 with 7.3k- and 28.9k-token fixture pairs (peaks 24 GB
+  and 54 GB with gradient checkpointing).
+  Chat template renders a tool-calling turn ending at <|tool_response>, which is in the
+  generation-config EOS ids [1, 106, 50]; the render boundary is unit-tested with the tokenizer only.

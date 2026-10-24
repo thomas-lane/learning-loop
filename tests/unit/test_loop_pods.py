@@ -310,7 +310,7 @@ def test_created_pod_is_created_prepared_watched_and_terminated(api, tmp_path):
     body = api.created[pid]["body"]
     assert body["name"].startswith("lfe-a100-") and body["gpuTypeIds"] == ["NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
     assert body["gpuTypePriority"] == "custom" and body["cloudType"] == "SECURE" and body["volumeInGb"] == 0
-    assert body["allowedCudaVersions"] == ["13.0"] and body["ports"] == ["22/tcp"]
+    assert "allowedCudaVersions" not in body and body["ports"] == ["22/tcp"]  # Runpod's list cannot name CUDA 13.1+ drivers
     assert body["env"] == {"PUBLIC_KEY": "ssh-ed25519 AAAATEST user@laptop"}  # only the public key reaches the pod
     assert KEY not in json.dumps(body) and KEY not in json.dumps(FakeRemote.log)
     watchdog = [e for e in FakeRemote.log if e[0] == "detached"][0][2]
@@ -349,6 +349,22 @@ def test_pod_above_the_price_limit_is_terminated_at_once(api, tmp_path):
             pass
     assert [p["status"] for p in api.created.values()] == ["TERMINATED"]
     assert pods.ledger_open_pods() == {}
+
+
+def test_created_pod_with_a_driver_older_than_cuda_13_is_refused_and_terminated(api, tmp_path, monkeypatch):
+    old = "WARNING: this project's torch wheels need CUDA 13 (driver R580+); pick a pod with CUDA 13.x\n"
+    monkeypatch.setattr(FakeRemote, "_ssh", lambda self, command, timeout=60, check=True, stdin=None:
+                        subprocess.CompletedProcess([], 0, stdout="", stderr=old))
+    with pytest.raises(pods.RunpodError, match="need CUDA 13"):
+        with created_lifecycle(api, tmp_path, created_machine(tmp_path)):
+            pass
+    assert [p["status"] for p in api.created.values()] == ["TERMINATED"]
+
+
+def test_allowed_cuda_versions_are_sent_when_listed(api, tmp_path):
+    with created_lifecycle(api, tmp_path, created_machine(tmp_path, allowed_cuda_versions=["13.0"])) as lc:
+        (pid,) = lc.created.values()
+    assert api.created[pid]["body"]["allowedCudaVersions"] == ["13.0"]
 
 
 def test_cleanup_terminates_only_ledger_pods_with_the_prefix(api, tmp_path, monkeypatch):

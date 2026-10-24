@@ -124,39 +124,43 @@ def ensure_fp32_logits(model: Any) -> Any:
     return head
 
 
-def completion_window(completion_mask: Any) -> int:
-    """How many trailing positions' logits the completion log-probs need: from the last prompt
-    token of the row whose completion starts earliest to the end of the batch. Only these
-    positions go through lm_head (`logits_to_keep`), so a long prompt never materializes
-    float32 logits over the whole vocabulary for every prompt token."""
-    first = int(completion_mask.int().argmax(dim=1).min())
-    return min(completion_mask.shape[1], completion_mask.shape[1] - first + 1)
+def chunked_token_logps(model: Any, model_kwargs: dict[str, Any], input_ids: Any, completion_mask: Any) -> tuple[Any, Any]:
+    """Per-token completion log-probs and entropies, each [B, L-1] in float32 (0 outside the
+    completion), computed as TRL's chunked DPO path does (`DPOTrainer._get_per_token_logps_and_entropies`
+    with `use_liger_kernel`, without the Liger package): the backbone's last hidden states at the
+    completion positions go through lm_head in vocabulary chunks with an online log-sum-exp
+    (`trl.trainer.utils._ChunkedLogProbFunction`, which applies the model's final logit soft-capping
+    and logit scale and accumulates in float32). Full-vocabulary logits are never held, so a long
+    completion costs memory for its hidden states only. Every log-prob of training (loss, reference,
+    trained and reloaded) goes through this function, so they share one numerical path."""
+    from trl.trainer.dpo_trainer import _CHUNKED_LOGPROB_CHUNK_SIZE
+    from trl.trainer.utils import _ChunkedLogProbFunction
 
-
-def completion_logps(logits: Any, input_ids: Any, completion_mask: Any) -> Any:
-    """Summed completion log-probs per row (float32), the same shift / masked selective
-    log-softmax / sum as TRL's DPO loss (trl/trainer/dpo_trainer.py `_compute_loss`).
-
-    Logits are cast to float32 BEFORE the log-softmax (a no-op when the fp32 hook is
-    installed) and the sum is taken in float32, so a bf16 model never produces bf16
-    per-token log-probs or a bf16 sequence sum."""
-    from trl.trainer.utils import selective_log_softmax
-
-    logits = logits[..., :-1, :].float()
-    labels = input_ids[..., 1:]
-    mask = completion_mask[..., 1:]
-    lp = selective_log_softmax(logits, labels, row_mask=mask)
-    return (lp.float() * mask).sum(dim=1)
+    inner = model.get_base_model() if hasattr(model, "get_base_model") else model  # PEFT: LoRA layers stay in place
+    outputs = inner.base_model(**model_kwargs)  # the backbone (language model without lm_head)
+    hidden = outputs.last_hidden_state[:, :-1]
+    labels = input_ids[:, 1:]
+    mask = completion_mask[:, 1:].bool()
+    head = inner.get_output_embeddings()
+    text_config = inner.config.get_text_config()
+    scale = getattr(text_config, "logit_scale", None)
+    if scale is None:
+        scale = getattr(text_config, "output_multiplier", None)
+    logps, entropies = _ChunkedLogProbFunction.apply(
+        hidden[mask], head.weight, head.bias, labels[mask], 1.0, _CHUNKED_LOGPROB_CHUNK_SIZE,
+        getattr(text_config, "final_logit_softcapping", None), 1.0 if scale is None else scale,
+    )
+    return logps.new_zeros(mask.shape).masked_scatter(mask, logps), entropies.new_zeros(mask.shape).masked_scatter(mask, entropies)
 
 
 def sequence_logps(model: Any, pairs: list[RenderedPair], device: str, pad_token_id: int) -> list[tuple[float, float]]:
     """Summed completion log-probs (chosen, rejected) per pair, computed exactly like the DPO
-    loss (same collator, same completion window, shift and masked log-softmax, float32 logits),
-    in eval mode without grad. Installs the fp32-logits hook on `model` (see `ensure_fp32_logits`)."""
+    loss (same collator, `chunked_token_logps`, sum over the completion), in eval mode without
+    grad. The chosen and rejected rows of the padded pair run one at a time, as the loss does with
+    `dpo.split_pair_backward`: half the peak memory of a long pair, the same values."""
     import torch
     from trl.trainer.dpo_trainer import DataCollatorForPreference
 
-    ensure_fp32_logits(model)
     collator = DataCollatorForPreference(pad_token_id=pad_token_id)
     was_training = model.training
     model.eval()
@@ -168,10 +172,12 @@ def sequence_logps(model: Any, pairs: list[RenderedPair], device: str, pad_token
                 ids = b["input_ids"].to(device)
                 am = b["attention_mask"].to(device)
                 cm = b["completion_mask"].to(device)
-                k = completion_window(cm)
-                logits = model(input_ids=ids, attention_mask=am, use_cache=False, logits_to_keep=k).logits
-                s = completion_logps(logits, ids[:, -k:], cm[:, -k:]).cpu()
-                out.append((float(s[0]), float(s[1])))
+                s = []
+                for i in range(ids.shape[0]):  # [chosen, rejected]
+                    kw = {"input_ids": ids[i : i + 1], "attention_mask": am[i : i + 1], "use_cache": False}
+                    lp, _ = chunked_token_logps(model, kw, ids[i : i + 1], cm[i : i + 1])
+                    s.append(float(lp.sum(dim=1).cpu()[0]))
+                out.append((s[0], s[1]))
     finally:
         if was_training:
             model.train()
