@@ -266,6 +266,10 @@ async def test_read_file_notes_a_line_longer_than_the_output_limit(tmp_path):
         te = await s.execute("c", "read_file", {"path": "/app/long.json"}, None)
     assert "x" * 3600 + "\n" in te.observation
     assert te.observation.endswith("[line 1 is cut at 3600 of its 20000 characters; use bash to read the rest]")
+    (tmp_path / "exact.txt").write_text("y" * 3600 + "\n")
+    async with LocalSession(tmp_path, _cfg(5)) as s:
+        te = await s.execute("c", "read_file", {"path": "/app/exact.txt"}, None)
+    assert "is cut" not in te.observation and "y" * 3600 in te.observation
 
 
 def test_only_unreadable_files_among_the_artifacts_are_graded():

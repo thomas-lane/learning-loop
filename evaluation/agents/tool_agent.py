@@ -233,7 +233,7 @@ class ToolAgent(BaseAgent):
             unreadable = await self._unreadable_files(environment, plan.workdir)
             atomic_write_json(record_dir / "post_episode.json", {"unreadable_files": unreadable})
             context.metadata = (context.metadata or {}) | {"dir_modes_restored": await self._restore_dir_modes(environment, plan.workdir),
-                                                           "unreadable_files": unreadable}
+                                                           "unreadable_files": unreadable[:100] if isinstance(unreadable, list) else unreadable}
         finally:
             await asyncio.shield(policy.aclose())
 
@@ -251,7 +251,7 @@ class ToolAgent(BaseAgent):
             r = await environment.exec(cmd, cwd="/", timeout_sec=60)
         except Exception as e:
             return f"failed: {type(e).__name__}: {e}"
-        return [p for p in (r.stdout or "").split("\n") if p][:100]
+        return [p for p in (r.stdout or "").split("\n") if p]
 
     @staticmethod
     async def _restore_dir_modes(environment: BaseEnvironment, workdir: str) -> list[str] | str:

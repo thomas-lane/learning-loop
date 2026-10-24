@@ -295,6 +295,14 @@ async def test_unparsed_editor_answer_is_invalid_not_an_abstention(tmp_path):
         finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
     p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
     assert p.status == "invalid" and p.rejection_reasons == ["no_tool_call", "unparsed_tool_call:unterminated value"]
+    # A parsed answer next to an unparsed block is two answers, not the parsed one alone.
+    abstain = {"id": "a0", "type": "function", "function": {"name": "abstain", "arguments": json.dumps({"edit_justification": "fine"})}}
+    history, call_errors, repairs = normalize_message({"content": block, "tool_calls": [abstain]}, "x", ["unterminated value"])
+    pol.decide = lambda *a, **k: _async(PolicyDecision(
+        raw_request={}, raw_response={"id": "r", "learning_loop": {"parse_errors": ["unterminated value"]}}, history_message=history,
+        finish_reason="stop", usage=Usage(input_tokens=900, output_tokens=60), latency_sec=0.5, repairs=repairs, call_errors=call_errors))
+    p = await _editor(pol).propose(summary, turns, vb.make_instance(tmp_path), vb.INSTRUCTION, vb.TOOLS, system_prompt=vb.SYSTEM)
+    assert p.status == "invalid" and p.rejection_reasons == ["multiple_tool_calls:2", "unparsed_tool_call:unterminated value"]
 
 
 async def _async(value):

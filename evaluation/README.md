@@ -302,8 +302,9 @@ becomes tokens (Gemma 4's and Qwen3's keep it for every turn after the last user
   number, and lines end only at `\n`, so the numbers match theirs. The separator is an arrow, not
   a tab, because models mistook a tab after the number for the file's own separator and copied
   the numbers into files they wrote; the tool description says the prefix is not part of the
-  file. A page ends early, at a whole line, to fit `max_output_chars`; a single line longer than
-  that is shown up to the limit, with a note giving its full length. Missing files,
+  file. A page ends early, at a whole line, to fit `max_output_chars` (less 400 characters for
+  the header and notes); a single line longer than that is shown up to the limit, with a note
+  giving its full length. Missing files,
   directories and other non-regular files get an `[error]` naming the reason.
 - `write_file`: writes exactly the given content (creating parent directories). An existing
   file keeps its mode; a new file gets 0644 and the container user as owner (an upload through

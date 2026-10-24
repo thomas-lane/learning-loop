@@ -677,6 +677,21 @@ def load_summary(ctx: RunContext, item: WorkItem) -> EpisodeSummary | None:
     return EpisodeSummary.model_validate(read_json(p)) if p.exists() else None
 
 
+def finished_stage(ctx: RunContext, cycle: int, stage: str, covers: Callable[[StageManifest], bool], stage_root: Path | None = None) -> StageManifest | None:
+    """The stage's manifest when it is done and `covers` it (it holds every item the stage would
+    run), so a resumed run builds no policy for the stage: building one starts its model server,
+    which would take the accelerator from training that is all a resumed cycle may have left."""
+    mpath = (stage_root or ctx.stage_dir(cycle, stage)) / "manifest.json"
+    if not mpath.exists():
+        return None
+    m = StageManifest.model_validate(read_json(mpath))
+    return m if m.status == "done" and not m.pending() and covers(m) else None
+
+
+def _holds(ids: list[str]) -> Callable[[StageManifest], bool]:
+    return lambda m: set(ids) <= set(m.items)
+
+
 async def stage_eval(ctx: RunContext, cycle: int, ckpt: CheckpointRef, panels: list[str], stage: str = "eval", stage_root: Path | None = None) -> StageManifest:
     exp = ctx.exp
     items: list[tuple[str, dict[str, Any]]] = []
@@ -685,6 +700,8 @@ async def stage_eval(ctx: RunContext, cycle: int, ckpt: CheckpointRef, panels: l
             for a in range(exp.evaluation.attempts_per_instance):
                 eid = seeds.stable_id("ep", ctx.run_id, stage, cycle, ckpt.checkpoint_id, p, iid, a)
                 items.append((eid, {"panel": p, "instance_id": iid, "attempt": a, "checkpoint_id": ckpt.checkpoint_id}))
+    if done := finished_stage(ctx, cycle, stage, _holds([i for i, _ in items]), stage_root):
+        return done
     policy = learner_policy(ctx, ckpt) if items else None
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -703,6 +720,8 @@ async def stage_collect(ctx: RunContext, cycle: int, ckpt: CheckpointRef) -> Sta
         for a in range(exp.tasks.attempts_per_instance):
             eid = seeds.stable_id("ep", ctx.run_id, "collect", cycle, ckpt.checkpoint_id, iid, a)
             items.append((eid, {"instance_id": iid, "attempt": a, "checkpoint_id": ckpt.checkpoint_id}))
+    if done := finished_stage(ctx, cycle, "collect", _holds([i for i, _ in items])):
+        return done
     policy = learner_policy(ctx, ckpt) if items else None
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -795,6 +814,11 @@ def successful_sources(ctx: RunContext, collect: StageManifest) -> list[tuple[Pa
 
 
 async def stage_edit(ctx: RunContext, cycle: int, learner: CheckpointRef, sources: list[tuple[Path, EpisodeSummary]]) -> StageManifest:
+    # Proposal ids include the editor's identity, which building the editor (and its server)
+    # gives; a finished stage is recognized by its sources instead.
+    want = {s.episode_id for _, s in sources}
+    if done := finished_stage(ctx, cycle, "edit", lambda m: want <= {w.meta.get("source_episode_id") for w in m.items.values()}):
+        return done
     editor = build_editor(ctx, learner) if sources else None
     items = []
     for src_dir, s in sources:
@@ -852,11 +876,13 @@ def make_verifier(ctx: RunContext, learner: CheckpointRef, purpose: str = "accep
 
 async def stage_verify(ctx: RunContext, cycle: int, learner: CheckpointRef, proposals: list[tuple[EditProposal, Path]], purpose: str = "acceptance", stage: str = "verify") -> StageManifest:
     valid = [(p, src) for p, src in proposals if p.status == "proposed"]
-    verifier = make_verifier(ctx, learner, purpose) if valid else None
     items = [
         (seeds.stable_id("ver", p.proposal_id, purpose), {"proposal_id": p.proposal_id, "source_dir": ref_path(ctx, src), "purpose": purpose})
         for p, src in valid
     ]
+    if done := finished_stage(ctx, cycle, stage, _holds([i for i, _ in items])):
+        return done
+    verifier = make_verifier(ctx, learner, purpose) if valid else None
     by_id = {p.proposal_id: p for p, _ in valid}
 
     async def fn(item: WorkItem, item_dir: Path) -> dict[str, Any]:
@@ -1534,13 +1560,16 @@ def serving_work_left(ctx: RunContext, cycle: int) -> bool:
     exp = ctx.exp
     stages = ["eval"] if eval_due(exp, cycle) else []
     if exp.condition == "learning" and not (cycle == exp.cycles or exp.condition == "frozen_baseline"):
-        stages += ["collect", "edit", "verify"] + (["audit"] if exp.verification.audit.fraction > 0 else [])
+        stages += ["collect", "edit", "verify"]
+        if (ctx.stage_dir(cycle, "audit") / "manifest.json").exists():
+            stages.append("audit")  # an audit that selected nothing writes no manifest
 
     def done(stage: str) -> bool:
         m = ctx.stage_dir(cycle, stage) / "manifest.json"
         return m.exists() and read_json(m).get("status") == "done"
 
-    # An audit that selected nothing writes no manifest; counting it as left only warms a server.
+    # Warming a server here only overlaps its start with the preflight: a stage that needs one
+    # and finds it stopped starts it itself.
     return any(not done(st) for st in stages)
 
 

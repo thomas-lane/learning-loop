@@ -146,10 +146,12 @@ def _ends(text: str, what: str) -> str:
 # the wrapper itself was killed: the per-call timeout, never the command's own exit code 124.
 # The stderr file has a fixed name (calls in one environment run one at a time), so a command
 # that lists the temporary directory sees the same entries when a branch replays it; a random
-# `mktemp` name would differ on every replay and stop the branch at an observation mismatch.
+# `mktemp` name would differ on every replay and stop the branch at an observation mismatch. It
+# is removed first, so each call writes a new file even when a process left running by an
+# earlier, timed-out call still holds the old one open.
 _MARK = "\x1fLL-EXIT:"
 _WRAP = (
-    '__ll_err="${{TMPDIR:-/tmp}}/.ll-stderr"; bash -c {cmd} 2>"$__ll_err"; __ll_rc=$?; '
+    '__ll_err="${{TMPDIR:-/tmp}}/.ll-stderr"; rm -f "$__ll_err"; bash -c {cmd} 2>"$__ll_err"; __ll_rc=$?; '
     "printf '\\n\\037LL-EXIT:%d\\n' \"$__ll_rc\"; cat \"$__ll_err\"; rm -f \"$__ll_err\"; exit 0"
 )
 
@@ -223,7 +225,7 @@ page, size, cut = [], 0, None
 for line in lines[start - 1:start - 1 + count]:
     if page and size + len(line) + GUTTER > cap:
         break
-    if not page and len(line) > cap:  # a single line longer than the limit: show its start
+    if not page and len(line.rstrip("\n")) > cap:  # a single line longer than the limit: show its start
         cut = [cap, len(line.rstrip("\n"))]
         line = line[:cap]
     page.append(line)

@@ -418,8 +418,15 @@ def test_resume_with_only_training_left_starts_no_server_before_it(tmp_path, mon
         warmed.append(first_server)
         await real_preflight(ctx, log, first_server)
 
+    served = []
+    for name in ("learner_policy", "build_editor", "make_verifier"):
+        real = getattr(co, name)
+        monkeypatch.setattr(co, name, lambda c, ckpt, *a, _real=real, _name=name, **k: served.append((_name, ckpt.checkpoint_id)) or _real(c, ckpt, *a, **k))
     monkeypatch.setattr(co, "train_checkpoint", real_train)
     monkeypatch.setattr(co, "preflight", preflight)
     ctx2 = run(co.open_run(ctx.run_dir))
     assert warmed == [None] and cycle(ctx2, 0)["update"] == "trained"
+    # The finished stages built no policy (each would start its model server): the only one
+    # served is the trained checkpoint, for the final evaluation.
+    assert served == [("learner_policy", cycle(ctx2, 0)["learner_out"]["checkpoint_id"])]
     assert co.serving_work_left(ctx2, 1) is False  # the finished final evaluation

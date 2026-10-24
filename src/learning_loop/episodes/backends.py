@@ -217,8 +217,8 @@ class HarborDockerBackend:
             "harbor_exception": {"type": exc_type, "message": (exc_msg or "")[:2000]} if exc_type else None,
             "verifier_environment_mode": (result.verifier_environment_mode.value if result is not None and result.verifier_environment_mode else None),
             "task_content_hash": instance.content_hash,
-            "unreadable_artifact": graded or None,
-            "unreadable_files": unreadable or None,
+            "unreadable_artifact": graded[:100] or None,  # the full lists stay in post_episode.json
+            "unreadable_files": unreadable[:100] or None,
         }
         summary = core.to_summary(
             reward=reward,
