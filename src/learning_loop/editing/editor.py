@@ -894,6 +894,8 @@ class LLMEditor(_EditorBase):
             parsed = [c for c in tool_calls_of(decision.history_message) if c.get("id") not in unparsed]
             reasons = ["no_tool_call" if not parsed else f"multiple_tool_calls:{len(parsed) + len(unparsed)}"]
             reasons += [f"unparsed_tool_call:{e}" for e in server_errors]
+            if decision.finish_reason == "length":  # usually the cause: the call was cut off
+                reasons.append("editor_output_truncated")
             return EditProposal(**common, status="invalid", rejection_reasons=reasons, raw_response=raw, usage=decision.usage, duration_sec=decision.latency_sec)
         answer, recovered = recover_bare_answer(decision.history_message, answer_tools)
         if recovered:
